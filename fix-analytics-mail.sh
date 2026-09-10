@@ -1,3 +1,24 @@
+#!/usr/bin/env bash
+# Fixes Analytics.js: wraps MailApp.sendEmail in try/catch, matching the
+# pattern the live codebase already uses in Api.js's notifyReviewers_ helper,
+# so a mail-permission issue can never block the report itself from
+# completing (Logger.log(report) already runs first regardless).
+#
+# Usage: run from inside your jobverse-repo clone:
+#   bash fix-analytics-mail.sh
+
+set -euo pipefail
+
+if [ ! -d ".git" ]; then
+  echo "Run this from inside your jobverse-repo clone (the folder with .git in it)." >&2
+  exit 1
+fi
+
+echo "Pulling latest..."
+git pull origin main
+
+echo "Rewriting appscript/Analytics.js..."
+cat > appscript/Analytics.js << 'ANALYTICSJS_EOF'
 /**
  * Jobverse - Analytics.js
  * Measures how often the Reviewer Agent's own verdict matched what a human
@@ -77,3 +98,20 @@ function reviewerAccuracyReport() {
   }
   return report;
 }
+ANALYTICSJS_EOF
+
+echo "Committing..."
+git add -A
+git commit -m "Fix Analytics.js: wrap MailApp.sendEmail in try/catch
+
+Matches the existing notifyReviewers_ pattern in Api.js - a mail
+permissions/scope issue should never block the report itself, since
+Logger.log(report) already runs before the email attempt.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
+
+echo "Pushing..."
+git push
+
+echo ""
+echo "Done. Now: clasp push, then re-run reviewerAccuracyReport() in the Apps Script editor."
