@@ -1,0 +1,13 @@
+{
+  "name": "jobverse-auto-submit-worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Polls Jobverse for Reviewer-Agent-cleared applications and submits them via Playwright. Flagged items are left untouched for optional human review.",
+  "main": "worker.js",
+  "scripts": { "start": "node worker.js" },
+  "dependencies": {
+    "playwright": "^1.47.0",
+    "node-fetch": "^2.7.0",
+    "dotenv": "^16.4.5"
+  }
+}
