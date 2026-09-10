@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_blank">
+  <meta charset="utf-8">
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
+  <style>
+    :root{
+      --ink:#0E1B14; --pine:#173229; --moss:#2C5644; --paper:#F3F4EF; --card:#FFFFFF;
+      --line:#DDE1D6; --amber:#D99000; --red:#B3402A; --green:#2E7D4F; --mut:#5E6A61;
+    }
+    *{box-sizing:border-box;margin:0}
+    body{font-family:'IBM Plex Sans',sans-serif;background:var(--paper);color:var(--ink);display:flex;min-height:100vh}
+    nav{width:210px;background:var(--pine);color:#E8EDE5;padding:22px 0;flex-shrink:0;display:flex;flex-direction:column}
+    .logo{font-family:'Archivo';font-weight:800;font-size:19px;padding:0 20px 18px;letter-spacing:.5px}
+    .logo span{color:#8FD6A9}
+    nav button{all:unset;cursor:pointer;padding:11px 20px;font-size:14px;font-weight:500;color:#B9C6BC;border-left:3px solid transparent}
+    nav button:hover{color:#fff}
+    nav button.on{color:#fff;background:rgba(255,255,255,.06);border-left-color:#8FD6A9}
+    nav button:focus-visible{outline:2px solid #8FD6A9;outline-offset:-2px}
+    .count{background:#8FD6A9;color:var(--pine);border-radius:9px;font-size:11px;font-weight:700;padding:1px 7px;margin-left:8px}
+    main{flex:1;padding:26px 30px;max-width:1200px}
+    h1{font-family:'Archivo';font-weight:700;font-size:22px;margin-bottom:16px}
+    h2{font-family:'Archivo';font-weight:700;font-size:16px;margin:18px 0 8px}
+    .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin-bottom:12px}
+    table{width:100%;border-collapse:collapse;font-size:13.5px}
+    th{text-align:left;color:var(--mut);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.4px;padding:8px 10px;border-bottom:1px solid var(--line)}
+    td{padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+    tr:last-child td{border-bottom:none}
+    .chip{display:inline-block;font-size:11.5px;font-weight:600;border-radius:20px;padding:2px 10px}
+    .c-sub{background:#E2F2E7;color:var(--green)} .c-prog{background:#FFF3D6;color:var(--amber)}
+    .c-fail{background:#FBE4DE;color:var(--red)} .c-wait{background:#E7E9F5;color:#3D4A9E}
+    .c-cap{background:#FBE4DE;color:var(--red);border:1px dashed var(--red)}
+    .rail{display:flex;gap:4px;margin-top:5px}
+    .rail i{width:22px;height:5px;border-radius:3px;background:var(--line)}
+    .rail i.done{background:var(--moss)}
+    .btn{font-family:inherit;font-size:13px;font-weight:600;border:none;border-radius:7px;padding:7px 14px;cursor:pointer}
+    .approve{background:var(--moss);color:#fff} .reject{background:#fff;color:var(--red);border:1px solid var(--red)}
+    .primary{background:var(--pine);color:#fff}
+    .danger{background:#fff;color:var(--red);border:1px solid var(--red)}
+    .tiny{padding:4px 10px;font-size:12px}
+    .btn:focus-visible{outline:2px solid var(--amber)}
+    .findings{font-family:'IBM Plex Mono';font-size:11.5px;background:#F7F8F4;border:1px solid var(--line);border-radius:6px;padding:8px;white-space:pre-wrap;max-height:150px;overflow:auto;margin-top:8px}
+    input,textarea,select{font-family:inherit;font-size:13.5px;border:1px solid var(--line);border-radius:7px;padding:8px;width:100%;background:#fff}
+    textarea{min-height:130px;resize:vertical}
+    label{font-size:12px;font-weight:600;color:var(--mut);display:block;margin:10px 0 4px}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:14px}
+    .stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+    .stat b{font-family:'Archivo';font-size:24px;display:block}
+    .stat span{font-size:12px;color:var(--mut)}
+    .mut{color:var(--mut);font-size:12.5px}
+    .tog{display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;cursor:pointer}
+    .tog input{width:auto}
+    .filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:end}
+    .filters > div{flex:1;min-width:130px}
+    .faq{border-bottom:1px solid var(--line);padding:10px 0}
+    .faq summary{font-weight:600;cursor:pointer;font-size:14px}
+    .faq p, .faq li{font-size:13.5px;color:#33413A;line-height:1.55;margin-top:6px}
+    .steps{counter-reset:step;list-style:none;padding:0}
+    .steps li{position:relative;padding:8px 0 8px 34px;font-size:13.5px;line-height:1.5;border-bottom:1px solid var(--line)}
+    .steps li:before{counter-increment:step;content:counter(step);position:absolute;left:0;top:8px;width:22px;height:22px;background:var(--moss);color:#fff;border-radius:50%;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center}
+    #toast{position:fixed;bottom:18px;right:18px;background:var(--ink);color:#fff;padding:10px 16px;border-radius:8px;font-size:13px;display:none}
+    @media (max-width:760px){nav{width:64px}.logo{font-size:12px;padding:0 8px 14px}nav button{padding:11px 10px;font-size:11px}main{padding:16px}}
+  </style>
+</head>
+<body>
+  <nav>
+    <div class="logo">JOB<span>VERSE</span></div>
+    <button data-v="reviews" class="on">Review queue <span class="count" id="revCount">0</span></button>
+    <button data-v="candidates">Candidates</button>
+    <button data-v="applications">Applications</button>
+    <button data-v="generate">Generate</button>
+    <button data-v="prospects">Prospects</button>
+    <button data-v="followups">Follow-ups</button>
+    <button data-v="report">Reports</button>
+    <button data-v="log">Activity</button>
+    <button data-v="help">Help &amp; guide</button>
+  </nav>
+  <main id="main"><h1>Loading…</h1></main>
+  <div id="toast"></div>
+
+<script>
+let D = null, view = 'reviews';
+const F = {}; // per-view filter state
+
+function load(){
+  google.script.run
+    .withSuccessHandler(d => { D = d; render(); })
+    .withFailureHandler(e => {
+      document.getElementById('main').innerHTML =
+        `<h1>Connection error</h1><div class="card"><p style="color:var(--red);font-weight:600">${esc(e.message)}</p>
+         <p class="mut" style="margin-top:8px">The backend threw an error. Check Apps Script's Executions panel (clock icon) for the full stack trace.</p></div>`;
+    })
+    .dashData();
+}
+load(); setInterval(load, 45000);
+
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+  view = b.dataset.v;
+  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x === b));
+  render();
+});
+
+function esc(s){ return String(s ?? '').replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c])); }
+function chip(s){
+  s = String(s || '');
+  const cls = s.includes('Submitted') ? 'c-sub' : s.includes('CAPTCHA') ? 'c-cap'
+    : (s.includes('Failed') || s.includes('Rejected') || s.includes('Error')) ? 'c-fail'
+    : s.includes('Review') ? 'c-wait' : 'c-prog';
+  return `<span class="chip ${cls}">${esc(s)}</span>`;
+}
+function rail(status){
+  const stages = ['In Progress','Awaiting Review','Approved - Submitting','Submitted'];
+  const idx = stages.indexOf(status);
+  return '<div class="rail">' + stages.map((s,i) =>
+    `<i class="${idx >= i ? 'done':''}" title="${s}"></i>`).join('') + '</div>';
+}
+function toast(m){ const t = document.getElementById('toast'); t.textContent = m; t.style.display='block'; setTimeout(()=>t.style.display='none', 2600); }
+function uniq(arr){ return [...new Set(arr.filter(Boolean))]; }
+function opts(arr, sel){ return ['<option value="">All</option>'].concat(arr.map(v => `<option ${v===sel?'selected':''}>${esc(v)}</option>`)).join(''); }
+
+function render(){
+  if(!D) return;
+  document.getElementById('revCount').textContent = D.reviews.length;
+  const m = document.getElementById('main');
+
+  if(view === 'reviews'){
+    m.innerHTML = '<h1>Review queue</h1>' + (D.reviews.length ? '' :
+      '<p class="mut">Nothing waiting. New CVs, cover letters, NHS statements and paused submissions appear here.</p>') +
+      D.reviews.map(t => `
+        <div class="card">
+          <b>${esc(t.summary)}</b> <span class="mut">${esc(t.type)} · ${esc(t.cand)} · score ${esc(t.score||'-')}</span>
+          ${renderFindings(t)}
+          <div style="margin-top:10px;display:flex;gap:8px">
+            <button class="btn approve" onclick="decide('${t.id}','approve')">Approve</button>
+            <button class="btn reject" onclick="decide('${t.id}','revise')">Send back</button>
+          </div>
+        </div>`).join('');
+  }
+
+  if(view === 'candidates'){
+    m.innerHTML = '<h1>Candidates</h1><div class="card"><table><tr><th>Name</th><th>Target roles</th><th>Progress</th><th>Target</th><th>Active</th><th></th></tr>' +
+      D.candidates.map(c => {
+        const pct = c.target > 0 ? Math.min(100, Math.round(100 * c.applied / c.target)) : 0;
+        return `<tr>
+          <td><b>${esc(c.name)}</b><br><span class="mut">${esc(c.id)} · ${esc(c.status)}</span></td>
+          <td>${esc(c.roles)}</td>
+          <td>${c.applied}${c.target>0?' / '+c.target:''}
+            ${c.target>0?`<div class="rail" style="margin-top:4px"><i class="done" style="width:${pct}%;max-width:100%"></i></div>`:''}
+          </td>
+          <td><input type="number" min="0" value="${c.target}" style="width:70px;padding:4px" onchange="setTarget('${c.id}', this.value)"></td>
+          <td><label class="tog"><input type="checkbox" ${c.active?'checked':''} onchange="setActive('${c.id}', this.checked)"> <span>${c.active?'Active':'Inactive'}</span></label></td>
+          <td><button class="btn danger tiny" onclick="delCandidate('${c.id}','${esc(c.name).replace(/'/g,"")}')">Delete</button></td>
+        </tr>`;
+      }).join('') +
+      '</table></div>';
+  }
+
+  if(view === 'applications'){
+    const cands = uniq(D.applications.map(a => a.cand));
+    const statuses = uniq(D.applications.map(a => a.status));
+    let rows = D.applications.slice().reverse();
+    if(F.appCand) rows = rows.filter(a => a.cand === F.appCand);
+    if(F.appStatus) rows = rows.filter(a => a.status === F.appStatus);
+    m.innerHTML = '<h1>Applications</h1>' +
+      `<div class="filters">
+        <div><label>Candidate</label><select onchange="setFilter('appCand',this.value)">${opts(cands, F.appCand)}</select></div>
+        <div><label>Status</label><select onchange="setFilter('appStatus',this.value)">${opts(statuses, F.appStatus)}</select></div>
+       </div>` +
+      '<div class="card"><table><tr><th>Company / role</th><th>Candidate</th><th>ATS</th><th>Pipeline</th><th>Status</th><th>Proof</th><th></th></tr>' +
+      (rows.length ? rows.map(a => `<tr>
+        <td><b>${esc(a.company)}</b><br><span class="mut">${esc(a.title)}</span></td>
+        <td class="mut">${esc(a.cand)}</td><td>${esc(a.ats)}</td>
+        <td>${rail(a.status)}</td><td>${chip(a.status)}</td>
+        <td>${a.shot ? `<a href="${esc(a.shot)}">screenshot</a>` : '<span class="mut">-</span>'}</td>
+        <td>${(a.status==='Failed'||a.status==='Error')?`<button class="btn primary tiny" onclick="retryApp('${a.id}')">Retry</button>`:''}</td></tr>`).join('')
+        : '<tr><td colspan="7" class="mut">No applications match.</td></tr>') +
+      '</table></div>';
+  }
+
+  if(view === 'generate'){
+    m.innerHTML = `<h1>Generate CV + cover letter</h1>
+      <div class="card">
+        <label>Candidate</label>
+        <select id="gCand">${D.candidates.map(c => `<option value="${esc(c.id)}">${esc(c.name)} (${esc(c.id)})</option>`).join('')}</select>
+        <label>Job URL (optional)</label><input id="gUrl" placeholder="https://...">
+        <label>Paste the job description</label><textarea id="gJD"></textarea>
+        <label>Tone profile</label>
+        <select id="gTone"><option>Jobverse Standard</option><option>NHS</option><option>Corporate</option><option>Technical</option><option>Executive</option><option>Graduate</option></select>
+        <div style="margin-top:12px"><button class="btn primary" onclick="gen()">Generate documents</button> <span class="mut" id="gMsg"></span></div>
+      </div>`;
+  }
+
+  if(view === 'prospects'){
+    const cands = uniq(D.prospects.map(p => p.cand));
+    const statuses = uniq(D.prospects.map(p => p.status));
+    let rows = D.prospects;
+    if(F.prosCand) rows = rows.filter(p => p.cand === F.prosCand);
+    if(F.prosStatus) rows = rows.filter(p => p.status === F.prosStatus);
+    m.innerHTML = `<h1>Prospects</h1>
+      <div class="card">
+        <label>Find jobs for candidate</label>
+        <select id="pCand">${D.candidates.map(c => `<option value="${esc(c.id)}">${esc(c.name)} (${esc(c.id)})</option>`).join('')}</select>
+        <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
+          <button class="btn primary" onclick="findJobs()">Find jobs</button>
+          <button class="btn approve" onclick="queueAll()">Queue all found</button>
+          <span class="mut" id="pMsg"></span>
+        </div>
+      </div>
+      <div class="filters">
+        <div><label>Candidate</label><select onchange="setFilter('prosCand',this.value)">${opts(cands, F.prosCand)}</select></div>
+        <div><label>Status</label><select onchange="setFilter('prosStatus',this.value)">${opts(statuses, F.prosStatus)}</select></div>
+      </div>
+      <div class="card"><table><tr><th>Candidate</th><th>Company</th><th>Role</th><th>Source</th><th>Status</th><th>Link</th><th>Action</th></tr>` +
+      (rows.length ? rows.map(p => `<tr>
+        <td class="mut">${esc(p.cand)}</td><td><b>${esc(p.company)}</b></td><td>${esc(p.title)}</td><td class="mut">${esc(p.source||'')}</td>
+        <td>${chip(p.status)}</td><td>${p.url?`<a href="${esc(p.url)}">open</a>`:''}</td>
+        <td>${p.status === 'Queued' ? '<span class="mut">queued</span>' :
+          `<button class="btn approve tiny" onclick="prospectAction('${p.id}','Queued')">Queue</button>
+           <button class="btn reject tiny" onclick="prospectAction('${p.id}','Skipped')">Skip</button>`}</td>
+        </tr>`).join('') :
+      '<tr><td colspan="7" class="mut">No prospects match. Use "Find jobs" above, or add rows manually in the Prospects tab of the sheet.</td></tr>') +
+      '</table></div>';
+  }
+
+  if(view === 'followups'){
+    const today = new Date().toISOString().slice(0,10);
+    m.innerHTML = '<h1>Follow-ups</h1><div class="card"><table><tr><th>Type</th><th>Candidate</th><th>Company / role</th><th>Due</th><th>Status</th><th>Action</th></tr>' +
+      (D.followUps.length ? D.followUps.map(f => {
+        const dueDate = (f.due||'').slice(0,10);
+        const overdue = f.status === 'Pending' && dueDate && dueDate <= today;
+        return `<tr>
+          <td>${esc(f.type)}</td><td class="mut">${esc(f.cand)}</td>
+          <td><b>${esc(f.company)}</b><br><span class="mut">${esc(f.title)}</span></td>
+          <td>${overdue ? `<span class="chip c-fail">${esc(dueDate)} - due</span>` : esc(dueDate)}</td>
+          <td>${chip(f.status)}</td>
+          <td>${f.status==='Pending'?`<button class="btn approve tiny" onclick="markFollowUpDone('${f.id}')">Mark done</button>`:'<span class="mut">-</span>'}</td>
+        </tr>`;
+      }).join('') : '<tr><td colspan="6" class="mut">Nothing tracked yet. NHS applications automatically log a Trac claim/verify follow-up here after submission.</td></tr>') +
+      '</table></div>';
+  }
+
+  if(view === 'report'){
+    const r = D.report;
+    m.innerHTML = '<h1>Latest report</h1>' + (!r ? '<p class="mut">No report yet. Run runDailyReport() in Apps Script or wait for the 07:00 trigger.</p>' :
+      `<p class="mut" style="margin-bottom:12px">${esc(r.period)} · ${esc(r.summary)}</p>
+       <div class="grid">
+         ${stat(r.metrics.applications_submitted,'Submitted')}
+         ${stat(r.metrics.applications_started,'Started')}
+         ${stat(r.metrics.success_rate_pct+'%','Success rate')}
+         ${stat(r.metrics.interviews,'Interviews')}
+         ${stat(r.metrics.interview_rate_pct+'%','Interview rate')}
+         ${stat(r.metrics.offers,'Offers')}
+         ${stat(r.metrics.avg_review_minutes+'m','Avg review time')}
+         ${stat(r.metrics.prospects_found,'Prospects found')}
+       </div>`);
+  }
+
+  if(view === 'log'){
+    const actors = uniq(D.log.map(l => l.actor));
+    const actions = uniq(D.log.map(l => l.action));
+    let rows = D.log;
+    if(F.logActor) rows = rows.filter(l => l.actor === F.logActor);
+    if(F.logAction) rows = rows.filter(l => l.action === F.logAction);
+    m.innerHTML = '<h1>Activity</h1>' +
+      `<div class="filters">
+        <div><label>Actor</label><select onchange="setFilter('logActor',this.value)">${opts(actors, F.logActor)}</select></div>
+        <div><label>Action</label><select onchange="setFilter('logAction',this.value)">${opts(actions, F.logAction)}</select></div>
+        <div style="flex:0"><label>&nbsp;</label><button class="btn danger" onclick="clearLog()">Clear log</button></div>
+       </div>` +
+      '<div class="card"><table><tr><th>Time</th><th>Actor</th><th>Action</th><th>Detail</th></tr>' +
+      rows.map(l => `<tr><td class="mut">${esc(l.t).slice(0,24)}</td><td>${esc(l.actor)}</td><td><b>${esc(l.action)}</b></td><td class="mut">${esc(l.detail)}</td></tr>`).join('') +
+      '</table></div>';
+  }
+
+  if(view === 'help'){ m.innerHTML = HELP_HTML; }
+}
+
+function stat(v,l){ return `<div class="stat"><b>${esc(v)}</b><span>${esc(l)}</span></div>`; }
+function pretty(j){ try { return JSON.stringify(JSON.parse(j), null, 2); } catch(e){ return j || ''; } }
+
+function renderFindings(t){
+  try {
+    var parsed = JSON.parse(t.findings);
+    if(Array.isArray(parsed)){
+      var rows = parsed.map(function(f){
+        var isUrl = typeof f.value === 'string' && /^https?:\/\//.test(f.value);
+        var val = isUrl ? `<a href="${esc(f.value)}">${esc(f.value)}</a>` : esc(f.value);
+        return `<div style="padding:3px 0;border-bottom:1px solid var(--line)"><b>${esc(f.label)}:</b> ${val}</div>`;
+      }).join('');
+      return `<div class="findings" style="font-family:'IBM Plex Sans'">${rows}</div>`;
+    }
+  } catch(e){ }
+  return `<div class="findings">${esc(pretty(t.findings))}</div>`;
+}
+
+function setFilter(key, val){ F[key] = val; render(); }
+
+function decide(id, d){
+  const notes = d === 'revise' ? (prompt('Notes for revision (optional)') || '') : '';
+  google.script.run.withSuccessHandler(() => { toast(d === 'approve' ? 'Approved' : 'Sent back'); load(); })
+    .withFailureHandler(e => toast('Error: ' + e.message)).dashDecide(id, d, notes);
+}
+
+function gen(){
+  const jd = document.getElementById('gJD').value.trim();
+  if(!jd){ toast('Paste a job description first'); return; }
+  document.getElementById('gMsg').textContent = 'Generating… this takes about a minute.';
+  google.script.run.withSuccessHandler(r => {
+    document.getElementById('gMsg').innerHTML =
+      `Done: <a href="${r.cvUrl}">CV</a> · <a href="${r.letterUrl}">Cover letter</a> (both queued for review)`;
+    load();
+  }).withFailureHandler(e => { document.getElementById('gMsg').textContent = 'Error: ' + e.message; })
+    .dashGenerate(document.getElementById('gCand').value, jd, document.getElementById('gUrl').value, document.getElementById('gTone').value);
+}
+
+function findJobs(){
+  document.getElementById('pMsg').textContent = 'Searching…';
+  google.script.run.withSuccessHandler(r => {
+    document.getElementById('pMsg').textContent = `Found ${r.found}, added ${r.added} new.`;
+    load();
+  }).withFailureHandler(e => { document.getElementById('pMsg').textContent = 'Error: ' + e.message; })
+    .dashFindProspects(document.getElementById('pCand').value);
+}
+
+function queueAll(){
+  const cand = document.getElementById('pCand').value;
+  google.script.run.withSuccessHandler(r => { toast(`Queued ${r.queued} prospect(s)`); load(); })
+    .withFailureHandler(e => toast('Error: ' + e.message)).dashQueueAllFound(cand);
+}
+
+function prospectAction(id, status){
+  google.script.run.withSuccessHandler(() => { toast(status); load(); })
+    .withFailureHandler(e => toast('Error: ' + e.message)).dashSetProspectStatus(id, status);
+}
+
+function setActive(id, active){
+  google.script.run.withSuccessHandler(() => { toast(active ? 'Activated' : 'Deactivated'); load(); })
+    .withFailureHandler(e => toast('Error: ' + e.message)).dashSetCandidateActive(id, active);
+}
+
+function setTarget(id, val){
+  google.script.run.withSuccessHandler(() => { toast('Target updated'); load(); })
+    .withFailureHandler(e => toast('Error: ' + e.message)).dashSetCandidateTarget(id, val);
+}
+
+function markFollowUpDone(id){
+  google.script.run.withSuccessHandler(() => { toast('Marked done'); load(); })
+    .withFailureHandler(e => toast('Error: ' + e.message)).dashMarkFollowUpDone(id);
+}
+
+function delCandidate(id, name){
+  if(!confirm(`Delete ${name} (${id}) and ALL their data - applications, prospects, generated documents, follow-ups, and their Drive folder? This cannot be undone.`)) return;
+  toast('Deleting…');
+  google.script.run.withSuccessHandler(() => { toast('Candidate deleted'); load(); })
+    .withFailureHandler(e => toast('Error: ' + e.message)).dashDeleteCandidate(id);
+}
+
+function clearLog(){
+  if(!confirm('Clear the entire Activity Log? This cannot be undone (it only clears the log, not your candidates or applications).')) return;
+  google.script.run.withSuccessHandler(() => { toast('Log cleared'); load(); })
+    .withFailureHandler(e => toast('Error: ' + e.message)).dashClearActivityLog();
+}
+
+function retryApp(id){
+  if(!confirm('Re-queue this failed application as a fresh prospect to try again?')) return;
+  google.script.run.withSuccessHandler(() => { toast('Re-queued'); load(); })
+    .withFailureHandler(e => toast('Error: ' + e.message)).dashRetryApplication(id);
+}
+
+const HELP_HTML = `
+<h1>Help &amp; guide</h1>
+
+<div class="card">
+<h2>What Jobverse does, in one line</h2>
+<p class="mut">It finds jobs for your candidates, writes a tailored CV and cover letter for each, fills in the online application, and pauses so a human can approve before anything is submitted. Nothing is ever sent to an employer without someone clicking Approve.</p>
+</div>
+
+<div class="card">
+<h2>The everyday workflow (hands-off path)</h2>
+<ol class="steps">
+<li>A candidate fills in the Google form. Within seconds they appear under <b>Candidates</b>, already profiled by the AI.</li>
+<li>Every morning the system finds new jobs for each active candidate. You can also do it now: <b>Prospects</b> tab, pick the candidate, click <b>Find jobs</b>.</li>
+<li>In <b>Prospects</b>, click <b>Queue</b> on the jobs you want, or <b>Queue all found</b> to take them all.</li>
+<li>Open the Chrome extension, pick the same candidate, click <b>Run queued prospects</b>. It opens each job and fills it in, one after another.</li>
+<li>Each finished application lands in <b>Review queue</b>. Read it, then <b>Approve</b> or <b>Send back</b>.</li>
+<li>On approve, the extension submits it and saves a screenshot. See it under <b>Applications</b>.</li>
+</ol>
+</div>
+
+<div class="card">
+<h2>Scenario: a single job you already have open</h2>
+<p class="mut">If someone is already looking at a specific job posting, they don't need the queue. Open the extension on that page, pick the candidate, and click <b>Fill this application</b> (or <b>Start NHS application</b> on NHS Jobs). Same flow, just for that one job.</p>
+</div>
+
+<div class="card">
+<h2>Scenario: NHS applications</h2>
+<p class="mut">NHS Jobs is an 8-step form. Jobverse fills the factual parts (contact, right to work, CV, and an AI-written supporting statement) and walks through the steps automatically. It will <b>not</b> guess the five legal declaration sections (criminal convictions, fitness to practice, guaranteed interview scheme, equality/diversity, socio-economic background) - those must come from the candidate's own answers, entered into their row in the Candidates sheet (columns starting "NHS..."). If an answer isn't there, it pauses and asks a human to complete that section. After submission, a Trac claim/verify follow-up is logged automatically under <b>Follow-ups</b>.</p>
+</div>
+
+<div class="card">
+<h2>Controlling volume and clients</h2>
+<ul>
+<li class="faq"><b>Turn a client on/off:</b> the Active toggle in Candidates. Off means they're skipped everywhere and hidden from the extension. Nothing is deleted.</li>
+<li class="faq"><b>Set a total goal:</b> the Target field in Candidates. The system stops applying once they hit it. 0 means no cap.</li>
+<li class="faq"><b>Daily limit:</b> Config tab in the sheet, MAX_APPS_PER_CANDIDATE_PER_DAY (default 15). Keep it under about 25 to look human and avoid CAPTCHAs.</li>
+</ul>
+</div>
+
+<div class="card">
+<h2>Sharing the Chrome extension with your team</h2>
+<ol class="steps">
+<li>Send them the chrome-extension folder (zip it and email, or share via Drive).</li>
+<li>They open <b>chrome://extensions</b> in Chrome.</li>
+<li>Turn on <b>Developer mode</b> (toggle, top right).</li>
+<li>Click <b>Load unpacked</b> and select the chrome-extension folder.</li>
+<li>Click the Jobverse icon, open <b>Connection settings</b>, and paste the web app URL and API token (from the Config tab of the sheet). Click Save.</li>
+</ol>
+<p class="mut">It's not on the Chrome Web Store on purpose - this is a private internal tool, and the store's review is strict about automation extensions. "Load unpacked" is the normal way to run a private team extension. Each person does this once.</p>
+</div>
+
+<div class="card">
+<h2>VPN: do we need one?</h2>
+<ul>
+<li class="faq"><b>UK / US / Canada / Ireland / Germany / Netherlands roles on Workday, Greenhouse, Lever, Ashby:</b> usually no VPN needed. These platforms serve global applicants.</li>
+<li class="faq"><b>NHS Jobs from outside the UK:</b> yes, use a UK VPN. NHS Jobs is UK-only and can block or flag non-UK traffic. The extension will remind you if it detects you're not on a UK connection.</li>
+<li class="faq"><b>General rule:</b> match your connection to the job's country when a site is country-restricted. Most private-sector ATS aren't, NHS is.</li>
+</ul>
+</div>
+
+<div class="card">
+<h2>FAQ</h2>
+<details class="faq"><summary>A candidate's prospects came back empty. Why?</summary>
+<p>Most likely their location isn't covered by the job sources. Adzuna covers UK, Ireland, Germany, Netherlands, US, Canada and more, but not Nigeria. For Nigerian roles, coverage is thin - manual sourcing into the Prospects tab is the fallback for now.</p></details>
+<details class="faq"><summary>Something says "Found - Manual Review" instead of Found.</summary>
+<p>The job's link didn't point at a supported application system. Open it, find the real apply page, and paste that URL into the Prospects tab's JobURL column if you want the extension to handle it.</p></details>
+<details class="faq"><summary>An application failed. Can I retry?</summary>
+<p>Yes. In Applications, failed ones have a <b>Retry</b> button that re-queues them as a fresh prospect.</p></details>
+<details class="faq"><summary>How do I remove a candidate completely?</summary>
+<p>Candidates tab, <b>Delete</b> button. It removes them and everything linked to them - applications, prospects, documents, follow-ups, and their Drive folder - in one action. It asks you to confirm first and cannot be undone.</p></details>
+<details class="faq"><summary>The dashboard feels slow.</summary>
+<p>It runs entirely on Google's servers with the sheet as its database, so each action is a round-trip - a second or two is normal. It's the trade-off for having no server to host or pay for.</p></details>
+<details class="faq"><summary>Is anything ever submitted without a human?</summary>
+<p>No. Every application pauses in the Review queue and only submits after someone clicks Approve.</p></details>
+</div>
+`;
+</script>
+</body>
+</html>

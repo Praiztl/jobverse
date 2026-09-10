@@ -3,3 +3,4 @@ node_modules/
 .clasp.json
 *.log
 downloads/
+.DS_Store
