@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Fixes Analytics.js: wraps MailApp.sendEmail in try/catch, matching the
-# pattern the live codebase already uses in Api.js's notifyReviewers_ helper,
-# so a mail-permission issue can never block the report itself from
-# completing (Logger.log(report) already runs first regardless).
+# Fixes Analytics.js two ways:
+#   1. Wraps MailApp.sendEmail in try/catch (matches notifyReviewers_ in
+#      Api.js) so a mail-permission issue can never crash the report.
+#   2. Also writes the report into ActivityLog via logActivity, so you can
+#      read the result directly in the Google Sheet instead of fighting
+#      the Apps Script execution-log viewer.
 #
 # Usage: run from inside your jobverse-repo clone:
 #   bash fix-analytics-mail.sh
@@ -30,6 +32,10 @@ cat > appscript/Analytics.js << 'ANALYTICSJS_EOF'
  * Submission-type rows will show under "no AI verdict to compare" - that's
  * expected, not a bug: apiRequestReview_ stores a raw form snapshot, not a
  * Reviewer Agent assessment, so there's nothing to compare yet for that type.
+ *
+ * Output goes to three places: the Apps Script execution log, the
+ * ActivityLog sheet tab (via logActivity - easiest place to actually read
+ * it), and email if REPORT_EMAILS is set (best-effort, never blocks).
  */
 function reviewerAccuracyReport() {
   var rows = readRows('ReviewQueue').filter(function (r) { return r.Status === 'Decided'; });
@@ -62,6 +68,8 @@ function reviewerAccuracyReport() {
   });
 
   var lines = [];
+  if (!rows.length) lines.push('No Decided ReviewQueue rows yet - nothing to measure.');
+
   Object.keys(byType).forEach(function (type) {
     var b = byType[type];
     lines.push('--- ' + type + ' ---');
@@ -83,9 +91,12 @@ function reviewerAccuracyReport() {
   var report = lines.join('\n');
   Logger.log(report);
 
-  // Email is best-effort only - never let a permissions/scope issue here
-  // stop the report itself from returning, matching how notifyReviewers_
-  // in Api.js already treats MailApp.
+  // Easiest place to actually read this: the ActivityLog sheet tab,
+  // most recent row, Detail column.
+  logActivity('system', 'reviewer_accuracy_report', 'system', '-', report);
+
+  // Best-effort only - never let a permissions/scope issue here stop the
+  // report from completing.
   var emails = getConfig('REPORT_EMAILS');
   if (emails) {
     emails.split(',').map(function (s) { return s.trim(); }).filter(Boolean).forEach(function (to) {
@@ -102,11 +113,12 @@ ANALYTICSJS_EOF
 
 echo "Committing..."
 git add -A
-git commit -m "Fix Analytics.js: wrap MailApp.sendEmail in try/catch
+git commit -m "Fix Analytics.js: try/catch around email, log report to ActivityLog sheet
 
-Matches the existing notifyReviewers_ pattern in Api.js - a mail
-permissions/scope issue should never block the report itself, since
-Logger.log(report) already runs before the email attempt.
+Two fixes: mail-permission errors no longer crash the function (matches
+notifyReviewers_'s existing pattern in Api.js), and the report now also
+writes to ActivityLog via logActivity so it's readable directly in the
+Sheet instead of only the Apps Script execution log viewer.
 
 Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
@@ -115,3 +127,6 @@ git push
 
 echo ""
 echo "Done. Now: clasp push, then re-run reviewerAccuracyReport() in the Apps Script editor."
+echo "Then open the Google Sheet itself, go to the ActivityLog tab, and look at the"
+echo "most recent row (bottom) - the Detail/Detail column will have the full report text."
+echo "Click that cell to see it fully in the formula bar if it looks cut off."

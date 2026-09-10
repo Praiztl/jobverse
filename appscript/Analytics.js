@@ -9,6 +9,10 @@
  * Submission-type rows will show under "no AI verdict to compare" - that's
  * expected, not a bug: apiRequestReview_ stores a raw form snapshot, not a
  * Reviewer Agent assessment, so there's nothing to compare yet for that type.
+ *
+ * Output goes to three places: the Apps Script execution log, the
+ * ActivityLog sheet tab (via logActivity - easiest place to actually read
+ * it), and email if REPORT_EMAILS is set (best-effort, never blocks).
  */
 function reviewerAccuracyReport() {
   var rows = readRows('ReviewQueue').filter(function (r) { return r.Status === 'Decided'; });
@@ -41,6 +45,8 @@ function reviewerAccuracyReport() {
   });
 
   var lines = [];
+  if (!rows.length) lines.push('No Decided ReviewQueue rows yet - nothing to measure.');
+
   Object.keys(byType).forEach(function (type) {
     var b = byType[type];
     lines.push('--- ' + type + ' ---');
@@ -62,9 +68,12 @@ function reviewerAccuracyReport() {
   var report = lines.join('\n');
   Logger.log(report);
 
-  // Email is best-effort only - never let a permissions/scope issue here
-  // stop the report itself from returning, matching how notifyReviewers_
-  // in Api.js already treats MailApp.
+  // Easiest place to actually read this: the ActivityLog sheet tab,
+  // most recent row, Detail column.
+  logActivity('system', 'reviewer_accuracy_report', 'system', '-', report);
+
+  // Best-effort only - never let a permissions/scope issue here stop the
+  // report from completing.
   var emails = getConfig('REPORT_EMAILS');
   if (emails) {
     emails.split(',').map(function (s) { return s.trim(); }).filter(Boolean).forEach(function (to) {
