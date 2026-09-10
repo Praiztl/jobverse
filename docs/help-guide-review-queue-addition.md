@@ -1,16 +1,7 @@
 # Help & guide addition — "What brings data to the Review Queue?"
 
-**Where this goes:** Jobverse Console → Help & guide page (lives in `Dashboard.html`,
-an Apps Script project file). Add as a new FAQ entry, matching the existing
-question/answer style (e.g. sitting near "Is anything ever submitted without a
-human?").
-
-**Note:** I haven't edited `Dashboard.html` myself — per the standing rule, I don't
-touch Apps Script project files directly. This is worded and formatted to paste in
-as-is; a human (or the AI Coder role, if that's how changes normally get made) still
-needs to add it to the file and save/redeploy.
-
----
+**Where this goes:** Jobverse Console -> Help & guide page (lives in `Dashboard.html`).
+Add as a new FAQ entry, matching the existing question/answer style.
 
 ### Suggested FAQ entry
 
@@ -24,16 +15,19 @@ keywords from the job posting that are missing from the document
 (`missing_keywords`), and produces an overall `ats_score` and a `confidence`
 rating for its own review.
 
-If that self-check comes back clean and confident, the item is auto-decided
-and never needs your attention — you'll still see it logged, just not sitting
-in the queue.
+Every one of these reviews lands in the queue with **Status: Awaiting
+Human**, along with its score and findings, and stays there until someone
+opens it and decides. There's a separate, second checkpoint too: right
+before an application would actually be submitted, the extension pauses
+again and files a full snapshot of everything it's about to send — that
+one also waits for a human Approve before anything reaches a real
+employer. Nothing skips either queue on its own.
 
-If the Reviewer Agent isn't confident, or flags anything worth a second look,
-the item lands in the Review Queue with **Status: Awaiting Human**, along with
-its score and findings so you can see exactly what it flagged. Nothing from
-that item is ever sent to an employer until a person opens it and clicks
-Approve — there's no path from "generated" to "submitted" that skips this
-queue.
+(If auto-decide is ever turned on for CV/CoverLetter/NHSStatement reviews
+specifically — a config setting, off by default — a document that clears
+a confidence bar gets decided automatically instead of waiting. That
+never applies to the final submission checkpoint, which always waits for
+a person.)
 
 **Where do I see why something was flagged?**
 
@@ -41,15 +35,3 @@ Open the item in the Review Queue and check the `AIFindings` details — it
 breaks out the ATS score, the confidence rating, any unsupported claims, and
 any missing keywords the Reviewer Agent found, so you're not just looking at
 a bare pass/fail number.
-
----
-
-## Why I didn't just add this myself
-
-I read `Dashboard.html` only through the browser, and I'm not allowed to open
-it in the Apps Script editor and save changes — that falls under the same
-"no editing or deploying Apps Script" rule I've been holding to for the
-Prospects.gs fix all session. If you want this in the guide today, paste the
-section above into the Help & guide part of `Dashboard.html` and save. Happy
-to re-check the formatting once it's in, or adjust the wording first if you
-want it shorter.

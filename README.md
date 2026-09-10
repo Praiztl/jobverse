@@ -2,56 +2,46 @@
 
 Job-application automation: candidates get matched to prospects, a
 Resume/Cover Letter Builder generates documents, a Reviewer Agent
-self-checks them, and cleared applications submit automatically via
-Playwright. Flagged applications (unsupported claims, low confidence)
-wait in the Review Queue for a human look.
+self-checks them, and — always, today, with no exceptions — a human
+approves the actual submission before anything reaches a real employer.
 
 ## Repo layout
 
-- `appscript/` — the live Apps Script project (Prospects.gs, Api.gs,
-  Followup.gs, Reports.gs, Dashboard.html, etc). **Not populated yet** —
-  see `appscript/README.md` for the one-time `clasp clone` step needed to
-  fill this in from the real project. This step needs to run from a real
-  browser under the Google account that owns the Apps Script project, so
-  it isn't something that can be scripted from a cloud sandbox.
-- `appscript-patches/` — reviewed, not-yet-applied (or already-applied)
-  changes to the live Apps Script project, in the order they were
-  designed. Once `appscript/` is populated, each of these becomes a normal
-  PR against real files instead of a manual copy-paste into the Apps
-  Script editor.
-- `db/schema.sql` — Postgres schema for the four DB-synced tables
-  (`prospects`, `applications`, `review_queue`, `activity_log`).
-- `worker/` — the Playwright auto-submission worker. Currently talks to
-  `Api.gs`'s web app endpoints; once the DB layer exists, its `callApi`
-  functions get swapped for direct Postgres queries (see `db/schema.sql`'s
-  claim-query comment).
-- `docs/` — supporting docs, including a Help & guide addition for the
-  in-app FAQ.
+- `appscript/` — the live Apps Script project, pulled via `clasp clone`.
+  Real files: `AI.js`, `Agents.js`, `Api.js`, `FormBuilder.js`, `Intake.js`,
+  `Reports.js`, `Setup.js`, `Dashboard.html`, `Followup.js`, `Prospects.js`,
+  plus the new `Sync.js` and `Analytics.js` added here.
+- `appscript-patches/` — reviewed changes, in the order they were designed.
+  `DEPRECATED-02` should never be applied — built on a wrong model of the
+  system. `03` and `04` are new standalone files (already added to
+  `appscript/` by this script). `05` is written but intentionally not
+  applied — see status table.
+- `db/schema.sql`, `db/sync/*.js`, `worker/*.js` — an earlier design for a
+  Postgres sync layer and Playwright submission worker, built before the
+  real `Api.js`/`Agents.js` were read. **Known stale** — don't provision a
+  DB or run the worker against these yet.
+- `docs/` — supporting docs, including the corrected Help & guide addition.
 
 ## Status
 
 | Piece | State |
 |---|---|
-| Prospects.gs multi-location fix | Written, applied to the live project, verified |
+| Prospects.gs multi-location fix | Live, verified |
 | Config (`ADZUNA_COUNTRY`) | Fixed in the live Sheet |
-| `claimNextCleared_` / `reportSubmissionResult_` (Api.gs) | Drafted, not yet pasted into the live project |
-| `onReviewQueueEdit` (instant sync trigger) | Drafted, not yet pasted or enabled |
-| Postgres schema | Drafted, no DB provisioned yet |
-| `sheet-to-db.js` / `db-to-sheet.js` sync scripts | Not started — next up once a DB exists |
-| Worker repointed at Postgres | Not started — worker currently targets `Api.gs` |
-| Followup.gs submission-trigger gap | Identified, fix not yet written |
+| Adzuna geo-block ATS resolver + Remotive source | Already live (found already in place when Prospects.js was read — built independently of this repo's work) |
+| `Sync.js` (onReviewQueueEdit) | Added to `appscript/`, not yet deployed live or enabled as a trigger |
+| `Analytics.js` (reviewerAccuracyReport) | Added to `appscript/`, not yet deployed live or run |
+| Config-gated auto-decide (patch 05) | Written, intentionally not applied — wait for real accuracy numbers first |
+| `DEPRECATED-02` claim/report endpoints | Do not apply — real `Api.js` already covers this via `apiPrecheckApplication_`/`apiStartApplication_`/`apiAnalyseJob_`/`apiRequestReview_`/`apiCheckApproval_`/`apiConfirmSubmission_` |
+| Postgres schema / sync scripts / worker | Stale, built on wrong assumptions about the schema — needs a full rework against the real tables (`Jobs`, `CVVersions`, `CoverLetters`, `NHSStatements`, `AIOutputs`, `FollowUps` weren't accounted for) |
+| Submission-type independent review | Doesn't exist yet — `apiRequestReview_` stores a raw snapshot with no AI verdict, so there's nothing to threshold on for auto-decide there. Future milestone, not started. |
 
-## What's still manual, and why
+## Next manual steps (need your Google login — can't be scripted)
 
-Three things in this project need a human's own credentials and can't be
-done by an agent from a sandbox, regardless of tooling:
-
-1. **Pushing to the live Apps Script project** (`clasp login` / `clasp
-   push`) needs interactive Google OAuth under the account that owns the
-   project.
-2. **Provisioning the Postgres DB** (Supabase/Neon) needs an account
-   signup.
-3. **This GitHub repo's remote** needs to exist under someone's GitHub
-   account before anything can be pushed to it.
-
-Everything else in this repo is ready to go the moment those three exist.
+1. Open the Apps Script editor (or run `clasp push` from this repo) to
+   actually deploy `Sync.js` and `Analytics.js` to the live project.
+2. Triggers (clock icon) -> Add Trigger -> `onReviewQueueEdit` -> From
+   spreadsheet -> On edit -> Save. Must be an installable trigger, not a
+   bare `onEdit(e)`.
+3. Run `reviewerAccuracyReport()` once manually and look at the real
+   numbers before deciding whether/when to apply patch 05.
