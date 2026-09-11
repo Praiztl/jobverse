@@ -1,3 +1,37 @@
+#!/usr/bin/env bash
+# Jobverse: update the Help & guide page to document the worker (the
+# Playwright background automation) as the default hands-off path, with the
+# Chrome extension reframed as the fallback for one-off jobs or ATS types
+# the worker doesn't support yet (Lever, Ashby, NHS Jobs, Workday past
+# sign-in). Also refreshes the repo README status table and marks the old
+# review-queue FAQ draft as applied now that it's live for real.
+#
+# Changes:
+#   - appscript/Dashboard.html: HELP_HTML gets a new "Scenario: background
+#     automation (the worker)" card, the everyday-workflow steps no longer
+#     say "open the extension," the single-job scenario is reframed as the
+#     manual/fallback path, and four FAQ entries are added or updated
+#     (including the review-queue FAQ that was drafted but never actually
+#     applied before now).
+#   - README.md: status table brought up to date through batch 4.
+#   - docs/help-guide-review-queue-addition.md: marked APPLIED, since its
+#     content is now live in Dashboard.html instead of just a draft.
+#
+# Usage: run from inside your jobverse-repo clone:
+#   bash apply-batch-5.sh
+
+set -euo pipefail
+
+if [ ! -d ".git" ]; then
+  echo "Run this from inside your jobverse-repo clone (the folder with .git in it)." >&2
+  exit 1
+fi
+
+echo "Pulling latest..."
+git pull origin main
+
+echo "Rewriting appscript/Dashboard.html (Help & guide: worker documented as default path)..."
+cat > appscript/Dashboard.html << 'DASHBOARDHTML_EOF'
 <!DOCTYPE html>
 <html>
 <head>
@@ -461,3 +495,138 @@ const HELP_HTML = `
 </script>
 </body>
 </html>
+DASHBOARDHTML_EOF
+
+echo "Marking docs/help-guide-review-queue-addition.md as applied..."
+cat > docs/help-guide-review-queue-addition.md << 'HELPDOC_EOF'
+# Help & guide addition — "What brings data to the Review Queue?"
+
+**APPLIED.** This content now lives for real in `appscript/Dashboard.html`'s
+`HELP_HTML`, as the "What brings an item into the Review queue?" FAQ entry
+(added along with the worker documentation in batch 5). Kept here only as a
+historical record of the original draft — edit the live file directly for
+any future changes, not this one.
+
+**Where this goes:** Jobverse Console -> Help & guide page (lives in `Dashboard.html`).
+Add as a new FAQ entry, matching the existing question/answer style.
+
+### Suggested FAQ entry
+
+**What brings an item into the Review Queue?**
+
+Every time the Resume Builder or Cover Letter Builder generates a document, a
+second AI — the Reviewer Agent — checks that document before it goes any
+further. It looks for things like claims the CV makes that aren't backed up
+by anything in the candidate's actual background (`unsupported_claims`), and
+keywords from the job posting that are missing from the document
+(`missing_keywords`), and produces an overall `ats_score` and a `confidence`
+rating for its own review.
+
+Every one of these reviews lands in the queue with **Status: Awaiting
+Human**, along with its score and findings, and stays there until someone
+opens it and decides. There's a separate, second checkpoint too: right
+before an application would actually be submitted, the extension pauses
+again and files a full snapshot of everything it's about to send — that
+one also waits for a human Approve before anything reaches a real
+employer. Nothing skips either queue on its own.
+
+(If auto-decide is ever turned on for CV/CoverLetter/NHSStatement reviews
+specifically — a config setting, off by default — a document that clears
+a confidence bar gets decided automatically instead of waiting. That
+never applies to the final submission checkpoint, which always waits for
+a person.)
+
+**Where do I see why something was flagged?**
+
+Open the item in the Review Queue and check the `AIFindings` details — it
+breaks out the ATS score, the confidence rating, any unsupported claims, and
+any missing keywords the Reviewer Agent found, so you're not just looking at
+a bare pass/fail number.
+HELPDOC_EOF
+
+echo "Refreshing README.md status table..."
+cat > README.md << 'READMEMD_EOF'
+# Jobverse
+
+Job-application automation: candidates get matched to prospects, a
+Resume/Cover Letter Builder generates documents, a Reviewer Agent
+self-checks them, and — always, today, with no exceptions — a human
+approves the actual submission before anything reaches a real employer.
+
+## Repo layout
+
+- `appscript/` — the live Apps Script project, pulled via `clasp clone`.
+  Real files: `AI.js`, `Agents.js`, `Api.js`, `FormBuilder.js`, `Intake.js`,
+  `Reports.js`, `Setup.js`, `Dashboard.html`, `Followup.js`, `Prospects.js`,
+  plus `Sync.js` and `Analytics.js`, added here.
+- `worker/` — the Playwright worker. Polls the real `Api.js` endpoints,
+  fills real ATS application forms, and requests human review before ever
+  clicking a real Submit button. `worker/ats/*.js` holds one module per ATS.
+- `appscript-patches/` — reviewed changes, in the order they were designed.
+  `DEPRECATED-02` should never be applied — built on a wrong model of the
+  system. `03` and `04` are standalone files, already live in `appscript/`.
+  `05` is written but intentionally not applied — see status table.
+- `db/schema.sql`, `db/sync/*.js` — an earlier design for a Postgres sync
+  layer, built before the real `Api.js`/`Agents.js` were read. **Known
+  stale** — don't provision a DB against this yet.
+- `docs/` — supporting docs. `help-guide-review-queue-addition.md` is now
+  applied directly in `Dashboard.html` and kept only as a historical draft.
+
+## Status
+
+| Piece | State |
+|---|---|
+| Prospects.gs multi-location fix | Live, verified |
+| Adzuna geo-block ATS resolver + Remotive source | Live (pre-existing) |
+| `Sync.js` (`onReviewQueueEdit`) | Deployed — confirm the installable trigger is set (Triggers → Add Trigger → `onReviewQueueEdit` → From spreadsheet → On edit) if not done already |
+| `Analytics.js` (`reviewerAccuracyReport`) | Deployed and run once — `ReviewQueue` had zero Decided rows at last check, so there's nothing to measure yet |
+| Config-gated auto-decide (patch 05) | Still not applied — needs real Decided rows in `ReviewQueue` first |
+| `PlatformAccounts` tab + Workday sign-in/signup handling | Live — tracks per-candidate, per-employer-domain account status, reuses the candidate's intake `ApplicationEmail`/`ApplicationPassword` |
+| `worker/worker.js` | Rewritten against the real `Api.js` flow: fills a form and requests review, then re-fills and submits for real only after a human approves. Two independent, non-blocking passes each poll cycle. |
+| `worker/ats/greenhouse.js` | Full support, `fillForm`/`clickSubmit` split so the real submit always waits on review |
+| `worker/ats/workday.js` | Handles the sign-in/signup wall only — actual Workday form-filling isn't built yet, needs verification against a real posting first |
+| Lever / Ashby / NHS Jobs in the worker | Not started — `Prospects.gs` recognises these as valid ATS links, but there's no `worker/ats/*.js` module yet, so they stay `Queued`. Use the Chrome extension for these meanwhile. |
+| `Api.js`: `exportDocumentPdf`, `listApplicationsByStatus` | Added so the worker can download real CV/cover-letter PDFs and find human-approved applications to submit |
+| `Api.js`: `apiListProspects_` returning `ats` | Fixed — previously always returned `undefined`, so the worker could never match a prospect to an ATS module regardless of what it actually was |
+| Help & guide (`Dashboard.html`) | Updated — documents the worker as the default hands-off path, extension as the fallback for one-off jobs or unsupported ATSes |
+| Postgres schema / `db/sync/*.js` | Still stale/unused — needs a full rework against the real tables (`Jobs`, `CVVersions`, `CoverLetters`, `NHSStatements`, `AIOutputs`, `FollowUps`) |
+| `worker/.env.example` deployment URL leak | A real `/exec` URL was briefly committed, then removed (`fix-env-example.sh`). If the Apps Script deployment behind it hasn't been rotated (new deployment, old one archived) yet, do that — the URL is still visible in git history. |
+
+## Next manual steps (need your Google login — can't be scripted)
+
+1. `clasp push`, then redeploy the existing web app deployment (Deploy →
+   Manage deployments → pencil icon → Version: New version → Deploy) — a
+   plain `clasp push` alone does **not** update what's live at your `/exec`
+   URL, it only updates the editor's source.
+2. Confirm the `onReviewQueueEdit` installable trigger is registered
+   (Triggers → Add Trigger → From spreadsheet → On edit), if not already.
+3. Run `reviewerAccuracyReport()` once real `Decided` rows exist, and look
+   at the numbers before deciding whether/when to apply patch 05.
+4. If you haven't already: rotate the Apps Script deployment that was
+   briefly exposed via `worker/.env.example`, and restrict "Who has access"
+   on it to specific accounts rather than "Anyone."
+READMEMD_EOF
+
+echo "Committing..."
+git add -A
+git commit -m "Document the worker in Help & guide, refresh README status table
+
+Dashboard.html's Help & guide page still described the Chrome extension as
+the way applications get filled - it never mentioned the worker at all.
+Reframed the everyday workflow around the worker as the default hands-off
+path, added a card explaining what it can/can't do yet (Greenhouse full,
+Workday sign-in/signup only, Lever/Ashby/NHS not started), and added FAQ
+entries covering the worker, PlatformAccounts, and the review-queue
+question that was drafted months ago but never actually applied to the
+live page until now.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
+
+echo "Pushing..."
+git push
+
+echo ""
+echo "Done. Now: clasp push, then redeploy the existing web app deployment"
+echo "(Deploy -> Manage deployments -> pencil icon -> Version: New version ->"
+echo "Deploy) so the updated Help & guide page is actually what people see -"
+echo "clasp push alone does not update what's live at your /exec URL."

@@ -10,38 +10,50 @@ approves the actual submission before anything reaches a real employer.
 - `appscript/` — the live Apps Script project, pulled via `clasp clone`.
   Real files: `AI.js`, `Agents.js`, `Api.js`, `FormBuilder.js`, `Intake.js`,
   `Reports.js`, `Setup.js`, `Dashboard.html`, `Followup.js`, `Prospects.js`,
-  plus the new `Sync.js` and `Analytics.js` added here.
+  plus `Sync.js` and `Analytics.js`, added here.
+- `worker/` — the Playwright worker. Polls the real `Api.js` endpoints,
+  fills real ATS application forms, and requests human review before ever
+  clicking a real Submit button. `worker/ats/*.js` holds one module per ATS.
 - `appscript-patches/` — reviewed changes, in the order they were designed.
   `DEPRECATED-02` should never be applied — built on a wrong model of the
-  system. `03` and `04` are new standalone files (already added to
-  `appscript/` by this script). `05` is written but intentionally not
-  applied — see status table.
-- `db/schema.sql`, `db/sync/*.js`, `worker/*.js` — an earlier design for a
-  Postgres sync layer and Playwright submission worker, built before the
-  real `Api.js`/`Agents.js` were read. **Known stale** — don't provision a
-  DB or run the worker against these yet.
-- `docs/` — supporting docs, including the corrected Help & guide addition.
+  system. `03` and `04` are standalone files, already live in `appscript/`.
+  `05` is written but intentionally not applied — see status table.
+- `db/schema.sql`, `db/sync/*.js` — an earlier design for a Postgres sync
+  layer, built before the real `Api.js`/`Agents.js` were read. **Known
+  stale** — don't provision a DB against this yet.
+- `docs/` — supporting docs. `help-guide-review-queue-addition.md` is now
+  applied directly in `Dashboard.html` and kept only as a historical draft.
 
 ## Status
 
 | Piece | State |
 |---|---|
 | Prospects.gs multi-location fix | Live, verified |
-| Config (`ADZUNA_COUNTRY`) | Fixed in the live Sheet |
-| Adzuna geo-block ATS resolver + Remotive source | Already live (found already in place when Prospects.js was read — built independently of this repo's work) |
-| `Sync.js` (onReviewQueueEdit) | Added to `appscript/`, not yet deployed live or enabled as a trigger |
-| `Analytics.js` (reviewerAccuracyReport) | Added to `appscript/`, not yet deployed live or run |
-| Config-gated auto-decide (patch 05) | Written, intentionally not applied — wait for real accuracy numbers first |
-| `DEPRECATED-02` claim/report endpoints | Do not apply — real `Api.js` already covers this via `apiPrecheckApplication_`/`apiStartApplication_`/`apiAnalyseJob_`/`apiRequestReview_`/`apiCheckApproval_`/`apiConfirmSubmission_` |
-| Postgres schema / sync scripts / worker | Stale, built on wrong assumptions about the schema — needs a full rework against the real tables (`Jobs`, `CVVersions`, `CoverLetters`, `NHSStatements`, `AIOutputs`, `FollowUps` weren't accounted for) |
-| Submission-type independent review | Doesn't exist yet — `apiRequestReview_` stores a raw snapshot with no AI verdict, so there's nothing to threshold on for auto-decide there. Future milestone, not started. |
+| Adzuna geo-block ATS resolver + Remotive source | Live (pre-existing) |
+| `Sync.js` (`onReviewQueueEdit`) | Deployed — confirm the installable trigger is set (Triggers → Add Trigger → `onReviewQueueEdit` → From spreadsheet → On edit) if not done already |
+| `Analytics.js` (`reviewerAccuracyReport`) | Deployed and run once — `ReviewQueue` had zero Decided rows at last check, so there's nothing to measure yet |
+| Config-gated auto-decide (patch 05) | Still not applied — needs real Decided rows in `ReviewQueue` first |
+| `PlatformAccounts` tab + Workday sign-in/signup handling | Live — tracks per-candidate, per-employer-domain account status, reuses the candidate's intake `ApplicationEmail`/`ApplicationPassword` |
+| `worker/worker.js` | Rewritten against the real `Api.js` flow: fills a form and requests review, then re-fills and submits for real only after a human approves. Two independent, non-blocking passes each poll cycle. |
+| `worker/ats/greenhouse.js` | Full support, `fillForm`/`clickSubmit` split so the real submit always waits on review |
+| `worker/ats/workday.js` | Handles the sign-in/signup wall only — actual Workday form-filling isn't built yet, needs verification against a real posting first |
+| Lever / Ashby / NHS Jobs in the worker | Not started — `Prospects.gs` recognises these as valid ATS links, but there's no `worker/ats/*.js` module yet, so they stay `Queued`. Use the Chrome extension for these meanwhile. |
+| `Api.js`: `exportDocumentPdf`, `listApplicationsByStatus` | Added so the worker can download real CV/cover-letter PDFs and find human-approved applications to submit |
+| `Api.js`: `apiListProspects_` returning `ats` | Fixed — previously always returned `undefined`, so the worker could never match a prospect to an ATS module regardless of what it actually was |
+| Help & guide (`Dashboard.html`) | Updated — documents the worker as the default hands-off path, extension as the fallback for one-off jobs or unsupported ATSes |
+| Postgres schema / `db/sync/*.js` | Still stale/unused — needs a full rework against the real tables (`Jobs`, `CVVersions`, `CoverLetters`, `NHSStatements`, `AIOutputs`, `FollowUps`) |
+| `worker/.env.example` deployment URL leak | A real `/exec` URL was briefly committed, then removed (`fix-env-example.sh`). If the Apps Script deployment behind it hasn't been rotated (new deployment, old one archived) yet, do that — the URL is still visible in git history. |
 
 ## Next manual steps (need your Google login — can't be scripted)
 
-1. Open the Apps Script editor (or run `clasp push` from this repo) to
-   actually deploy `Sync.js` and `Analytics.js` to the live project.
-2. Triggers (clock icon) -> Add Trigger -> `onReviewQueueEdit` -> From
-   spreadsheet -> On edit -> Save. Must be an installable trigger, not a
-   bare `onEdit(e)`.
-3. Run `reviewerAccuracyReport()` once manually and look at the real
-   numbers before deciding whether/when to apply patch 05.
+1. `clasp push`, then redeploy the existing web app deployment (Deploy →
+   Manage deployments → pencil icon → Version: New version → Deploy) — a
+   plain `clasp push` alone does **not** update what's live at your `/exec`
+   URL, it only updates the editor's source.
+2. Confirm the `onReviewQueueEdit` installable trigger is registered
+   (Triggers → Add Trigger → From spreadsheet → On edit), if not already.
+3. Run `reviewerAccuracyReport()` once real `Decided` rows exist, and look
+   at the numbers before deciding whether/when to apply patch 05.
+4. If you haven't already: rotate the Apps Script deployment that was
+   briefly exposed via `worker/.env.example`, and restrict "Who has access"
+   on it to specific accounts rather than "Anyone."

@@ -1,5 +1,11 @@
 # Help & guide addition — "What brings data to the Review Queue?"
 
+**APPLIED.** This content now lives for real in `appscript/Dashboard.html`'s
+`HELP_HTML`, as the "What brings an item into the Review queue?" FAQ entry
+(added along with the worker documentation in batch 5). Kept here only as a
+historical record of the original draft — edit the live file directly for
+any future changes, not this one.
+
 **Where this goes:** Jobverse Console -> Help & guide page (lives in `Dashboard.html`).
 Add as a new FAQ entry, matching the existing question/answer style.
 
