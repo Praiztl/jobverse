@@ -14,10 +14,6 @@ var JV = {
       'WorkModel', 'EmploymentType', 'NoticePeriod', 'Registrations', 'LinkedIn', 'GitHub',
       'Portfolio', 'References', 'CVFileID', 'CertificateFileIDs', 'DriveFolderID',
       'AIProfileJSON', 'Strengths', 'Weaknesses', 'Notes',
-      // NHS declaration answers - filled in by the candidate themselves (via the
-      // dashboard or a supplementary form), NEVER guessed or defaulted by AI.
-      // Blank means "not yet provided" and the extension will flag it for a
-      // human rather than fill it.
       'NHSUnspentConvictions', 'NHSFitnessToPractice', 'NHSDisabilityGIS',
       'NHSEthnicity', 'NHSReligion', 'NHSSexualOrientation', 'NHSSocioEconomicBackground'
     ],
@@ -61,7 +57,17 @@ var JV = {
     AIOutputs: ['OutputID', 'CreatedAt', 'Agent', 'CandidateID', 'JobID', 'Model', 'OutputJSON'],
     ActivityLog: ['Timestamp', 'Actor', 'Action', 'RefType', 'RefID', 'Detail'],
     Reports: ['GeneratedAt', 'Period', 'MetricsJSON', 'Summary'],
-    Config: ['Key', 'Value', 'Notes']
+    Config: ['Key', 'Value', 'Notes'],
+    // NEW: tracks per-candidate, per-ATS-tenant accounts created for sign-in
+    // walls (Workday etc). ATSDomain is the actual tenant hostname (e.g.
+    // acmecorp.wd5.myworkdayjobs.com), never just "Workday" - each employer's
+    // instance is a separate account. Status: 'Created' (usable, sign in next
+    // time), 'Blocked-CAPTCHA', 'Blocked-EmailVerification', or 'Failed'.
+    // Always uses the candidate's existing ApplicationEmail/ApplicationPassword -
+    // no separate credentials stored here.
+    PlatformAccounts: [
+      'AccountID', 'CreatedAt', 'CandidateID', 'ATSDomain', 'Status', 'Notes', 'UpdatedAt'
+    ]
   },
 
   CONFIG_DEFAULTS: [
@@ -103,7 +109,6 @@ var JV = {
 function setupJobverse() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
 
-  // 1. Tabs
   Object.keys(JV.SHEETS).forEach(function (name) {
     var sh = ss.getSheetByName(name);
     if (!sh) sh = ss.insertSheet(name);
@@ -112,10 +117,6 @@ function setupJobverse() {
       sh.setFrozenRows(1);
       sh.getRange(1, 1, 1, JV.SHEETS[name].length).setFontWeight('bold');
     } else {
-      // Migration for sheets that already have data: add any columns the
-      // current schema expects but this sheet doesn't have yet, appended to
-      // the right of whatever's already there. Existing headers, existing
-      // column order, and existing row data are never touched or moved.
       var existingHeaders = sh.getRange(1, 1, 1, Math.max(sh.getLastColumn(), 1)).getValues()[0];
       var existingSet = {};
       existingHeaders.forEach(function (h) { if (h) existingSet[h] = true; });
@@ -132,7 +133,6 @@ function setupJobverse() {
   if (s1 && ss.getSheets().length > 1) ss.deleteSheet(s1);
 
 
-  // 2. Config defaults
   var cfg = ss.getSheetByName('Config');
   var existingKeys = cfg.getLastRow() > 1
     ? cfg.getRange(2, 1, cfg.getLastRow() - 1, 1).getValues().map(function (r) { return r[0]; })
@@ -141,11 +141,9 @@ function setupJobverse() {
     if (existingKeys.indexOf(row[0]) === -1) cfg.appendRow(row);
   });
 
-  // 3. Tone profiles
   var tones = ss.getSheetByName('ToneProfiles');
   if (tones.getLastRow() < 2) JV.TONE_DEFAULTS.forEach(function (r) { tones.appendRow(r); });
 
-  // 4. Drive folders
   if (!getConfig('ROOT_FOLDER_ID')) {
     var root = DriveApp.createFolder('Jobverse Platform');
     root.createFolder('Candidates');
@@ -156,19 +154,12 @@ function setupJobverse() {
     setConfig('ROOT_FOLDER_ID', root.getId());
   }
 
-  // 5. API token for the extension
   if (!getConfig('API_TOKEN')) {
     setConfig('API_TOKEN', Utilities.getUuid().replace(/-/g, ''));
   }
 
-  // 6. Daily report trigger at 07:00
   ensureTrigger_('runDailyReport', function (b) { return b.timeBased().atHour(7).everyDays(1).create(); });
-
-  // Daily prospect refresh at 06:00 (before the 07:00 report). Only adds new
-  // matches not already in the sheet, and skips inactive candidates.
   ensureTrigger_('findProspectsForAllCandidates', function (b) { return b.timeBased().atHour(6).everyDays(1).create(); });
-
-  // Daily follow-up reminder at 07:30, between the prospect refresh and the report.
   ensureTrigger_('sendDueFollowUpReminders', function (b) { return b.timeBased().atHour(7).nearMinute(30).everyDays(1).create(); });
 
   logActivity('system', 'setup', 'system', '-', 'Setup completed');
@@ -183,7 +174,6 @@ function setupJobverse() {
   } catch (ignored) { /* toast is best-effort, never block on it */ }
 }
 
-/** Run after putting the Form ID into Config. */
 function installFormTrigger() {
   var formId = getConfig('FORM_ID');
   if (!formId) throw new Error('Set Config > FORM_ID first.');
@@ -235,20 +225,11 @@ function logActivity(actor, action, refType, refId, detail) {
   sheet_('ActivityLog').appendRow([new Date(), actor, action, refType, refId, detail || '']);
 }
 
-/**
- * Row helpers: read a sheet into objects, or find/update one row by ID
- * column. All four look up columns BY HEADER NAME from the sheet's actual
- * row 1, never by position in the JV.SHEETS[name] code array. This matters:
- * JV.SHEETS[name] can be reordered or extended as the schema grows without
- * ever risking misalignment of data that's already in the sheet - the code
- * array is only used to know which columns SHOULD exist (for setup/migration
- * below), never to decide where a value lives in an existing row.
- */
 function getHeaderMap_(sh) {
   var lastCol = Math.max(sh.getLastColumn(), 1);
   var headerRow = sh.getRange(1, 1, 1, lastCol).getValues()[0];
   var map = {};
-  headerRow.forEach(function (h, i) { if (h) map[h] = i + 1; }); // 1-based column index
+  headerRow.forEach(function (h, i) { if (h) map[h] = i + 1; });
   return map;
 }
 
@@ -291,11 +272,6 @@ function updateRow(name, rowNumber, patch) {
   });
 }
 
-/**
- * Delete every row in a sheet whose idField equals idValue. Deletes from the
- * bottom up so earlier row numbers don't shift while we're still deleting.
- * Returns how many rows were removed.
- */
 function deleteRowsWhere(name, idField, idValue) {
   var sh = sheet_(name);
   if (sh.getLastRow() < 2) return 0;
@@ -307,7 +283,7 @@ function deleteRowsWhere(name, idField, idValue) {
   values.forEach(function (r, i) {
     if (String(r[0]) === String(idValue)) rowsToDelete.push(i + 2);
   });
-  rowsToDelete.sort(function (a, b) { return b - a; }); // descending
+  rowsToDelete.sort(function (a, b) { return b - a; });
   rowsToDelete.forEach(function (rowNum) { sh.deleteRow(rowNum); });
   return rowsToDelete.length;
 }

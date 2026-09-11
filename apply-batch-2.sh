@@ -1,3 +1,325 @@
+#!/usr/bin/env bash
+# Jobverse: platform-account handling for sign-in/sign-up walls (Workday etc).
+#
+# Adds:
+#   - appscript/Setup.js: new PlatformAccounts tab (additive - existing tabs,
+#     columns, and data are never touched, same safe migration path setup
+#     already uses)
+#   - appscript/Api.js: two new endpoints (checkPlatformAccount,
+#     recordPlatformAccount) and a small backward-compatible extension to
+#     apiCaptchaPause_ (adds an optional `reason`, defaults to 'CAPTCHA' so
+#     any existing caller that doesn't pass it behaves exactly as before)
+#   - worker/ats/workday.js: new Playwright module implementing the
+#     check -> sign-in-or-signup -> record -> pause-if-blocked flow
+#
+# Usage: run from inside your jobverse-repo clone:
+#   bash apply-batch-2.sh
+
+set -euo pipefail
+
+if [ ! -d ".git" ]; then
+  echo "Run this from inside your jobverse-repo clone (the folder with .git in it)." >&2
+  exit 1
+fi
+
+echo "Pulling latest..."
+git pull origin main
+
+echo "Rewriting appscript/Setup.js (adds PlatformAccounts tab)..."
+cat > appscript/Setup.js << 'SETUPJS_EOF'
+/**
+ * JOBVERSE MVP - Setup.gs
+ * Run setupJobverse() once from the editor. It is safe to run again; it only
+ * creates what is missing. The container Sheet becomes the entire database.
+ */
+
+var JV = {
+  SHEETS: {
+    Candidates: [
+      'CandidateID', 'CreatedAt', 'Status', 'Active', 'TargetApplications', 'FullName', 'Email', 'ApplicationEmail', 'ApplicationPassword', 'Phone',
+      'Address', 'MaritalStatus', 'Nationality', 'Gender', 'DateOfBirth', 'Location',
+      'RightToWork', 'VisaStatus', 'VisaExpiry', 'NINumber', 'DrivingLicence', 'MinSalary',
+      'PreferredRoles', 'PreferredIndustries', 'PreferredLocations', 'WillingToRelocate',
+      'WorkModel', 'EmploymentType', 'NoticePeriod', 'Registrations', 'LinkedIn', 'GitHub',
+      'Portfolio', 'References', 'CVFileID', 'CertificateFileIDs', 'DriveFolderID',
+      'AIProfileJSON', 'Strengths', 'Weaknesses', 'Notes',
+      'NHSUnspentConvictions', 'NHSFitnessToPractice', 'NHSDisabilityGIS',
+      'NHSEthnicity', 'NHSReligion', 'NHSSexualOrientation', 'NHSSocioEconomicBackground'
+    ],
+    FollowUps: [
+      'FollowUpID', 'CreatedAt', 'CandidateID', 'ApplicationID', 'Type', 'Company', 'JobTitle',
+      'DueDate', 'Status', 'Notes'
+    ],
+    Jobs: [
+      'JobID', 'CreatedAt', 'CandidateID', 'Company', 'JobTitle', 'JobURL', 'ATS',
+      'Location', 'Salary', 'ExperienceLevel', 'RequiredSkills', 'PreferredSkills',
+      'ATSKeywords', 'Responsibilities', 'LikelyQuestions', 'SuitabilityScore',
+      'AnalysisJSON', 'Status'
+    ],
+    CVVersions: [
+      'VersionID', 'CreatedAt', 'CandidateID', 'JobID', 'DocURL', 'DocID',
+      'ReviewScore', 'ReviewStatus', 'ReviewerNotes', 'ToneProfile'
+    ],
+    CoverLetters: [
+      'LetterID', 'CreatedAt', 'CandidateID', 'JobID', 'DocURL', 'DocID',
+      'ReviewScore', 'ReviewStatus', 'ReviewerNotes', 'ToneProfile'
+    ],
+    NHSStatements: [
+      'StatementID', 'CreatedAt', 'CandidateID', 'JobID', 'DocURL', 'DocID',
+      'ReviewScore', 'ReviewStatus', 'ReviewerNotes', 'ToneProfile'
+    ],
+    Applications: [
+      'ApplicationID', 'CreatedAt', 'CandidateID', 'JobID', 'Company', 'JobTitle',
+      'JobURL', 'ATS', 'Status', 'DedupeHash', 'CVVersionID', 'LetterID',
+      'SubmittedAt', 'ConfirmationScreenshotURL', 'RecruiterEmail', 'Outcome',
+      'InterviewDate', 'ErrorLog'
+    ],
+    Prospects: [
+      'ProspectID', 'FoundAt', 'CandidateID', 'Company', 'JobTitle', 'JobURL',
+      'Source', 'Status', 'Notes'
+    ],
+    ReviewQueue: [
+      'TaskID', 'CreatedAt', 'Type', 'CandidateID', 'JobID', 'RefID', 'Summary',
+      'AIScore', 'AIFindings', 'Status', 'Reviewer', 'DecidedAt', 'Decision', 'Notes'
+    ],
+    ToneProfiles: ['ProfileName', 'Description', 'StyleInstructions'],
+    AIOutputs: ['OutputID', 'CreatedAt', 'Agent', 'CandidateID', 'JobID', 'Model', 'OutputJSON'],
+    ActivityLog: ['Timestamp', 'Actor', 'Action', 'RefType', 'RefID', 'Detail'],
+    Reports: ['GeneratedAt', 'Period', 'MetricsJSON', 'Summary'],
+    Config: ['Key', 'Value', 'Notes'],
+    // NEW: tracks per-candidate, per-ATS-tenant accounts created for sign-in
+    // walls (Workday etc). ATSDomain is the actual tenant hostname (e.g.
+    // acmecorp.wd5.myworkdayjobs.com), never just "Workday" - each employer's
+    // instance is a separate account. Status: 'Created' (usable, sign in next
+    // time), 'Blocked-CAPTCHA', 'Blocked-EmailVerification', or 'Failed'.
+    // Always uses the candidate's existing ApplicationEmail/ApplicationPassword -
+    // no separate credentials stored here.
+    PlatformAccounts: [
+      'AccountID', 'CreatedAt', 'CandidateID', 'ATSDomain', 'Status', 'Notes', 'UpdatedAt'
+    ]
+  },
+
+  CONFIG_DEFAULTS: [
+    ['FORM_ID', '', 'ID of the client Google Form. Then run installFormTrigger().'],
+    ['ROOT_FOLDER_ID', '', 'Filled automatically by setup.'],
+    ['API_TOKEN', '', 'Filled automatically. Shared secret for the Chrome extension.'],
+    ['ANTHROPIC_MODEL', 'claude-sonnet-4-6', 'Model used by all agents.'],
+    ['DEFAULT_TONE', 'Jobverse Standard', 'Tone profile applied unless overridden.'],
+    ['REPORT_EMAILS', '', 'Comma separated emails for daily report.'],
+    ['MAX_APPS_PER_CANDIDATE_PER_DAY', '15', 'Safety throttle: max applications started per candidate per day.'],
+    ['DEFAULT_TARGET_APPLICATIONS', '50', 'Default total application goal assigned to each new candidate. Editable per candidate in the dashboard.'],
+    ['REVIEW_REQUIRED', 'TRUE', 'If TRUE, extension will not submit without an approved review task.'],
+    ['ADZUNA_APP_ID', '', 'Free at developer.adzuna.com. Needed for the Prospect Finder (Prospects.gs).'],
+    ['ADZUNA_APP_KEY', '', 'Free at developer.adzuna.com.'],
+    ['ADZUNA_COUNTRY', 'gb', 'Comma separated Adzuna country codes: gb, us, ca, au, etc. Each is queried separately and merged (Adzuna has no single global endpoint).'],
+    ['ADZUNA_RESULTS_PER_CANDIDATE', '15', 'Max results fetched PER COUNTRY per search run (so 3 countries = up to 3x this many before de-duplication).'],
+    ['REED_API_KEY', '', 'Free at reed.co.uk/developers. UK-only source for the Prospect Finder.'],
+    ['RAPIDAPI_KEY', '', 'Free/metered at rapidapi.com, subscribe to the JSearch API. Broader global coverage for the Prospect Finder.'],
+    ['PROSPECT_SOURCES', 'adzuna,reed,jsearch', 'Comma separated list of sources to use. A source with no key set is skipped silently.'],
+    ['NHS_TRAC_FOLLOWUP_DEFAULT_DAYS', '14', 'If the vacancy closing date cannot be found on the NHS Jobs page, the Trac follow-up is scheduled this many days out instead.']
+  ],
+
+  TONE_DEFAULTS: [
+    ['Jobverse Standard', 'Default agency voice',
+     'British English. Confident, warm, plain. Short sentences. No cliches such as "team player" or "passionate". Every claim must be backed by evidence from the profile. No em dashes or en dashes anywhere.'],
+    ['NHS', 'NHS and public health roles',
+     'British English. Values led. Reference NHS values (care, compassion, respect) where evidenced. Formal but human. Address person specification points directly. No em dashes or en dashes.'],
+    ['Corporate', 'Finance, consulting, large enterprise',
+     'British English. Results first. Quantify outcomes. Formal register, active voice. No em dashes or en dashes.'],
+    ['Technical', 'Engineering and data roles',
+     'British English. Precise, concrete. Name technologies exactly as the JD does. Lead with systems built and measurable impact. No buzzwords. No em dashes or en dashes.'],
+    ['Executive', 'Senior leadership',
+     'British English. Strategic scope, P&L, headcount, transformation outcomes. Measured, authoritative. No em dashes or en dashes.'],
+    ['Graduate', 'Entry level and graduate schemes',
+     'British English. Enthusiastic but grounded. Emphasise projects, placements, coursework and transferable skills. No em dashes or en dashes.']
+  ]
+};
+
+function setupJobverse() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  Object.keys(JV.SHEETS).forEach(function (name) {
+    var sh = ss.getSheetByName(name);
+    if (!sh) sh = ss.insertSheet(name);
+    if (sh.getLastRow() === 0) {
+      sh.appendRow(JV.SHEETS[name]);
+      sh.setFrozenRows(1);
+      sh.getRange(1, 1, 1, JV.SHEETS[name].length).setFontWeight('bold');
+    } else {
+      var existingHeaders = sh.getRange(1, 1, 1, Math.max(sh.getLastColumn(), 1)).getValues()[0];
+      var existingSet = {};
+      existingHeaders.forEach(function (h) { if (h) existingSet[h] = true; });
+      var missing = JV.SHEETS[name].filter(function (h) { return !existingSet[h]; });
+      if (missing.length) {
+        var startCol = sh.getLastColumn() + 1;
+        sh.getRange(1, startCol, 1, missing.length).setValues([missing]);
+        sh.getRange(1, startCol, 1, missing.length).setFontWeight('bold');
+        try { logActivity('system', 'schema_migrated', 'sheet', name, 'Added: ' + missing.join(', ')); } catch (ignored) {}
+      }
+    }
+  });
+  var s1 = ss.getSheetByName('Sheet1');
+  if (s1 && ss.getSheets().length > 1) ss.deleteSheet(s1);
+
+
+  var cfg = ss.getSheetByName('Config');
+  var existingKeys = cfg.getLastRow() > 1
+    ? cfg.getRange(2, 1, cfg.getLastRow() - 1, 1).getValues().map(function (r) { return r[0]; })
+    : [];
+  JV.CONFIG_DEFAULTS.forEach(function (row) {
+    if (existingKeys.indexOf(row[0]) === -1) cfg.appendRow(row);
+  });
+
+  var tones = ss.getSheetByName('ToneProfiles');
+  if (tones.getLastRow() < 2) JV.TONE_DEFAULTS.forEach(function (r) { tones.appendRow(r); });
+
+  if (!getConfig('ROOT_FOLDER_ID')) {
+    var root = DriveApp.createFolder('Jobverse Platform');
+    root.createFolder('Candidates');
+    root.createFolder('Generated CVs');
+    root.createFolder('Cover Letters');
+    root.createFolder('Screenshots');
+    root.createFolder('Reports');
+    setConfig('ROOT_FOLDER_ID', root.getId());
+  }
+
+  if (!getConfig('API_TOKEN')) {
+    setConfig('API_TOKEN', Utilities.getUuid().replace(/-/g, ''));
+  }
+
+  ensureTrigger_('runDailyReport', function (b) { return b.timeBased().atHour(7).everyDays(1).create(); });
+  ensureTrigger_('findProspectsForAllCandidates', function (b) { return b.timeBased().atHour(6).everyDays(1).create(); });
+  ensureTrigger_('sendDueFollowUpReminders', function (b) { return b.timeBased().atHour(7).nearMinute(30).everyDays(1).create(); });
+
+  logActivity('system', 'setup', 'system', '-', 'Setup completed');
+  var msg = 'Jobverse setup complete. Next: 1) run createJobverseForm() or paste an existing Form ID into ' +
+    'Config > FORM_ID, then run installFormTrigger(). 2) Set ANTHROPIC_API_KEY in Script properties. ' +
+    '3) Deploy > New deployment > Web app, and copy the URL into the Chrome extension options.';
+  Logger.log(msg);
+  try {
+    SpreadsheetApp.getActiveSpreadsheet().toast(
+      'Setup complete - check Execution log or ActivityLog tab for next steps.', 'Jobverse', 20
+    );
+  } catch (ignored) { /* toast is best-effort, never block on it */ }
+}
+
+function installFormTrigger() {
+  var formId = getConfig('FORM_ID');
+  if (!formId) throw new Error('Set Config > FORM_ID first.');
+  var exists = ScriptApp.getProjectTriggers().some(function (t) {
+    return t.getHandlerFunction() === 'onFormSubmit';
+  });
+  if (!exists) {
+    ScriptApp.newTrigger('onFormSubmit').forForm(FormApp.openById(formId)).onFormSubmit().create();
+  }
+  logActivity('system', 'trigger_installed', 'form', formId, 'Form submit trigger active');
+}
+
+function ensureTrigger_(fnName, builderFn) {
+  var exists = ScriptApp.getProjectTriggers().some(function (t) {
+    return t.getHandlerFunction() === fnName;
+  });
+  if (!exists) builderFn(ScriptApp.newTrigger(fnName));
+}
+
+/* ------------------------- shared helpers ------------------------- */
+
+function sheet_(name) {
+  return SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
+}
+
+function getConfig(key) {
+  var sh = sheet_('Config');
+  if (!sh || sh.getLastRow() < 2) return '';
+  var data = sh.getRange(2, 1, sh.getLastRow() - 1, 2).getValues();
+  for (var i = 0; i < data.length; i++) if (data[i][0] === key) return String(data[i][1]);
+  return '';
+}
+
+function setConfig(key, value) {
+  var sh = sheet_('Config');
+  var data = sh.getRange(2, 1, Math.max(sh.getLastRow() - 1, 1), 1).getValues();
+  for (var i = 0; i < data.length; i++) {
+    if (data[i][0] === key) { sh.getRange(i + 2, 2).setValue(value); return; }
+  }
+  sh.appendRow([key, value, '']);
+}
+
+function newId(prefix) {
+  return prefix + '-' + Utilities.formatDate(new Date(), 'GMT', 'yyMMdd') + '-' +
+    Math.random().toString(36).slice(2, 8).toUpperCase();
+}
+
+function logActivity(actor, action, refType, refId, detail) {
+  sheet_('ActivityLog').appendRow([new Date(), actor, action, refType, refId, detail || '']);
+}
+
+function getHeaderMap_(sh) {
+  var lastCol = Math.max(sh.getLastColumn(), 1);
+  var headerRow = sh.getRange(1, 1, 1, lastCol).getValues()[0];
+  var map = {};
+  headerRow.forEach(function (h, i) { if (h) map[h] = i + 1; });
+  return map;
+}
+
+function readRows(name) {
+  var sh = sheet_(name);
+  if (sh.getLastRow() < 2) return [];
+  var map = getHeaderMap_(sh);
+  var lastCol = sh.getLastColumn();
+  var values = sh.getRange(2, 1, sh.getLastRow() - 1, lastCol).getValues();
+  var headerNames = Object.keys(map);
+  return values.map(function (row, i) {
+    var o = { _row: i + 2 };
+    headerNames.forEach(function (h) { o[h] = row[map[h] - 1]; });
+    return o;
+  });
+}
+
+function findRow(name, idField, idValue) {
+  var rows = readRows(name);
+  for (var i = 0; i < rows.length; i++) if (String(rows[i][idField]) === String(idValue)) return rows[i];
+  return null;
+}
+
+function appendObject(name, obj) {
+  var sh = sheet_(name);
+  var map = getHeaderMap_(sh);
+  var lastCol = Math.max(sh.getLastColumn(), Object.keys(map).length);
+  var row = new Array(lastCol).fill('');
+  Object.keys(obj).forEach(function (k) {
+    if (map[k]) row[map[k] - 1] = obj[k];
+  });
+  sh.appendRow(row);
+}
+
+function updateRow(name, rowNumber, patch) {
+  var sh = sheet_(name);
+  var map = getHeaderMap_(sh);
+  Object.keys(patch).forEach(function (k) {
+    if (map[k]) sh.getRange(rowNumber, map[k]).setValue(patch[k]);
+  });
+}
+
+function deleteRowsWhere(name, idField, idValue) {
+  var sh = sheet_(name);
+  if (sh.getLastRow() < 2) return 0;
+  var map = getHeaderMap_(sh);
+  var col = map[idField];
+  if (!col) return 0;
+  var values = sh.getRange(2, col, sh.getLastRow() - 1, 1).getValues();
+  var rowsToDelete = [];
+  values.forEach(function (r, i) {
+    if (String(r[0]) === String(idValue)) rowsToDelete.push(i + 2);
+  });
+  rowsToDelete.sort(function (a, b) { return b - a; });
+  rowsToDelete.forEach(function (rowNum) { sh.deleteRow(rowNum); });
+  return rowsToDelete.length;
+}
+SETUPJS_EOF
+
+echo "Rewriting appscript/Api.js (adds platform-account endpoints, extends apiCaptchaPause_)..."
+cat > appscript/Api.js << 'APIJS_EOF'
 /**
  * JOBVERSE MVP - Api.gs
  * One web app deployment serves both:
@@ -499,3 +821,111 @@ function latestReport_() {
   try { return { period: last.Period, metrics: JSON.parse(last.MetricsJSON), summary: last.Summary }; }
   catch (e) { return null; }
 }
+APIJS_EOF
+
+mkdir -p worker/ats
+echo "Writing worker/ats/workday.js..."
+cat > worker/ats/workday.js << 'WORKDAYJS_EOF'
+/**
+ * Workday submission module - handles the sign-in/sign-up wall Workday
+ * tenants commonly put in front of the actual application form.
+ *
+ * Flow: detect a wall -> check PlatformAccounts (via the API) for an
+ * existing account on THIS tenant for THIS candidate -> sign in if one
+ * exists, sign up if not, using the candidate's existing
+ * ApplicationEmail/ApplicationPassword (never generates new credentials) ->
+ * record the outcome. If signup hits a CAPTCHA or requires email
+ * verification, that's a real wall nothing here can push through - it
+ * records the specific block and pauses via the same human-notify path
+ * apiCaptchaPause_ already uses for CAPTCHAs, then throws so the worker
+ * doesn't attempt the rest of the application this run.
+ *
+ * NOTE: Workday's actual form structure varies meaningfully between
+ * tenant versions. The selectors below (role/label based, not raw CSS)
+ * are a reasonable starting point but should be checked against a couple
+ * of real Workday postings and adjusted - same caveat as the Greenhouse
+ * module.
+ */
+
+async function submit(page, application, files, candidate, api) {
+  var wall = await page.locator('text=/sign in|log in|create account|create an account/i').first().count().catch(function () { return 0; });
+
+  if (wall) {
+    var domain = new URL(page.url()).hostname;
+    var existing = await api('checkPlatformAccount', { candidateId: candidate.CandidateID, atsDomain: domain });
+
+    if (existing.found && existing.status === 'Created') {
+      await signIn_(page, candidate);
+    } else if (existing.found && String(existing.status).indexOf('Blocked') === 0) {
+      throw new Error('Known blocked platform account (' + existing.status + ') for ' + domain + ' - needs human resolution, not retrying automatically.');
+    } else {
+      var result = await signUp_(page, candidate);
+      if (result.blocked) {
+        await api('recordPlatformAccount', { candidateId: candidate.CandidateID, atsDomain: domain, status: result.blockedReason, notes: result.notes });
+        await api('captchaPause', {
+          applicationId: application.ApplicationID,
+          reason: result.blockedReason === 'Blocked-EmailVerification' ? 'EmailVerification' : 'CAPTCHA',
+          jobUrl: page.url(), company: application.Company
+        });
+        throw new Error('Account creation blocked for ' + domain + ': ' + result.blockedReason);
+      }
+      await api('recordPlatformAccount', { candidateId: candidate.CandidateID, atsDomain: domain, status: 'Created', notes: 'Auto-created during application' });
+    }
+  }
+
+  // Actual Workday application-form filling (name/CV upload/screening
+  // questions/submit) still needs to be built once the sign-in/sign-up
+  // step above has been checked against real postings - deliberately not
+  // guessed at here, since Workday's form structure varies a lot more
+  // than Greenhouse's between tenants.
+  throw new Error('Workday sign-in/signup handled - application form filling not yet implemented.');
+}
+
+async function signIn_(page, candidate) {
+  await page.getByLabel(/email/i).first().fill(candidate.ApplicationEmail);
+  await page.getByLabel(/password/i).first().fill(candidate.ApplicationPassword);
+  await page.getByRole('button', { name: /sign in|log in/i }).first().click();
+}
+
+async function signUp_(page, candidate) {
+  await page.getByRole('link', { name: /create account/i }).first().click().catch(function () {});
+  await page.getByLabel(/email/i).first().fill(candidate.ApplicationEmail);
+  await page.getByLabel(/^password/i).first().fill(candidate.ApplicationPassword);
+  var confirmField = page.getByLabel(/confirm password/i).first();
+  if (await confirmField.count()) await confirmField.fill(candidate.ApplicationPassword);
+  await page.getByRole('checkbox', { name: /agree|terms/i }).first().check().catch(function () {});
+  await page.getByRole('button', { name: /create account|sign up|submit/i }).first().click();
+
+  var captcha = await page.locator('iframe[src*="captcha"], text=/verify you are human/i').first().count().catch(function () { return 0; });
+  if (captcha) return { blocked: true, blockedReason: 'Blocked-CAPTCHA', notes: 'CAPTCHA on account creation' };
+
+  var emailVerify = await page.locator('text=/verify your email|check your email|confirmation email/i').first().count().catch(function () { return 0; });
+  if (emailVerify) return { blocked: true, blockedReason: 'Blocked-EmailVerification', notes: 'Requires clicking a verification link sent to ' + candidate.ApplicationEmail };
+
+  return { blocked: false };
+}
+
+module.exports = { submit };
+WORKDAYJS_EOF
+
+echo "Committing..."
+git add -A
+git commit -m "Add platform-account handling for sign-in/sign-up walls (Workday etc)
+
+- Setup.js: new PlatformAccounts tab (additive, safe migration)
+- Api.js: checkPlatformAccount/recordPlatformAccount endpoints, apiCaptchaPause_
+  extended with an optional reason (defaults to CAPTCHA, fully backward compatible)
+- worker/ats/workday.js: check -> sign-in-or-signup -> record -> pause-if-blocked,
+  always reusing the candidate's existing ApplicationEmail/ApplicationPassword.
+  Actual Workday application-form filling still needs building once this
+  account step is verified against real postings.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
+
+echo "Pushing..."
+git push
+
+echo ""
+echo "Done. Now: clasp push to deploy Setup.js/Api.js, then run setupJobverse()"
+echo "once (safe to re-run - it only adds the new PlatformAccounts tab, touches"
+echo "nothing existing) so the tab actually gets created in the Sheet."
