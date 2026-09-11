@@ -2,7 +2,7 @@
   "name": "jobverse-auto-submit-worker",
   "version": "0.1.0",
   "private": true,
-  "description": "Polls Jobverse for Reviewer-Agent-cleared applications and submits them via Playwright. Flagged items are left untouched for optional human review.",
+  "description": "Fills job applications via Playwright against the real Api.gs endpoints, requests human review of a snapshot before every real submit, and only clicks Submit once a human has approved it in the Jobverse Console.",
   "main": "worker.js",
   "scripts": { "start": "node worker.js" },
   "dependencies": {

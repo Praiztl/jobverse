@@ -1,3 +1,58 @@
+#!/usr/bin/env bash
+# Jobverse: wire the worker to the REAL Api.gs endpoints and gate every real
+# Submit click behind human review (dashDecide), plus unblock CV/cover-letter
+# downloads for the worker.
+#
+# Adds/changes:
+#   - appscript/Api.js: two new endpoints -
+#       exportDocumentPdf        - exports a generated CV/cover-letter Google
+#                                   Doc as PDF, base64-encoded, so the worker
+#                                   can download real files over the same API
+#                                   token it already uses (no separate Google
+#                                   auth needed in the worker).
+#       listApplicationsByStatus - lets the worker find applications a human
+#                                   has already approved ("Approved -
+#                                   Submitting"), with the CV/cover-letter doc
+#                                   URLs for that job, so it knows what to
+#                                   actually click Submit on.
+#     Also exposes ApplicationEmail/ApplicationPassword via
+#     getCandidatePayload (needed for the Workday sign-in/signup module from
+#     the previous batch - these were already stored in the Sheet, just never
+#     read by the API before).
+#
+#   - worker/worker.js: full rewrite against the real flow. Two passes, both
+#     non-blocking (worker never sits waiting on a human mid-application):
+#       1. FILL  - queued prospects -> precheck -> analyse (generates CV/
+#          cover letter) -> start -> download real PDFs -> fill the ATS form
+#          -> requestReview. Never clicks Submit in this pass.
+#       2. SUBMIT - applications a human has approved -> re-fill (fresh page,
+#          same data) -> click Submit for real -> confirmSubmission.
+#
+#   - worker/ats/greenhouse.js: rewritten to the fillForm/clickSubmit split
+#     (it used to click Submit itself with zero human gate - fixed to match
+#     every other part of Jobverse, which always waits for a human decision
+#     before a real submission).
+#
+#   - worker/ats/workday.js: same fillForm/clickSubmit split; still stops
+#     after handling the sign-in/signup wall (real Workday form-filling isn't
+#     built yet - needs a real posting to verify selectors against, same
+#     caution as Greenhouse got before it was tested).
+#
+# Usage: run from inside your jobverse-repo clone:
+#   bash apply-batch-3.sh
+
+set -euo pipefail
+
+if [ ! -d ".git" ]; then
+  echo "Run this from inside your jobverse-repo clone (the folder with .git in it)." >&2
+  exit 1
+fi
+
+echo "Pulling latest..."
+git pull origin main
+
+echo "Rewriting appscript/Api.js (adds exportDocumentPdf, listApplicationsByStatus, exposes application creds)..."
+cat > appscript/Api.js << 'APIJS_EOF'
 /**
  * JOBVERSE MVP - Api.gs
  * One web app deployment serves both:
@@ -544,3 +599,466 @@ function latestReport_() {
   try { return { period: last.Period, metrics: JSON.parse(last.MetricsJSON), summary: last.Summary }; }
   catch (e) { return null; }
 }
+APIJS_EOF
+
+echo "Rewriting worker/worker.js (real Api.gs flow, two-pass, never auto-submits)..."
+cat > worker/worker.js << 'WORKERJS_EOF'
+/**
+ * Jobverse application worker (Playwright), wired to the real Api.gs
+ * endpoints (not the earlier invented claim/report model).
+ *
+ * Two passes each cycle, deliberately non-blocking:
+ *
+ *  1. FILL: for each active candidate's Queued prospects - precheck, analyse
+ *     (generates CV/cover letter via the AI agents), start the application,
+ *     download the generated documents as real PDFs, fill the ATS form via
+ *     an ats/*.js module, then request human review of a snapshot of what
+ *     would be submitted. The worker never clicks the real Submit button in
+ *     this pass - Applications sits at "Awaiting Review" until a human
+ *     decides in the Jobverse Console (dashDecide).
+ *
+ *  2. SUBMIT: for each candidate's applications now "Approved - Submitting"
+ *     (a human said yes), re-open a fresh page, re-fill the form the same
+ *     way, then actually click Submit and confirm it.
+ *
+ * Re-filling on submit instead of holding one long-lived browser session
+ * open while waiting on a human avoids blocking the whole worker on review
+ * turnaround time. The cost is filling twice for anything that gets
+ * approved - acceptable for an MVP, and worth revisiting if ATS forms turn
+ * out to have side effects on repeat fills (rare, but module authors should
+ * keep fillForm idempotent).
+ */
+
+require('dotenv').config();
+const fs = require('fs');
+const path = require('path');
+const fetch = require('node-fetch');
+const { chromium } = require('playwright');
+
+const ats = {
+  greenhouse: require('./ats/greenhouse'),
+  workday: require('./ats/workday'),
+};
+
+const {
+  JOBVERSE_API_URL,
+  JOBVERSE_API_TOKEN,
+  WORKER_ID = 'jobverse-worker-1',
+  POLL_INTERVAL_MS = 30000,
+  DOWNLOAD_DIR = './downloads',
+  HEADED = 'false',
+  MIN_SUITABILITY = '0',
+} = process.env;
+
+if (!JOBVERSE_API_URL || !JOBVERSE_API_TOKEN) {
+  console.error('Set JOBVERSE_API_URL and JOBVERSE_API_TOKEN in .env (see .env.example).');
+  process.exit(1);
+}
+
+async function callApi(action, body) {
+  const res = await fetch(JOBVERSE_API_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action, token: JOBVERSE_API_TOKEN, ...body }),
+  });
+  let json = null;
+  try { json = await res.json(); } catch (_) {}
+  if (!res.ok || !json || json.ok === false) {
+    const msg = json && json.error ? json.error : `HTTP ${res.status}`;
+    throw new Error(`Jobverse API "${action}" failed: ${msg}`);
+  }
+  return json.data;
+}
+
+async function downloadDocPdf(docUrl, destPath) {
+  if (!docUrl) throw new Error('No document URL to download (cvUrl/letterUrl was empty).');
+  const { base64 } = await callApi('exportDocumentPdf', { docUrl });
+  fs.mkdirSync(path.dirname(destPath), { recursive: true });
+  fs.writeFileSync(destPath, Buffer.from(base64, 'base64'));
+  return destPath;
+}
+
+function moduleFor(atsName) {
+  return ats[String(atsName || '').toLowerCase().trim()];
+}
+
+/** Pass 1: discover queued prospects, generate + fill, hand off to review. */
+async function fillQueuedProspects(candidate, browser) {
+  const prospects = await callApi('listProspects', { candidateId: candidate.id, status: 'Queued' });
+
+  for (const prospect of prospects) {
+    try {
+      const pre = await callApi('precheckApplication', {
+        candidateId: candidate.id, jobUrl: prospect.url, company: prospect.company, jobTitle: prospect.title,
+      });
+      if (pre.block) {
+        console.log(`[${prospect.id}] Skipping (${pre.block}).`);
+        await callApi('updateProspectStatus', { prospectId: prospect.id, status: 'Skipped', notes: 'precheck: ' + pre.block });
+        continue;
+      }
+
+      const analysis = await callApi('analyseJob', {
+        candidateId: candidate.id, jobUrl: prospect.url, jdText: prospect.jdText || '', ats: prospect.ats || '',
+      });
+
+      if (Number(MIN_SUITABILITY) && Number(analysis.suitability || 0) < Number(MIN_SUITABILITY)) {
+        console.log(`[${prospect.id}] Suitability ${analysis.suitability} below MIN_SUITABILITY (${MIN_SUITABILITY}), skipping.`);
+        await callApi('updateProspectStatus', { prospectId: prospect.id, status: 'Skipped', notes: 'low suitability: ' + analysis.suitability });
+        continue;
+      }
+
+      const start = await callApi('startApplication', {
+        candidateId: candidate.id, jobId: analysis.jobId, company: analysis.company,
+        jobTitle: analysis.title, jobUrl: prospect.url, ats: prospect.ats || '',
+      });
+      if (start.duplicate || start.targetMet || start.throttled || start.inactive) {
+        const why = start.duplicate ? 'duplicate' : start.targetMet ? 'targetMet' : start.throttled ? 'throttled' : 'inactive';
+        console.log(`[${prospect.id}] Not starting (${why}).`);
+        await callApi('updateProspectStatus', { prospectId: prospect.id, status: 'Skipped', notes: why });
+        continue;
+      }
+
+      await fillAndRequestReview(candidate, {
+        applicationId: start.applicationId, jobId: analysis.jobId, company: analysis.company,
+        title: analysis.title, url: prospect.url, ats: prospect.ats || '',
+        cvUrl: analysis.cvUrl, letterUrl: analysis.letterUrl,
+      }, browser);
+    } catch (err) {
+      console.error(`[${prospect.id}] Unhandled error in fill pass:`, err.message);
+    }
+  }
+}
+
+/** Shared by both passes: download docs, run the ATS module's fillForm. */
+async function fillAndRequestReview(candidate, app, browser) {
+  const files = {};
+  files.cv = await downloadDocPdf(app.cvUrl, path.join(DOWNLOAD_DIR, `${app.applicationId}-cv.pdf`));
+  files.coverLetter = await downloadDocPdf(app.letterUrl, path.join(DOWNLOAD_DIR, `${app.applicationId}-cover-letter.pdf`));
+
+  const module = moduleFor(app.ats);
+  if (!module) {
+    console.log(`[${app.applicationId}] No automation module for ATS "${app.ats}" yet - leaving for manual handling.`);
+    await callApi('reportError', { applicationId: app.applicationId, message: `No automation module for ATS "${app.ats}"` });
+    return;
+  }
+
+  const candidatePayload = await callApi('getCandidatePayload', { candidateId: candidate.id });
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  try {
+    console.log(`[${app.applicationId}] Filling application -> ${app.url}`);
+    await page.goto(app.url, { waitUntil: 'domcontentloaded' });
+
+    const snapshot = await module.fillForm(
+      page,
+      { candidateId: candidate.id, applicationId: app.applicationId, jobId: app.jobId, company: app.company, title: app.title, url: app.url },
+      files,
+      candidatePayload.fields,
+      callApi
+    );
+
+    const { taskId } = await callApi('requestReview', {
+      candidateId: candidate.id, jobId: app.jobId, applicationId: app.applicationId,
+      company: app.company, jobTitle: app.title, snapshot,
+    });
+    console.log(`[${app.applicationId}] Filled, awaiting human approval (task ${taskId}).`);
+  } catch (err) {
+    console.error(`[${app.applicationId}] Failed:`, err.message);
+    const shotPath = path.join(DOWNLOAD_DIR, `${app.applicationId}-failure.png`);
+    try { await page.screenshot({ path: shotPath, fullPage: true }); } catch (_) {}
+    await callApi('reportError', { applicationId: app.applicationId, message: `${err.message} (screenshot: ${shotPath})` });
+  } finally {
+    await context.close();
+  }
+}
+
+/** Pass 2: applications a human has already approved - re-fill for real and submit. */
+async function submitApproved(candidate, browser) {
+  const approved = await callApi('listApplicationsByStatus', {
+    candidateId: candidate.id, status: 'Approved - Submitting',
+  });
+
+  for (const app of approved) {
+    const module = moduleFor(app.ats);
+    if (!module) {
+      console.log(`[${app.id}] No automation module for ATS "${app.ats}" - can't complete the real submit.`);
+      await callApi('reportError', { applicationId: app.id, message: `No automation module for ATS "${app.ats}" at submit time` });
+      continue;
+    }
+
+    const files = {};
+    const candidatePayload = await callApi('getCandidatePayload', { candidateId: candidate.id });
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    try {
+      files.cv = await downloadDocPdf(app.cvUrl, path.join(DOWNLOAD_DIR, `${app.id}-cv.pdf`));
+      files.coverLetter = await downloadDocPdf(app.letterUrl, path.join(DOWNLOAD_DIR, `${app.id}-cover-letter.pdf`));
+
+      console.log(`[${app.id}] Re-filling approved application -> ${app.url}`);
+      await page.goto(app.url, { waitUntil: 'domcontentloaded' });
+      await module.fillForm(
+        page,
+        { candidateId: candidate.id, applicationId: app.id, jobId: app.jobId, company: app.company, title: app.title, url: app.url },
+        files,
+        candidatePayload.fields,
+        callApi
+      );
+
+      await module.clickSubmit(page);
+      const shot = (await page.screenshot({ fullPage: true })).toString('base64');
+      await callApi('confirmSubmission', { applicationId: app.id, screenshotBase64: shot });
+      console.log(`[${app.id}] Submitted.`);
+    } catch (err) {
+      console.error(`[${app.id}] Submit failed:`, err.message);
+      const shotPath = path.join(DOWNLOAD_DIR, `${app.id}-submit-failure.png`);
+      try { await page.screenshot({ path: shotPath, fullPage: true }); } catch (_) {}
+      await callApi('reportError', { applicationId: app.id, message: `${err.message} (screenshot: ${shotPath})` });
+    } finally {
+      await context.close();
+    }
+  }
+}
+
+async function pollLoop() {
+  fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
+  const browser = await chromium.launch({ headless: HEADED !== 'true' });
+  console.log(`Jobverse worker "${WORKER_ID}" started. Polling every ${POLL_INTERVAL_MS}ms.`);
+
+  while (true) {
+    try {
+      const candidates = await callApi('listCandidates', {});
+      for (const candidate of candidates) {
+        await fillQueuedProspects(candidate, browser);
+        await submitApproved(candidate, browser);
+      }
+    } catch (err) {
+      console.error('Poll loop error:', err.message);
+    }
+    await new Promise((r) => setTimeout(r, Number(POLL_INTERVAL_MS)));
+  }
+}
+
+pollLoop();
+WORKERJS_EOF
+
+echo "Rewriting worker/ats/greenhouse.js (adds fillForm/clickSubmit split)..."
+mkdir -p worker/ats
+cat > worker/ats/greenhouse.js << 'GREENHOUSEJS_EOF'
+/**
+ * Greenhouse module, rewritten against the real candidate payload shape
+ * (fullName, not separate first/last) and the fillForm/clickSubmit split so
+ * the real Submit click always waits for requestReview/dashDecide - this
+ * module used to click Submit itself with no human gate at all, which
+ * doesn't match how every other part of Jobverse treats a real submission.
+ *
+ * Test against a couple of real Greenhouse postings and adjust selectors
+ * for custom employer questions as needed.
+ */
+
+function splitName_(fullName) {
+  const parts = String(fullName || '').trim().split(/\s+/).filter(Boolean);
+  return { first: parts[0] || '', last: parts.slice(1).join(' ') };
+}
+
+async function formLocator_(page) {
+  const iframe = page.frameLocator('iframe[src*="greenhouse.io"]').first();
+  const hasIframe = await iframe.locator('body').count().catch(() => 0);
+  return hasIframe ? iframe : page;
+}
+
+/** Fills the form and returns a snapshot for human review. Never submits. */
+async function fillForm(page, application, files, candidate) {
+  const form = await formLocator_(page);
+  const { first, last } = splitName_(candidate.fullName);
+
+  await form.locator('input#first_name, input[name="job_application[first_name]"]').fill(first);
+  await form.locator('input#last_name, input[name="job_application[last_name]"]').fill(last);
+  await form.locator('input#email, input[name="job_application[email]"]').fill(candidate.email || '');
+  if (candidate.phone) {
+    await form.locator('input#phone, input[name="job_application[phone]"]').fill(candidate.phone).catch(() => {});
+  }
+
+  if (files.cv) {
+    await form.locator('input[type="file"]#resume, input[name="job_application[resume]"]').setInputFiles(files.cv);
+  }
+  if (files.coverLetter) {
+    const clInput = form.locator('input[type="file"]#cover_letter, input[name="job_application[cover_letter]"]');
+    if (await clInput.count()) await clInput.setInputFiles(files.coverLetter);
+  }
+
+  const unhandledRequired = await form.locator('[required]').evaluateAll((els) =>
+    els.filter((el) => el.tagName === 'INPUT' && el.type === 'text' && !el.value)
+       .map((el) => el.name || el.id || el.outerHTML.slice(0, 80))
+  );
+  if (unhandledRequired.length) {
+    throw new Error(`Unhandled required field(s): ${unhandledRequired.join(', ')}`);
+  }
+
+  return {
+    ats: 'greenhouse', firstName: first, lastName: last, email: candidate.email || '',
+    phone: candidate.phone || '', cvAttached: !!files.cv, coverLetterAttached: !!files.coverLetter,
+  };
+}
+
+/** Only called after a human has approved the snapshot from fillForm. */
+async function clickSubmit(page) {
+  const form = await formLocator_(page);
+  await form.locator('button#submit_app, button[type="submit"]').click();
+  await page.waitForSelector('text=/application.*received|thank you|successfully submitted/i', { timeout: 15000 });
+}
+
+module.exports = { fillForm, clickSubmit };
+GREENHOUSEJS_EOF
+
+echo "Rewriting worker/ats/workday.js (adds fillForm/clickSubmit split)..."
+cat > worker/ats/workday.js << 'WORKDAYJS_EOF'
+/**
+ * Workday module: handles the sign-in/sign-up wall Workday tenants put in
+ * front of the actual application form, reusing the candidate's existing
+ * ApplicationEmail/ApplicationPassword (from the intake form, exposed by
+ * getCandidatePayload) rather than generating new credentials - every
+ * candidate is assumed not to already have a Workday account for a given
+ * employer's tenant unless PlatformAccounts says otherwise.
+ *
+ * Fills the same fillForm/clickSubmit interface as ats/greenhouse.js so
+ * worker.js can treat every ATS module the same way. Actual Workday
+ * application-form filling (after the account step) is NOT implemented yet -
+ * Workday's form structure varies a lot by tenant and needs verification
+ * against real postings before it's safe to guess at selectors, same
+ * caution already applied to the Greenhouse module.
+ */
+
+async function hasAuthWall_(page) {
+  return page.locator('text=/sign in|log in|create account|create an account/i').first().count().catch(() => 0);
+}
+
+async function signIn_(page, candidate) {
+  await page.getByLabel(/email/i).first().fill(candidate.applicationEmail || '');
+  await page.getByLabel(/password/i).first().fill(candidate.applicationPassword || '');
+  await page.getByRole('button', { name: /sign in|log in/i }).first().click();
+}
+
+async function signUp_(page, candidate) {
+  await page.getByRole('link', { name: /create account/i }).first().click().catch(() => {});
+  await page.getByLabel(/email/i).first().fill(candidate.applicationEmail || '');
+  await page.getByLabel(/^password/i).first().fill(candidate.applicationPassword || '');
+  const confirmField = page.getByLabel(/confirm password/i).first();
+  if (await confirmField.count()) await confirmField.fill(candidate.applicationPassword || '');
+  await page.getByRole('checkbox', { name: /agree|terms/i }).first().check().catch(() => {});
+  await page.getByRole('button', { name: /create account|sign up|submit/i }).first().click();
+
+  const captcha = await page.locator('iframe[src*="captcha"], text=/verify you are human/i').first().count().catch(() => 0);
+  if (captcha) return { blocked: true, blockedReason: 'Blocked-CAPTCHA', notes: 'CAPTCHA on account creation' };
+
+  const emailVerify = await page.locator('text=/verify your email|check your email|confirmation email/i').first().count().catch(() => 0);
+  if (emailVerify) {
+    return {
+      blocked: true, blockedReason: 'Blocked-EmailVerification',
+      notes: 'Requires clicking a verification link sent to ' + (candidate.applicationEmail || '(no application email on file)'),
+    };
+  }
+
+  return { blocked: false };
+}
+
+/**
+ * Resolves any sign-in/signup wall, recording the outcome in PlatformAccounts
+ * either way, and pausing for a human via captchaPause if account creation
+ * hits something genuinely unautomatable (CAPTCHA / mandatory email
+ * verification link). Throws past that point - the actual form fill isn't
+ * built yet.
+ */
+async function fillForm(page, application, files, candidate, api) {
+  if (!candidate.applicationEmail || !candidate.applicationPassword) {
+    throw new Error('Candidate has no ApplicationEmail/ApplicationPassword on file - can\'t sign in or sign up on this Workday tenant.');
+  }
+
+  if (await hasAuthWall_(page)) {
+    const domain = new URL(page.url()).hostname;
+    const existing = await api('checkPlatformAccount', { candidateId: application.candidateId, atsDomain: domain });
+
+    if (existing.found && existing.status === 'Created') {
+      await signIn_(page, candidate);
+    } else if (existing.found && String(existing.status).indexOf('Blocked') === 0) {
+      throw new Error(`Known blocked platform account (${existing.status}) for ${domain} - needs human resolution, not retrying automatically.`);
+    } else {
+      const result = await signUp_(page, candidate);
+      if (result.blocked) {
+        await api('recordPlatformAccount', { candidateId: application.candidateId, atsDomain: domain, status: result.blockedReason, notes: result.notes });
+        await api('captchaPause', {
+          applicationId: application.applicationId,
+          reason: result.blockedReason === 'Blocked-EmailVerification' ? 'EmailVerification' : 'CAPTCHA',
+          jobUrl: page.url(), company: application.company,
+        });
+        throw new Error(`Account creation blocked for ${domain}: ${result.blockedReason}`);
+      }
+      await api('recordPlatformAccount', { candidateId: application.candidateId, atsDomain: domain, status: 'Created', notes: 'Auto-created during application' });
+    }
+  }
+
+  throw new Error('Workday form filling not yet implemented past the sign-in/signup step - needs verification against a real Workday posting.');
+}
+
+async function clickSubmit() {
+  throw new Error('Workday clickSubmit not implemented - form filling is not implemented yet either.');
+}
+
+module.exports = { fillForm, clickSubmit };
+WORKDAYJS_EOF
+
+echo "Updating worker/package.json description..."
+cat > worker/package.json << 'PKGJSON_EOF'
+{
+  "name": "jobverse-auto-submit-worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Fills job applications via Playwright against the real Api.gs endpoints, requests human review of a snapshot before every real submit, and only clicks Submit once a human has approved it in the Jobverse Console.",
+  "main": "worker.js",
+  "scripts": { "start": "node worker.js" },
+  "dependencies": {
+    "playwright": "^1.47.0",
+    "node-fetch": "^2.7.0",
+    "dotenv": "^16.4.5"
+  }
+}
+PKGJSON_EOF
+
+echo "Updating worker/.env.example..."
+cat > worker/.env.example << 'ENVEXAMPLE_EOF'
+JOBVERSE_API_URL=https://script.google.com/macros/s/XXXXXXXXXXXX/exec
+JOBVERSE_API_TOKEN=
+WORKER_ID=jobverse-worker-1
+POLL_INTERVAL_MS=30000
+DOWNLOAD_DIR=./downloads
+HEADED=false
+# Optional: skip generating/filling anything below this suitability score
+# (whatever scale runJobAnalyst uses). 0 = no filtering.
+MIN_SUITABILITY=0
+ENVEXAMPLE_EOF
+
+echo "Committing..."
+git add -A
+git commit -m "Wire worker to real Api.gs endpoints, gate submit behind human review
+
+- Api.js: exportDocumentPdf (worker downloads real CV/cover-letter PDFs over
+  the same API token), listApplicationsByStatus (worker finds human-approved
+  applications to actually submit), getCandidatePayload now exposes
+  ApplicationEmail/ApplicationPassword for the Workday module.
+- worker.js: full rewrite - fill+requestReview pass and a separate
+  submit-after-approval pass, both non-blocking. Replaces the old invented
+  claimNextCleared/reportSubmissionResult model that never matched the real
+  Sheet/Api.js.
+- ats/greenhouse.js: fillForm/clickSubmit split so the real submit always
+  waits for a human decision (it used to click Submit itself unconditionally).
+- ats/workday.js: same split; still stops after the sign-in/signup step until
+  real Workday form-filling is built and verified.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
+
+echo "Pushing..."
+git push
+
+echo ""
+echo "Done. Now: clasp push to deploy Api.js, then set JOBVERSE_API_URL/TOKEN in"
+echo "worker/.env (copy from .env.example) and run 'npm install' then 'npm start'"
+echo "inside worker/ once you actually want it touching real job pages."
