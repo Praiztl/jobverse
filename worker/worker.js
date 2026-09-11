@@ -92,6 +92,15 @@ async function fillQueuedProspects(candidate, browser) {
         continue;
       }
 
+      // Check ATS support BEFORE spending an AI generation call on a CV/cover
+      // letter we can't actually use yet. Leaves the prospect Queued (not
+      // Skipped) so it's picked up automatically once that ATS module ships,
+      // instead of needing a human to re-queue it later.
+      if (!moduleFor(prospect.ats)) {
+        console.log(`[${prospect.id}] No automation module for ATS "${prospect.ats || 'unknown'}" yet - leaving queued for later.`);
+        continue;
+      }
+
       const analysis = await callApi('analyseJob', {
         candidateId: candidate.id, jobUrl: prospect.url, jdText: prospect.jdText || '', ats: prospect.ats || '',
       });
