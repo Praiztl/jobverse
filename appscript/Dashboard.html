@@ -201,7 +201,7 @@ function render(){
     m.innerHTML = `<h1>Prospects</h1>
       <div class="card">
         <label>Find jobs for candidate</label>
-        <select id="pCand" onchange="F.pCand=this.value">${D.candidates.map(c => `<option value="${esc(c.id)}" ${c.id===F.pCand?'selected':''}>${esc(c.name)} (${esc(c.id)})</option>`).join('')}</select>
+        <select id="pCand" onchange="setFindJobsCandidate(this.value)">${D.candidates.map(c => `<option value="${esc(c.id)}" ${c.id===F.pCand?'selected':''}>${esc(c.name)} (${esc(c.id)})</option>`).join('')}</select>
         <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
           <button class="btn primary" onclick="findJobs()">Find jobs</button>
           <button class="btn approve" onclick="queueAll()">Queue all found</button>
@@ -296,6 +296,11 @@ function renderFindings(t){
 }
  
 function setFilter(key, val){ F[key] = val; render(); }
+
+function setFindJobsCandidate(candId) { 
+  F.pCand = candId; 
+  // Don't re-render, just update the filter state so it persists
+}
  
 function decide(id, d){
   const notes = d === 'revise' ? (prompt('Notes for revision (optional)') || '') : '';
@@ -316,16 +321,18 @@ function gen(){
 }
  
 function findJobs(){
+  const candId = F.pCand || document.getElementById('pCand').value;
   document.getElementById('pMsg').textContent = 'Searching…';
   google.script.run.withSuccessHandler(r => {
     document.getElementById('pMsg').textContent = `Found ${r.found}, added ${r.added} new.`;
     load();
   }).withFailureHandler(e => { document.getElementById('pMsg').textContent = 'Error: ' + e.message; })
-    .dashFindProspects(document.getElementById('pCand').value);
+    .dashFindProspects(candId);
 }
  
 function queueAll(){
-  const cand = document.getElementById('pCand').value;
+  const cand = F.pCand || document.getElementById('pCand').value;
+  if(!cand) { toast('Please select a candidate first'); return; }
   google.script.run.withSuccessHandler(r => {
     const msg = r.queued
       ? `Queued ${r.queued} prospect(s)` + (r.manualReview ? ` (${r.manualReview} still need manual review - no supported ATS link detected)` : '')
