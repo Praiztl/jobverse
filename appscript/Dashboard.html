@@ -95,6 +95,25 @@ function loadFindJobsCandidate() {
 function clearFindJobsCandidate() {
   localStorage.removeItem('jobverse_findJobs_candidate');
 }
+
+// Test function - call from browser console: testQueueAllData()
+function testQueueAllData() {
+  console.log('=== TEST QUEUE ALL DATA ===');
+  console.log('Current view:', view);
+  console.log('F.pCand:', F.pCand);
+  console.log('localStorage candidate:', loadFindJobsCandidate());
+  console.log('All candidates:', D.candidates.map(c => ({ id: c.id, name: c.name })));
+  console.log('All prospects count:', D.prospects.length);
+  
+  const prospectsForCand = D.prospects.filter(p => p.cand === (F.pCand || loadFindJobsCandidate()));
+  console.log('Prospects for selected candidate:', prospectsForCand.length);
+  console.log('Breakdown:');
+  console.log('  - Status "Found":', prospectsForCand.filter(p => p.status === 'Found').length);
+  console.log('  - Status "Found - Manual Review":', prospectsForCand.filter(p => p.status === 'Found - Manual Review').length);
+  console.log('  - Other statuses:', prospectsForCand.map(p => p.status).filter((s, i, a) => a.indexOf(s) === i && s !== 'Found' && s !== 'Found - Manual Review'));
+  console.log('Sample prospects:', prospectsForCand.slice(0, 3).map(p => ({ id: p.id, company: p.company, status: p.status })));
+  console.log('============================');
+}
  
 function load(){
   google.script.run
@@ -347,6 +366,8 @@ function findJobs(){
   document.getElementById('pMsg').textContent = 'Searching…';
   google.script.run.withSuccessHandler(r => {
     document.getElementById('pMsg').textContent = `Found ${r.found}, added ${r.added} new.`;
+    // After finding jobs, refresh the full data to get new prospects
+    // but the candidate selection will be restored from localStorage
     load();
   }).withFailureHandler(e => { document.getElementById('pMsg').textContent = 'Error: ' + e.message; })
     .dashFindProspects(candId);
@@ -363,18 +384,38 @@ function queueAll(){
   const foundCount = prospectsForCand.filter(p => p.status === 'Found').length;
   const foundManualCount = prospectsForCand.filter(p => p.status === 'Found - Manual Review').length;
   
-  console.log(`Queue all for candidate ${cand}: ${foundCount} Found, ${foundManualCount} Found - Manual Review, ${prospectsForCand.length} total`);
+  console.log('=== QUEUE ALL DEBUG ===');
+  console.log('Candidate ID:', cand);
+  console.log('Total prospects for candidate:', prospectsForCand.length);
+  console.log('Prospects with "Found" status:', foundCount);
+  console.log('Prospects with "Found - Manual Review" status:', foundManualCount);
+  console.log('All prospects for candidate:', prospectsForCand);
+  console.log('======================');
   
   if(prospectsForCand.length === 0) {
     toast('No prospects found for this candidate. Try "Find jobs" first.');
     return;
   }
   
-  document.getElementById('pMsg').textContent = 'Queuing prospects…';
+  if(foundCount === 0 && foundManualCount > 0) {
+    toast(`Cannot queue - all ${foundManualCount} prospect(s) need manual review (no supported ATS detected)`);
+    return;
+  }
+  
+  if(foundCount === 0) {
+    toast('No prospects with "Found" status to queue.');
+    return;
+  }
+  
+  document.getElementById('pMsg').textContent = 'Queuing ' + foundCount + ' prospect(s)…';
   
   google.script.run
     .withSuccessHandler(r => {
-      console.log('Queue all response:', r);
+      console.log('=== QUEUE ALL RESPONSE ===');
+      console.log('Response:', r);
+      console.log('Queued:', r.queued);
+      console.log('Manual review:', r.manualReview);
+      console.log('==========================');
       
       if(!r) {
         toast('No response from server');
@@ -382,20 +423,35 @@ function queueAll(){
         return;
       }
       
-      if(r.queued === 0 && r.manualReview === 0) {
-        toast('No prospects to queue. Try "Find jobs" first.');
-      } else if(r.queued > 0) {
-        const msg = `Queued ${r.queued} prospect(s)` + (r.manualReview ? ` (${r.manualReview} still need manual review)` : '');
+      if(r.queued > 0) {
+        // Update local data: change status of queued prospects from 'Found' to 'Queued'
+        let updateCount = 0;
+        D.prospects.forEach(p => {
+          if(p.cand === cand && p.status === 'Found') {
+            p.status = 'Queued';
+            updateCount++;
+          }
+        });
+        console.log('Updated local prospects:', updateCount);
+        
+        const msg = `✓ Queued ${r.queued} prospect(s)` + (r.manualReview ? ` (${r.manualReview} still need manual review)` : '');
         toast(msg);
+        
+        // Re-render only the prospects view without losing candidate selection
+        render();
       } else if(r.manualReview > 0) {
-        toast(`Nothing auto-queued - all ${r.manualReview} found job(s) need manual review`);
+        toast(`All ${r.manualReview} prospect(s) need manual review - no supported ATS link detected`);
+      } else {
+        toast('No prospects to queue.');
       }
       
       document.getElementById('pMsg').textContent = '';
-      load();
     })
     .withFailureHandler(e => {
-      console.error('Queue all error:', e);
+      console.error('=== QUEUE ALL ERROR ===');
+      console.error('Error:', e);
+      console.error('Message:', e.message);
+      console.error('=======================');
       document.getElementById('pMsg').textContent = '';
       toast('Error: ' + e.message);
     })
