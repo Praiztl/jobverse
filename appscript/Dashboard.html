@@ -78,11 +78,11 @@
   </nav>
   <main id="main"><h1>Loading…</h1></main>
   <div id="toast"></div>
-
+ 
 <script>
 let D = null, view = 'reviews';
 const F = {}; // per-view filter state
-
+ 
 function load(){
   google.script.run
     .withSuccessHandler(d => { D = d; render(); })
@@ -94,13 +94,13 @@ function load(){
     .dashData();
 }
 load(); setInterval(load, 45000);
-
+ 
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   view = b.dataset.v;
   document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x === b));
   render();
 });
-
+ 
 function esc(s){ return String(s ?? '').replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c])); }
 function chip(s){
   s = String(s || '');
@@ -118,12 +118,12 @@ function rail(status){
 function toast(m){ const t = document.getElementById('toast'); t.textContent = m; t.style.display='block'; setTimeout(()=>t.style.display='none', 2600); }
 function uniq(arr){ return [...new Set(arr.filter(Boolean))]; }
 function opts(arr, sel){ return ['<option value="">All</option>'].concat(arr.map(v => `<option ${v===sel?'selected':''}>${esc(v)}</option>`)).join(''); }
-
+ 
 function render(){
   if(!D) return;
   document.getElementById('revCount').textContent = D.reviews.length;
   const m = document.getElementById('main');
-
+ 
   if(view === 'reviews'){
     m.innerHTML = '<h1>Review queue</h1>' + (D.reviews.length ? '' :
       '<p class="mut">Nothing waiting. New CVs, cover letters, NHS statements and paused submissions appear here.</p>') +
@@ -137,7 +137,7 @@ function render(){
           </div>
         </div>`).join('');
   }
-
+ 
   if(view === 'candidates'){
     m.innerHTML = '<h1>Candidates</h1><div class="card"><table><tr><th>Name</th><th>Target roles</th><th>Progress</th><th>Target</th><th>Active</th><th></th></tr>' +
       D.candidates.map(c => {
@@ -155,7 +155,7 @@ function render(){
       }).join('') +
       '</table></div>';
   }
-
+ 
   if(view === 'applications'){
     const cands = uniq(D.applications.map(a => a.cand));
     const statuses = uniq(D.applications.map(a => a.status));
@@ -177,7 +177,7 @@ function render(){
         : '<tr><td colspan="7" class="mut">No applications match.</td></tr>') +
       '</table></div>';
   }
-
+ 
   if(view === 'generate'){
     m.innerHTML = `<h1>Generate CV + cover letter</h1>
       <div class="card">
@@ -190,8 +190,9 @@ function render(){
         <div style="margin-top:12px"><button class="btn primary" onclick="gen()">Generate documents</button> <span class="mut" id="gMsg"></span></div>
       </div>`;
   }
-
+ 
   if(view === 'prospects'){
+    if(D.candidates.length && !D.candidates.some(c => c.id === F.pCand)) F.pCand = D.candidates[0].id;
     const cands = uniq(D.prospects.map(p => p.cand));
     const statuses = uniq(D.prospects.map(p => p.status));
     let rows = D.prospects;
@@ -200,7 +201,7 @@ function render(){
     m.innerHTML = `<h1>Prospects</h1>
       <div class="card">
         <label>Find jobs for candidate</label>
-        <select id="pCand">${D.candidates.map(c => `<option value="${esc(c.id)}">${esc(c.name)} (${esc(c.id)})</option>`).join('')}</select>
+        <select id="pCand" onchange="F.pCand=this.value">${D.candidates.map(c => `<option value="${esc(c.id)}" ${c.id===F.pCand?'selected':''}>${esc(c.name)} (${esc(c.id)})</option>`).join('')}</select>
         <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
           <button class="btn primary" onclick="findJobs()">Find jobs</button>
           <button class="btn approve" onclick="queueAll()">Queue all found</button>
@@ -222,7 +223,7 @@ function render(){
       '<tr><td colspan="7" class="mut">No prospects match. Use "Find jobs" above, or add rows manually in the Prospects tab of the sheet.</td></tr>') +
       '</table></div>';
   }
-
+ 
   if(view === 'followups'){
     const today = new Date().toISOString().slice(0,10);
     m.innerHTML = '<h1>Follow-ups</h1><div class="card"><table><tr><th>Type</th><th>Candidate</th><th>Company / role</th><th>Due</th><th>Status</th><th>Action</th></tr>' +
@@ -239,7 +240,7 @@ function render(){
       }).join('') : '<tr><td colspan="6" class="mut">Nothing tracked yet. NHS applications automatically log a Trac claim/verify follow-up here after submission.</td></tr>') +
       '</table></div>';
   }
-
+ 
   if(view === 'report'){
     const r = D.report;
     m.innerHTML = '<h1>Latest report</h1>' + (!r ? '<p class="mut">No report yet. Run runDailyReport() in Apps Script or wait for the 07:00 trigger.</p>' :
@@ -255,7 +256,7 @@ function render(){
          ${stat(r.metrics.prospects_found,'Prospects found')}
        </div>`);
   }
-
+ 
   if(view === 'log'){
     const actors = uniq(D.log.map(l => l.actor));
     const actions = uniq(D.log.map(l => l.action));
@@ -272,13 +273,13 @@ function render(){
       rows.map(l => `<tr><td class="mut">${esc(l.t).slice(0,24)}</td><td>${esc(l.actor)}</td><td><b>${esc(l.action)}</b></td><td class="mut">${esc(l.detail)}</td></tr>`).join('') +
       '</table></div>';
   }
-
+ 
   if(view === 'help'){ m.innerHTML = HELP_HTML; }
 }
-
+ 
 function stat(v,l){ return `<div class="stat"><b>${esc(v)}</b><span>${esc(l)}</span></div>`; }
 function pretty(j){ try { return JSON.stringify(JSON.parse(j), null, 2); } catch(e){ return j || ''; } }
-
+ 
 function renderFindings(t){
   try {
     var parsed = JSON.parse(t.findings);
@@ -293,15 +294,15 @@ function renderFindings(t){
   } catch(e){ }
   return `<div class="findings">${esc(pretty(t.findings))}</div>`;
 }
-
+ 
 function setFilter(key, val){ F[key] = val; render(); }
-
+ 
 function decide(id, d){
   const notes = d === 'revise' ? (prompt('Notes for revision (optional)') || '') : '';
   google.script.run.withSuccessHandler(() => { toast(d === 'approve' ? 'Approved' : 'Sent back'); load(); })
     .withFailureHandler(e => toast('Error: ' + e.message)).dashDecide(id, d, notes);
 }
-
+ 
 function gen(){
   const jd = document.getElementById('gJD').value.trim();
   if(!jd){ toast('Paste a job description first'); return; }
@@ -313,7 +314,7 @@ function gen(){
   }).withFailureHandler(e => { document.getElementById('gMsg').textContent = 'Error: ' + e.message; })
     .dashGenerate(document.getElementById('gCand').value, jd, document.getElementById('gUrl').value, document.getElementById('gTone').value);
 }
-
+ 
 function findJobs(){
   document.getElementById('pMsg').textContent = 'Searching…';
   google.script.run.withSuccessHandler(r => {
@@ -322,60 +323,67 @@ function findJobs(){
   }).withFailureHandler(e => { document.getElementById('pMsg').textContent = 'Error: ' + e.message; })
     .dashFindProspects(document.getElementById('pCand').value);
 }
-
+ 
 function queueAll(){
   const cand = document.getElementById('pCand').value;
-  google.script.run.withSuccessHandler(r => { toast(`Queued ${r.queued} prospect(s)`); load(); })
-    .withFailureHandler(e => toast('Error: ' + e.message)).dashQueueAllFound(cand);
+  google.script.run.withSuccessHandler(r => {
+    const msg = r.queued
+      ? `Queued ${r.queued} prospect(s)` + (r.manualReview ? ` (${r.manualReview} still need manual review - no supported ATS link detected)` : '')
+      : (r.manualReview
+          ? `Nothing auto-queued - all ${r.manualReview} found job(s) need manual review (no Workday/Greenhouse/Lever/Ashby/NHS link detected). Open them from the table below.`
+          : 'No prospects to queue for this candidate. Try "Find jobs" first.');
+    toast(msg);
+    load();
+  }).withFailureHandler(e => toast('Error: ' + e.message)).dashQueueAllFound(cand);
 }
-
+ 
 function prospectAction(id, status){
   google.script.run.withSuccessHandler(() => { toast(status); load(); })
     .withFailureHandler(e => toast('Error: ' + e.message)).dashSetProspectStatus(id, status);
 }
-
+ 
 function setActive(id, active){
   google.script.run.withSuccessHandler(() => { toast(active ? 'Activated' : 'Deactivated'); load(); })
     .withFailureHandler(e => toast('Error: ' + e.message)).dashSetCandidateActive(id, active);
 }
-
+ 
 function setTarget(id, val){
   google.script.run.withSuccessHandler(() => { toast('Target updated'); load(); })
     .withFailureHandler(e => toast('Error: ' + e.message)).dashSetCandidateTarget(id, val);
 }
-
+ 
 function markFollowUpDone(id){
   google.script.run.withSuccessHandler(() => { toast('Marked done'); load(); })
     .withFailureHandler(e => toast('Error: ' + e.message)).dashMarkFollowUpDone(id);
 }
-
+ 
 function delCandidate(id, name){
   if(!confirm(`Delete ${name} (${id}) and ALL their data - applications, prospects, generated documents, follow-ups, and their Drive folder? This cannot be undone.`)) return;
   toast('Deleting…');
   google.script.run.withSuccessHandler(() => { toast('Candidate deleted'); load(); })
     .withFailureHandler(e => toast('Error: ' + e.message)).dashDeleteCandidate(id);
 }
-
+ 
 function clearLog(){
   if(!confirm('Clear the entire Activity Log? This cannot be undone (it only clears the log, not your candidates or applications).')) return;
   google.script.run.withSuccessHandler(() => { toast('Log cleared'); load(); })
     .withFailureHandler(e => toast('Error: ' + e.message)).dashClearActivityLog();
 }
-
+ 
 function retryApp(id){
   if(!confirm('Re-queue this failed application as a fresh prospect to try again?')) return;
   google.script.run.withSuccessHandler(() => { toast('Re-queued'); load(); })
     .withFailureHandler(e => toast('Error: ' + e.message)).dashRetryApplication(id);
 }
-
+ 
 const HELP_HTML = `
 <h1>Help &amp; guide</h1>
-
+ 
 <div class="card">
 <h2>What Jobverse does, in one line</h2>
 <p class="mut">It finds jobs for your candidates, writes a tailored CV and cover letter for each, fills in the online application, and pauses so a human can approve before anything is submitted. Nothing is ever sent to an employer without someone clicking Approve.</p>
 </div>
-
+ 
 <div class="card">
 <h2>The everyday workflow (hands-off path)</h2>
 <ol class="steps">
@@ -387,24 +395,24 @@ const HELP_HTML = `
 <li>On approve, it's submitted for real (by the worker, or by the extension if you filled it manually) and a screenshot is saved. See it under <b>Applications</b>.</li>
 </ol>
 </div>
-
+ 
 <div class="card">
 <h2>Scenario: background automation (the worker)</h2>
 <p class="mut">This is what actually does the filling described above. It runs on a machine somewhere (started with <code>npm start</code> in the <code>worker</code> folder of the Jobverse repo) and polls continuously - no one needs to be watching it. When it finds something Queued, it generates the CV/cover letter, fills the real application form in a live browser, and stops to request a human decision in the Review queue, exactly like everything else in Jobverse. It only clicks the real Submit button after someone approves that item - nothing skips the review step just because a person didn't type the URL in themselves.</p>
 <p class="mut"><b>What it can handle right now:</b> Greenhouse postings, start to finish. Workday postings: it can sign in or create an account on the candidate's behalf (reusing the same email/password they gave on intake, tracked per employer so it never re-signs-up someone who already has an account), but stops after that - actually filling in a Workday form isn't built yet, so it leaves those queued rather than guessing. Anything on Lever, Ashby, or NHS Jobs is recognised as a real application link but has no worker module yet either - those stay Queued until support is added, or can be run manually through the extension in the meantime.</p>
 <p class="mut">If it hits a CAPTCHA or a "verify your email" wall while creating a Workday account, it can't push through that - nothing can, automatically. It pauses the application and notifies reviewers the same way it always has for CAPTCHAs, so a human can finish that one step by hand.</p>
 </div>
-
+ 
 <div class="card">
 <h2>Scenario: a single job you already have open</h2>
 <p class="mut">Use the Chrome extension directly when you want something done right now instead of waiting for the worker's next pass - or for an ATS the worker doesn't support yet (Lever, Ashby, NHS Jobs). Open the extension on the job posting, pick the candidate, and click <b>Fill this application</b> (or <b>Start NHS application</b> on NHS Jobs). Same review-then-submit flow, just for that one job, done manually.</p>
 </div>
-
+ 
 <div class="card">
 <h2>Scenario: NHS applications</h2>
 <p class="mut">NHS Jobs is an 8-step form. Jobverse fills the factual parts (contact, right to work, CV, and an AI-written supporting statement) and walks through the steps automatically. It will <b>not</b> guess the five legal declaration sections (criminal convictions, fitness to practice, guaranteed interview scheme, equality/diversity, socio-economic background) - those must come from the candidate's own answers, entered into their row in the Candidates sheet (columns starting "NHS..."). If an answer isn't there, it pauses and asks a human to complete that section. After submission, a Trac claim/verify follow-up is logged automatically under <b>Follow-ups</b>.</p>
 </div>
-
+ 
 <div class="card">
 <h2>Controlling volume and clients</h2>
 <ul>
@@ -413,7 +421,7 @@ const HELP_HTML = `
 <li class="faq"><b>Daily limit:</b> Config tab in the sheet, MAX_APPS_PER_CANDIDATE_PER_DAY (default 15). Keep it under about 25 to look human and avoid CAPTCHAs.</li>
 </ul>
 </div>
-
+ 
 <div class="card">
 <h2>Sharing the Chrome extension with your team</h2>
 <ol class="steps">
@@ -426,7 +434,7 @@ const HELP_HTML = `
 <p class="mut">It's not on the Chrome Web Store on purpose - this is a private internal tool, and the store's review is strict about automation extensions. "Load unpacked" is the normal way to run a private team extension. Each person does this once.</p>
 <p class="mut">The worker (above) handles most applications on its own now, but the extension is still how you act on a single job immediately, or on an ATS the worker doesn't support yet.</p>
 </div>
-
+ 
 <div class="card">
 <h2>VPN: do we need one?</h2>
 <ul>
@@ -435,7 +443,7 @@ const HELP_HTML = `
 <li class="faq"><b>General rule:</b> match your connection to the job's country when a site is country-restricted. Most private-sector ATS aren't, NHS is.</li>
 </ul>
 </div>
-
+ 
 <div class="card">
 <h2>FAQ</h2>
 <details class="faq"><summary>A candidate's prospects came back empty. Why?</summary>

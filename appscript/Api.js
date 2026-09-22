@@ -6,13 +6,13 @@
  *
  * Extension requests are authenticated with the shared API_TOKEN from Config.
  */
-
+ 
 function doGet(e) {
   return HtmlService.createTemplateFromFile('Dashboard').evaluate()
     .setTitle('Jobverse Console')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
 }
-
+ 
 function doPost(e) {
   var out;
   try {
@@ -48,9 +48,9 @@ function doPost(e) {
   return ContentService.createTextOutput(JSON.stringify(out))
     .setMimeType(ContentService.MimeType.JSON);
 }
-
+ 
 /* --------------------------- extension handlers -------------------------- */
-
+ 
 function apiListCandidates_(req) {
   return readRows('Candidates')
     .filter(function (c) { return c.Status !== 'Archived' && String(c.Active).toUpperCase() !== 'FALSE'; })
@@ -58,7 +58,7 @@ function apiListCandidates_(req) {
       return { id: c.CandidateID, name: c.FullName, email: c.Email, status: c.Status };
     });
 }
-
+ 
 function apiGetCandidatePayload_(req) {
   var c = findRow('Candidates', 'CandidateID', req.candidateId);
   if (!c) throw new Error('Candidate not found');
@@ -83,37 +83,37 @@ function apiGetCandidatePayload_(req) {
     cvFileId: c.CVFileID
   };
 }
-
+ 
 function apiAnalyseJob_(req) {
   var jobId = runJobAnalyst(req.candidateId, req.jobUrl, req.jdText, req.ats);
   var job = findRow('Jobs', 'JobID', jobId);
-
+ 
   var cvId = runResumeBuilder(req.candidateId, jobId, req.tone);
   var letterId = runCoverLetterBuilder(req.candidateId, jobId, req.tone);
   var cv = findRow('CVVersions', 'VersionID', cvId);
   var letter = findRow('CoverLetters', 'LetterID', letterId);
-
+ 
   return {
     jobId: jobId, company: job.Company, title: job.JobTitle, suitability: job.SuitabilityScore,
     cvUrl: cv.DocURL, letterUrl: letter.DocURL
   };
 }
-
+ 
 function apiPrecheckApplication_(req) {
   var cand = findRow('Candidates', 'CandidateID', req.candidateId);
   if (!cand) throw new Error('Candidate not found');
   if (String(cand.Active).toUpperCase() === 'FALSE') return { block: 'inactive' };
-
+ 
   var allApps = readRows('Applications');
-
+ 
   var basis = req.candidateId + '|' + normaliseJobKey_(req.jobUrl, req.company, req.jobTitle);
   var hash = Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, basis)).slice(0, 24);
   if (allApps.some(function (a) { return a.DedupeHash === hash && a.Status !== 'Failed'; })) return { block: 'duplicate' };
-
+ 
   var target = parseInt(cand.TargetApplications || getConfig('DEFAULT_TARGET_APPLICATIONS') || '50', 10);
   var totalForCand = allApps.filter(function (a) { return a.CandidateID === req.candidateId && a.Status !== 'Failed'; }).length;
   if (target > 0 && totalForCand >= target) return { block: 'targetMet', target: target };
-
+ 
   var limit = parseInt(getConfig('MAX_APPS_PER_CANDIDATE_PER_DAY') || '15', 10);
   var today = Utilities.formatDate(new Date(), 'GMT', 'yyyy-MM-dd');
   var todayCount = allApps.filter(function (a) {
@@ -121,29 +121,29 @@ function apiPrecheckApplication_(req) {
       Utilities.formatDate(new Date(a.CreatedAt), 'GMT', 'yyyy-MM-dd') === today;
   }).length;
   if (todayCount >= limit) return { block: 'throttled', limit: limit };
-
+ 
   return { block: null, target: target, doneSoFar: totalForCand };
 }
-
+ 
 function apiStartApplication_(req) {
   var cand = findRow('Candidates', 'CandidateID', req.candidateId);
   if (!cand) throw new Error('Candidate not found');
-
+ 
   if (String(cand.Active).toUpperCase() === 'FALSE') return { inactive: true };
-
+ 
   var basis = req.candidateId + '|' + normaliseJobKey_(req.jobUrl, req.company, req.jobTitle);
   var hash = Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, basis)).slice(0, 24);
-
+ 
   var allApps = readRows('Applications');
   var dupe = allApps.some(function (a) { return a.DedupeHash === hash && a.Status !== 'Failed'; });
   if (dupe) return { duplicate: true };
-
+ 
   var target = parseInt(cand.TargetApplications || getConfig('DEFAULT_TARGET_APPLICATIONS') || '50', 10);
   var totalForCand = allApps.filter(function (a) {
     return a.CandidateID === req.candidateId && a.Status !== 'Failed';
   }).length;
   if (target > 0 && totalForCand >= target) return { targetMet: true, target: target };
-
+ 
   var limit = parseInt(getConfig('MAX_APPS_PER_CANDIDATE_PER_DAY') || '15', 10);
   var today = Utilities.formatDate(new Date(), 'GMT', 'yyyy-MM-dd');
   var todayCount = allApps.filter(function (a) {
@@ -151,7 +151,7 @@ function apiStartApplication_(req) {
       Utilities.formatDate(new Date(a.CreatedAt), 'GMT', 'yyyy-MM-dd') === today;
   }).length;
   if (todayCount >= limit) return { throttled: true, limit: limit };
-
+ 
   var appId = newId('APP');
   appendObject('Applications', {
     ApplicationID: appId, CreatedAt: new Date(), CandidateID: req.candidateId,
@@ -161,12 +161,12 @@ function apiStartApplication_(req) {
   logActivity('extension', 'application_started', 'application', appId, req.company + ' - ' + req.jobTitle);
   return { duplicate: false, applicationId: appId };
 }
-
+ 
 function apiAnswerQuestion_(req) {
   var a = answerScreeningQuestion(req.candidateId, req.jobId, req.question);
   return { answer: a, needsHuman: a === 'NEEDS_HUMAN' };
 }
-
+ 
 function apiRequestReview_(req) {
   var taskId = newId('REV');
   appendObject('ReviewQueue', {
@@ -182,13 +182,13 @@ function apiRequestReview_(req) {
     'A completed application is paused for approval. Open the Jobverse Console review queue. Task ' + taskId);
   return { taskId: taskId };
 }
-
+ 
 function apiCheckApproval_(req) {
   var t = findRow('ReviewQueue', 'TaskID', req.taskId);
   if (!t) throw new Error('Task not found');
   return { status: t.Status, decision: t.Decision || '', notes: t.Notes || '' };
 }
-
+ 
 /**
  * A human must resolve something the extension can't push through itself.
  * `reason` defaults to 'CAPTCHA' so any existing caller that doesn't pass it
@@ -206,11 +206,11 @@ function apiCaptchaPause_(req) {
     '. Open the tab and resolve it' + (reason === 'CAPTCHA' ? ', then the extension resumes automatically.' : '.'));
   return { paused: true };
 }
-
+ 
 function apiConfirmSubmission_(req) {
   var app = findRow('Applications', 'ApplicationID', req.applicationId);
   if (!app) throw new Error('Application not found');
-
+ 
   var shotUrl = '';
   if (req.screenshotBase64) {
     var blob = Utilities.newBlob(Utilities.base64Decode(req.screenshotBase64), 'image/png',
@@ -225,7 +225,7 @@ function apiConfirmSubmission_(req) {
   logActivity('extension', 'application_submitted', 'application', req.applicationId, app.Company);
   return { recorded: true, screenshotUrl: shotUrl };
 }
-
+ 
 function apiReportError_(req) {
   var app = req.applicationId ? findRow('Applications', 'ApplicationID', req.applicationId) : null;
   if (app) updateRow('Applications', app._row, {
@@ -234,7 +234,7 @@ function apiReportError_(req) {
   logActivity('extension', 'error', 'application', req.applicationId || '-', req.message);
   return { logged: true };
 }
-
+ 
 /**
  * FIXED: now includes an `ats` field the worker needs to pick the right
  * automation module - Prospects.gs only ever stored ATS support as a Status
@@ -248,7 +248,7 @@ function apiListProspects_(req) {
       return { id: p.ProspectID, url: p.JobURL, company: p.Company, title: p.JobTitle, ats: detectATSName_(p.JobURL) };
     });
 }
-
+ 
 /** Same domains Prospects.gs's detectATSFromUrl_ checks, but returns the name instead of a boolean. */
 function detectATSName_(url) {
   var u = String(url || '').toLowerCase();
@@ -259,7 +259,7 @@ function detectATSName_(url) {
   if (u.indexOf('jobs.nhs.uk') > -1) return 'nhs';
   return '';
 }
-
+ 
 function apiUpdateProspectStatus_(req) {
   var p = findRow('Prospects', 'ProspectID', req.prospectId);
   if (!p) throw new Error('Prospect not found');
@@ -267,25 +267,25 @@ function apiUpdateProspectStatus_(req) {
   logActivity('extension', 'prospect_status', 'prospect', req.prospectId, req.status);
   return { updated: true };
 }
-
+ 
 function apiGetCandidateCVText_(req) {
   var c = findRow('Candidates', 'CandidateID', req.candidateId);
   if (!c) throw new Error('Candidate not found');
   if (!c.CVFileID) return { text: '' };
   return { text: extractFileText(c.CVFileID).slice(0, 40000) };
 }
-
+ 
 function apiGenerateNHSStatement_(req) {
   var jobId = runJobAnalyst(req.candidateId, req.jobUrl, req.jdText, 'NHS Jobs');
   var result = runNHSSupportingStatement(req.candidateId, jobId, req.tone || 'NHS');
   return { jobId: jobId, statementText: result.text, docUrl: result.docUrl };
 }
-
+ 
 function apiCreateNHSFollowUp_(req) {
   var id = createNHSTracFollowUp(req.candidateId, req.applicationId, req.company, req.jobTitle, req.closingDate);
   return { followUpId: id };
 }
-
+ 
 /**
  * NEW: checks whether an account already exists for this candidate on this
  * ATS tenant (by domain). The worker calls this before attempting to sign
@@ -301,7 +301,7 @@ function apiCheckPlatformAccount_(req) {
   var latest = matches[0];
   return { found: true, status: latest.Status, notes: latest.Notes || '' };
 }
-
+ 
 /**
  * NEW: records the outcome of an account creation/sign-in attempt for a
  * candidate + ATS tenant, so future runs know whether to sign in, retry, or
@@ -317,7 +317,7 @@ function apiRecordPlatformAccount_(req) {
   logActivity('extension', 'platform_account_' + req.status, 'candidate', req.candidateId, domain);
   return { recorded: true, accountId: id };
 }
-
+ 
 /**
  * NEW: exports a generated CV/cover letter Google Doc as a PDF and returns it
  * base64-encoded, so the Playwright worker can attach the real file to an
@@ -331,12 +331,12 @@ function apiExportDocumentPdf_(req) {
   var blob = DriveApp.getFileById(id).getAs(MimeType.PDF);
   return { base64: Utilities.base64Encode(blob.getBytes()), filename: blob.getName() };
 }
-
+ 
 function extractDocId_(url) {
   var m = String(url || '').match(/\/d\/([-\w]{25,})/);
   return m ? m[1] : null;
 }
-
+ 
 /**
  * NEW: lets the worker find applications waiting on it rather than the sheet
  * - e.g. Status 'Approved - Submitting' after dashDecide records a human's
@@ -348,7 +348,7 @@ function apiListApplicationsByStatus_(req) {
   var cvByJob = {}, clByJob = {};
   readRows('CVVersions').forEach(function (v) { cvByJob[v.JobID] = v.DocURL; });
   readRows('CoverLetters').forEach(function (l) { clByJob[l.JobID] = l.DocURL; });
-
+ 
   return readRows('Applications')
     .filter(function (a) { return a.Status === req.status && (!req.candidateId || a.CandidateID === req.candidateId); })
     .map(function (a) {
@@ -359,9 +359,9 @@ function apiListApplicationsByStatus_(req) {
       };
     });
 }
-
+ 
 /* ------------------------- dashboard RPC (google.script.run) ------------------------- */
-
+ 
 function dashData() {
   var allApps = readRows('Applications');
   var countByCand = {};
@@ -400,7 +400,7 @@ function dashData() {
     report: latestReport_()
   };
 }
-
+ 
 function dashDecide(taskId, decision, notes) {
   var t = findRow('ReviewQueue', 'TaskID', taskId);
   if (!t) throw new Error('Task not found');
@@ -429,7 +429,7 @@ function dashDecide(taskId, decision, notes) {
   logActivity(Session.getActiveUser().getEmail() || 'reviewer', 'review_' + decision, t.Type, t.RefID, notes || '');
   return true;
 }
-
+ 
 function dashGenerate(candidateId, jdText, jobUrl, tone) {
   var jobId = runJobAnalyst(candidateId, jobUrl || '', jdText, '');
   var cvId = runResumeBuilder(candidateId, jobId, tone);
@@ -438,11 +438,11 @@ function dashGenerate(candidateId, jdText, jobUrl, tone) {
   var cl = findRow('CoverLetters', 'LetterID', clId);
   return { jobId: jobId, cvUrl: cv.DocURL, letterUrl: cl.DocURL };
 }
-
+ 
 function dashFindProspects(candidateId) {
   return findProspectsForCandidate(candidateId);
 }
-
+ 
 function dashSetProspectStatus(prospectId, status) {
   var p = findRow('Prospects', 'ProspectID', prospectId);
   if (!p) throw new Error('Prospect not found');
@@ -450,7 +450,7 @@ function dashSetProspectStatus(prospectId, status) {
   logActivity(Session.getActiveUser().getEmail() || 'reviewer', 'prospect_' + status, 'prospect', prospectId, '');
   return true;
 }
-
+ 
 function dashSetCandidateActive(candidateId, active) {
   var c = findRow('Candidates', 'CandidateID', candidateId);
   if (!c) throw new Error('Candidate not found');
@@ -458,7 +458,7 @@ function dashSetCandidateActive(candidateId, active) {
   logActivity(Session.getActiveUser().getEmail() || 'reviewer', active ? 'candidate_activated' : 'candidate_deactivated', 'candidate', candidateId, '');
   return true;
 }
-
+ 
 function dashSetCandidateTarget(candidateId, target) {
   var c = findRow('Candidates', 'CandidateID', candidateId);
   if (!c) throw new Error('Candidate not found');
@@ -468,7 +468,7 @@ function dashSetCandidateTarget(candidateId, target) {
   logActivity(Session.getActiveUser().getEmail() || 'reviewer', 'candidate_target_set', 'candidate', candidateId, String(n));
   return true;
 }
-
+ 
 function dashMarkFollowUpDone(followUpId) {
   var f = findRow('FollowUps', 'FollowUpID', followUpId);
   if (!f) throw new Error('Follow-up not found');
@@ -476,28 +476,28 @@ function dashMarkFollowUpDone(followUpId) {
   logActivity(Session.getActiveUser().getEmail() || 'reviewer', 'followup_done', 'followup', followUpId, '');
   return true;
 }
-
+ 
 function dashDeleteCandidate(candidateId) {
   var cand = findRow('Candidates', 'CandidateID', candidateId);
   if (!cand) throw new Error('Candidate not found');
-
+ 
   var removed = {};
   ['Applications', 'Jobs', 'CVVersions', 'CoverLetters', 'NHSStatements',
    'ReviewQueue', 'Prospects', 'FollowUps', 'AIOutputs'].forEach(function (tab) {
     removed[tab] = deleteRowsWhere(tab, 'CandidateID', candidateId);
   });
-
+ 
   if (cand.DriveFolderID) {
     try { DriveApp.getFolderById(cand.DriveFolderID).setTrashed(true); } catch (ignored) {}
   }
-
+ 
   deleteRowsWhere('Candidates', 'CandidateID', candidateId);
-
+ 
   logActivity(Session.getActiveUser().getEmail() || 'reviewer', 'candidate_deleted', 'candidate', candidateId,
     cand.FullName + ' | removed: ' + JSON.stringify(removed));
   return { deleted: true, related: removed };
 }
-
+ 
 function dashClearActivityLog() {
   var sh = sheet_('ActivityLog');
   var last = sh.getLastRow();
@@ -505,23 +505,27 @@ function dashClearActivityLog() {
   logActivity(Session.getActiveUser().getEmail() || 'reviewer', 'activity_log_cleared', 'system', '-', 'Log cleared');
   return true;
 }
-
+ 
+/** Queue every 'Found' prospect for a candidate in one action. Reports how many were left for manual review too. */
 function dashQueueAllFound(candidateId) {
-  var count = 0;
+  var queued = 0, manualReview = 0;
   readRows('Prospects').forEach(function (p) {
-    if (p.CandidateID === candidateId && p.Status === 'Found') {
+    if (p.CandidateID !== candidateId) return;
+    if (p.Status === 'Found') {
       updateRow('Prospects', p._row, { Status: 'Queued' });
-      count++;
+      queued++;
+    } else if (p.Status === 'Found - Manual Review') {
+      manualReview++;
     }
   });
-  logActivity(Session.getActiveUser().getEmail() || 'reviewer', 'prospects_bulk_queued', 'candidate', candidateId, count + ' queued');
-  return { queued: count };
+  logActivity(Session.getActiveUser().getEmail() || 'reviewer', 'prospects_bulk_queued', 'candidate', candidateId, queued + ' queued, ' + manualReview + ' left for manual review');
+  return { queued: queued, manualReview: manualReview };
 }
-
+ 
 function dashRetryApplication(applicationId) {
   var app = findRow('Applications', 'ApplicationID', applicationId);
   if (!app) throw new Error('Application not found');
-
+ 
   appendObject('Prospects', {
     ProspectID: newId('PROS'), FoundAt: new Date(), CandidateID: app.CandidateID,
     Company: app.Company, JobTitle: app.JobTitle, JobURL: app.JobURL,
@@ -531,23 +535,23 @@ function dashRetryApplication(applicationId) {
   logActivity(Session.getActiveUser().getEmail() || 'reviewer', 'application_retried', 'application', applicationId, app.Company);
   return { requeued: true };
 }
-
+ 
 /* ------------------------------- helpers -------------------------------- */
-
+ 
 function normaliseJobKey_(url, company, title) {
   if (url) {
     return String(url).toLowerCase().replace(/^https?:\/\//, '').replace(/[?#].*$/, '').replace(/\/$/, '');
   }
   return (String(company) + '::' + String(title)).toLowerCase().trim();
 }
-
+ 
 /** Extracts just the hostname from a URL, or passes a bare domain through unchanged. */
 function normaliseDomain_(urlOrDomain) {
   var s = String(urlOrDomain || '');
   var m = s.match(/^https?:\/\/([^\/]+)/i);
   return (m ? m[1] : s).toLowerCase();
 }
-
+ 
 function notifyReviewers_(subject, body) {
   var emails = getConfig('REPORT_EMAILS');
   if (!emails) return;
@@ -555,7 +559,7 @@ function notifyReviewers_(subject, body) {
     try { MailApp.sendEmail(to, '[Jobverse] ' + subject, body); } catch (ignored) {}
   });
 }
-
+ 
 function latestReport_() {
   var rows = readRows('Reports');
   if (!rows.length) return null;
@@ -563,3 +567,39 @@ function latestReport_() {
   try { return { period: last.Period, metrics: JSON.parse(last.MetricsJSON), summary: last.Summary }; }
   catch (e) { return null; }
 }
+ 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
