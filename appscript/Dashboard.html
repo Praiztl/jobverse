@@ -82,6 +82,19 @@
 <script>
 let D = null, view = 'reviews';
 const F = {}; // per-view filter state
+
+// Persist the selected candidate for finding jobs across page refreshes
+function saveFindJobsCandidate(candId) {
+  localStorage.setItem('jobverse_findJobs_candidate', candId);
+}
+
+function loadFindJobsCandidate() {
+  return localStorage.getItem('jobverse_findJobs_candidate');
+}
+
+function clearFindJobsCandidate() {
+  localStorage.removeItem('jobverse_findJobs_candidate');
+}
  
 function load(){
   google.script.run
@@ -192,7 +205,13 @@ function render(){
   }
  
   if(view === 'prospects'){
-    if(D.candidates.length && !D.candidates.some(c => c.id === F.pCand)) F.pCand = D.candidates[0].id;
+    // Restore the persisted candidate selection from localStorage
+    const persistedCand = loadFindJobsCandidate();
+    if(persistedCand && D.candidates.some(c => c.id === persistedCand)) {
+      F.pCand = persistedCand;
+    } else if(D.candidates.length && !D.candidates.some(c => c.id === F.pCand)) {
+      F.pCand = D.candidates[0].id;
+    }
     const cands = uniq(D.prospects.map(p => p.cand));
     const statuses = uniq(D.prospects.map(p => p.status));
     let rows = D.prospects;
@@ -298,8 +317,9 @@ function renderFindings(t){
 function setFilter(key, val){ F[key] = val; render(); }
 
 function setFindJobsCandidate(candId) { 
-  F.pCand = candId; 
-  // Don't re-render, just update the filter state so it persists
+  F.pCand = candId;
+  saveFindJobsCandidate(candId);
+  // Don't re-render, just persist the selection
 }
  
 function decide(id, d){
@@ -321,7 +341,9 @@ function gen(){
 }
  
 function findJobs(){
-  const candId = F.pCand || document.getElementById('pCand').value;
+  const candId = F.pCand || loadFindJobsCandidate() || document.getElementById('pCand').value;
+  if(!candId) { toast('Please select a candidate first'); return; }
+  saveFindJobsCandidate(candId);
   document.getElementById('pMsg').textContent = 'Searching…';
   google.script.run.withSuccessHandler(r => {
     document.getElementById('pMsg').textContent = `Found ${r.found}, added ${r.added} new.`;
@@ -331,17 +353,53 @@ function findJobs(){
 }
  
 function queueAll(){
-  const cand = F.pCand || document.getElementById('pCand').value;
+  const cand = F.pCand || loadFindJobsCandidate() || document.getElementById('pCand').value;
   if(!cand) { toast('Please select a candidate first'); return; }
-  google.script.run.withSuccessHandler(r => {
-    const msg = r.queued
-      ? `Queued ${r.queued} prospect(s)` + (r.manualReview ? ` (${r.manualReview} still need manual review - no supported ATS link detected)` : '')
-      : (r.manualReview
-          ? `Nothing auto-queued - all ${r.manualReview} found job(s) need manual review (no Workday/Greenhouse/Lever/Ashby/NHS link detected). Open them from the table below.`
-          : 'No prospects to queue for this candidate. Try "Find jobs" first.');
-    toast(msg);
-    load();
-  }).withFailureHandler(e => toast('Error: ' + e.message)).dashQueueAllFound(cand);
+  
+  saveFindJobsCandidate(cand);
+  
+  // Debug: check what prospects exist for this candidate
+  const prospectsForCand = D.prospects.filter(p => p.cand === cand);
+  const foundCount = prospectsForCand.filter(p => p.status === 'Found').length;
+  const foundManualCount = prospectsForCand.filter(p => p.status === 'Found - Manual Review').length;
+  
+  console.log(`Queue all for candidate ${cand}: ${foundCount} Found, ${foundManualCount} Found - Manual Review, ${prospectsForCand.length} total`);
+  
+  if(prospectsForCand.length === 0) {
+    toast('No prospects found for this candidate. Try "Find jobs" first.');
+    return;
+  }
+  
+  document.getElementById('pMsg').textContent = 'Queuing prospects…';
+  
+  google.script.run
+    .withSuccessHandler(r => {
+      console.log('Queue all response:', r);
+      
+      if(!r) {
+        toast('No response from server');
+        document.getElementById('pMsg').textContent = '';
+        return;
+      }
+      
+      if(r.queued === 0 && r.manualReview === 0) {
+        toast('No prospects to queue. Try "Find jobs" first.');
+      } else if(r.queued > 0) {
+        const msg = `Queued ${r.queued} prospect(s)` + (r.manualReview ? ` (${r.manualReview} still need manual review)` : '');
+        toast(msg);
+      } else if(r.manualReview > 0) {
+        toast(`Nothing auto-queued - all ${r.manualReview} found job(s) need manual review`);
+      }
+      
+      document.getElementById('pMsg').textContent = '';
+      load();
+    })
+    .withFailureHandler(e => {
+      console.error('Queue all error:', e);
+      document.getElementById('pMsg').textContent = '';
+      toast('Error: ' + e.message);
+    })
+    .dashQueueAllFound(cand);
 }
  
 function prospectAction(id, status){

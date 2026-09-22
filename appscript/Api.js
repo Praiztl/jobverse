@@ -388,7 +388,7 @@ function dashData() {
       }),
     prospects: readRows('Prospects').map(function (p) {
       return { id: p.ProspectID, cand: p.CandidateID, company: p.Company, title: p.JobTitle,
-               url: p.JobURL, status: p.Status };
+               url: p.JobURL, status: p.Status, source: p.Source };
     }),
     log: readRows('ActivityLog').slice(-60).reverse().map(function (l) {
       return { t: String(l.Timestamp), actor: l.Actor, action: l.Action, detail: l.Detail };
