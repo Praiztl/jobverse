@@ -25,6 +25,8 @@ function doPost(e) {
       startApplication: apiStartApplication_,
       precheckApplication: apiPrecheckApplication_,
       answerQuestion: apiAnswerQuestion_,
+      answerField: apiAnswerField_,
+      decideClick: apiDecideClick_,
       requestReview: apiRequestReview_,
       checkApproval: apiCheckApproval_,
       captchaPause: apiCaptchaPause_,
@@ -166,7 +168,96 @@ function apiAnswerQuestion_(req) {
   var a = answerScreeningQuestion(req.candidateId, req.jobId, req.question);
   return { answer: a, needsHuman: a === 'NEEDS_HUMAN' };
 }
- 
+
+/**
+ * NEW: AI-powered field answering for individual form fields. The ATS module
+ * extracts field info (label, type, options) and asks the AI what to fill in.
+ * This replaces hardcoded field mapping with dynamic AI decision-making.
+ */
+function apiAnswerField_(req) {
+  var cand = findRow('Candidates', 'CandidateID', req.candidateId);
+  if (!cand) throw new Error('Candidate not found');
+  var job = req.jobId ? findRow('Jobs', 'JobID', req.jobId) : null;
+
+  var fieldInfo = req.fieldInfo || {};
+  var prompt = 'Fill in a form field for a job application. ';
+
+  if (fieldInfo.options && fieldInfo.options.length > 0) {
+    // Dropdown/radio/checkbox - choose from options
+    prompt += 'This is a dropdown/radio/checkbox field. You must choose ONE option from the available options. ' +
+      'Return only the option value (not the text), or NEEDS_HUMAN if no suitable option exists. ' +
+      'Available options: ' + JSON.stringify(fieldInfo.options);
+  } else {
+    // Text field - provide answer
+    prompt += 'For common fields like "first name", "email", "phone", use the structured data. ' +
+      'For custom questions, use the AI profile. If no answer exists, return NEEDS_HUMAN.';
+  }
+
+  var answer = callClaude(
+    prompt,
+    'FIELD INFO: ' + JSON.stringify(fieldInfo) +
+    '\n\nCANDIDATE STRUCTURED FIELDS:\n' + JSON.stringify({
+      fullName: cand.FullName, email: cand.Email, phone: cand.Phone, location: cand.Location,
+      rightToWork: cand.RightToWork, visa: cand.VisaStatus, licence: cand.DrivingLicence,
+      minSalary: cand.MinSalary, noticePeriod: cand.NoticePeriod, linkedin: cand.LinkedIn,
+      github: cand.GitHub, portfolio: cand.Portfolio, relocate: cand.WillingToRelocate,
+      workModel: cand.WorkModel, employmentType: cand.EmploymentType,
+      registrations: cand.Registrations, nationality: cand.Nationality,
+      NHSUnspentConvictions: cand.NHSUnspentConvictions, NHSFitnessToPractice: cand.NHSFitnessToPractice,
+      NHSDisabilityGIS: cand.NHSDisabilityGIS, NHSEthnicity: c.NHSEthnicity,
+      NHSReligion: cand.NHSReligion, NHSSexualOrientation: c.NHSSexualOrientation,
+      NHSSocioEconomicBackground: cand.NHSSocioEconomicBackground,
+      applicationEmail: cand.ApplicationEmail, applicationPassword: cand.ApplicationPassword
+    }) +
+    '\n\nCANDIDATE PROFILE:\n' + cand.AIProfileJSON +
+    (job ? '\n\nJOB CONTEXT:\n' + job.AnalysisJSON : '') +
+    '\n\nReturn only the answer (option value for dropdowns, text for inputs), or NEEDS_HUMAN if unanswerable.',
+    500
+  );
+
+  var trimmedAnswer = answer.trim();
+  saveAIOutput('FieldAnswerer', req.candidateId, req.jobId, { fieldInfo: fieldInfo, answer: trimmedAnswer });
+
+  return { answer: trimmedAnswer, needsHuman: trimmedAnswer === 'NEEDS_HUMAN' };
+}
+
+/**
+ * NEW: AI-powered click decision for buttons/links. The unified form filler
+ * extracts element info and asks the AI whether to click it, handling complex
+ * navigation decisions that can't be determined mechanically.
+ */
+function apiDecideClick_(req) {
+  var cand = findRow('Candidates', 'CandidateID', req.candidateId);
+  if (!cand) throw new Error('Candidate not found');
+  var job = req.jobId ? findRow('Jobs', 'JobID', req.jobId) : null;
+
+  var elementInfo = req.elementInfo || {};
+  var prompt = 'Decide whether to click a button/link during job application form filling. ' +
+    'Consider the context and whether clicking would help complete the application. ' +
+    'Return JSON with { "shouldClick": boolean, "reason": string }. ' +
+    'If uncertain, set shouldClick to false and explain why in reason.';
+
+  var decision = callClaudeJSON(
+    prompt,
+    'ELEMENT INFO: ' + JSON.stringify(elementInfo) +
+    '\n\nCANDIDATE CONTEXT:\n' + JSON.stringify({
+      fullName: cand.FullName, email: cand.Email, currentStatus: cand.Status
+    }) +
+    (job ? '\n\nJOB CONTEXT:\n' + job.AnalysisJSON : '') +
+    '\n\nCURRENT URL: ' + (req.currentUrl || 'unknown') +
+    '\n\nReturn JSON: { "shouldClick": boolean, "reason": string }',
+    300
+  );
+
+  saveAIOutput('ClickDecider', req.candidateId, req.jobId, { elementInfo: elementInfo, decision: decision });
+
+  return {
+    shouldClick: decision.shouldClick || false,
+    reason: decision.reason || '',
+    needsHuman: !decision.shouldClick && decision.reason.toLowerCase().includes('human')
+  };
+}
+
 function apiRequestReview_(req) {
   var taskId = newId('REV');
   appendObject('ReviewQueue', {

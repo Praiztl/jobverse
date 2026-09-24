@@ -30,10 +30,7 @@ const path = require('path');
 const fetch = require('node-fetch');
 const { chromium } = require('playwright');
 
-const ats = {
-  greenhouse: require('./ats/greenhouse'),
-  workday: require('./ats/workday'),
-};
+const unifiedFormFiller = require('./unified-form-filler');
 
 const {
   JOBVERSE_API_URL,
@@ -73,9 +70,7 @@ async function downloadDocPdf(docUrl, destPath) {
   return destPath;
 }
 
-function moduleFor(atsName) {
-  return ats[String(atsName || '').toLowerCase().trim()];
-}
+// Unified form filler handles all ATS platforms automatically
 
 /** Pass 1: discover queued prospects, generate + fill, hand off to review. */
 async function fillQueuedProspects(candidate, browser) {
@@ -92,14 +87,7 @@ async function fillQueuedProspects(candidate, browser) {
         continue;
       }
 
-      // Check ATS support BEFORE spending an AI generation call on a CV/cover
-      // letter we can't actually use yet. Leaves the prospect Queued (not
-      // Skipped) so it's picked up automatically once that ATS module ships,
-      // instead of needing a human to re-queue it later.
-      if (!moduleFor(prospect.ats)) {
-        console.log(`[${prospect.id}] No automation module for ATS "${prospect.ats || 'unknown'}" yet - leaving queued for later.`);
-        continue;
-      }
+      // Unified form filler supports all ATS platforms automatically
 
       const analysis = await callApi('analyseJob', {
         candidateId: candidate.id, jobUrl: prospect.url, jdText: prospect.jdText || '', ats: prospect.ats || '',
@@ -139,13 +127,6 @@ async function fillAndRequestReview(candidate, app, browser) {
   files.cv = await downloadDocPdf(app.cvUrl, path.join(DOWNLOAD_DIR, `${app.applicationId}-cv.pdf`));
   files.coverLetter = await downloadDocPdf(app.letterUrl, path.join(DOWNLOAD_DIR, `${app.applicationId}-cover-letter.pdf`));
 
-  const module = moduleFor(app.ats);
-  if (!module) {
-    console.log(`[${app.applicationId}] No automation module for ATS "${app.ats}" yet - leaving for manual handling.`);
-    await callApi('reportError', { applicationId: app.applicationId, message: `No automation module for ATS "${app.ats}"` });
-    return;
-  }
-
   const candidatePayload = await callApi('getCandidatePayload', { candidateId: candidate.id });
   const context = await browser.newContext();
   const page = await context.newPage();
@@ -153,7 +134,7 @@ async function fillAndRequestReview(candidate, app, browser) {
     console.log(`[${app.applicationId}] Filling application -> ${app.url}`);
     await page.goto(app.url, { waitUntil: 'domcontentloaded' });
 
-    const snapshot = await module.fillForm(
+    const snapshot = await unifiedFormFiller.fillForm(
       page,
       { candidateId: candidate.id, applicationId: app.applicationId, jobId: app.jobId, company: app.company, title: app.title, url: app.url },
       files,
@@ -183,12 +164,6 @@ async function submitApproved(candidate, browser) {
   });
 
   for (const app of approved) {
-    const module = moduleFor(app.ats);
-    if (!module) {
-      console.log(`[${app.id}] No automation module for ATS "${app.ats}" - can't complete the real submit.`);
-      await callApi('reportError', { applicationId: app.id, message: `No automation module for ATS "${app.ats}" at submit time` });
-      continue;
-    }
 
     const files = {};
     const candidatePayload = await callApi('getCandidatePayload', { candidateId: candidate.id });
@@ -200,7 +175,7 @@ async function submitApproved(candidate, browser) {
 
       console.log(`[${app.id}] Re-filling approved application -> ${app.url}`);
       await page.goto(app.url, { waitUntil: 'domcontentloaded' });
-      await module.fillForm(
+      await unifiedFormFiller.fillForm(
         page,
         { candidateId: candidate.id, applicationId: app.id, jobId: app.jobId, company: app.company, title: app.title, url: app.url },
         files,
@@ -208,7 +183,7 @@ async function submitApproved(candidate, browser) {
         callApi
       );
 
-      await module.clickSubmit(page);
+      await unifiedFormFiller.clickSubmit(page);
       const shot = (await page.screenshot({ fullPage: true })).toString('base64');
       await callApi('confirmSubmission', { applicationId: app.id, screenshotBase64: shot });
       console.log(`[${app.id}] Submitted.`);
