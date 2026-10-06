@@ -72,6 +72,7 @@
     <button data-v="generate">Generate</button>
     <button data-v="prospects">Prospects</button>
     <button data-v="followups">Follow-ups</button>
+    <button data-v="accounts">Site accounts</button>
     <button data-v="report">Reports</button>
     <button data-v="log">Activity</button>
     <button data-v="help">Help &amp; guide</button>
@@ -279,6 +280,18 @@ function render(){
       '</table></div>';
   }
  
+  if(view === 'accounts'){
+    const accts = (D.accounts || []).slice().reverse();
+    m.innerHTML = '<h1>Site accounts</h1><p class="mut">Accounts the extension created or signs in to for candidates on job sites that require one - one per candidate per site, reused on later applications there. Passwords are random per account and only shown on request, to authorised reviewers.</p>' +
+      '<div class="card"><table><tr><th>Candidate</th><th>Site</th><th>Login email</th><th>Status</th><th>Notes</th><th></th></tr>' +
+      (accts.length ? accts.map(a => `<tr>
+        <td class="mut">${esc(a.cand)}</td><td><b>${esc(a.site)}</b></td><td>${esc(a.email)}</td>
+        <td>${chip(a.status)}</td><td class="mut">${esc(a.notes||'')}</td>
+        <td><button class="btn tiny" onclick="revealPassword('${esc(a.id)}')">Show password</button></td>
+      </tr>`).join('') : '<tr><td colspan="6" class="mut">No site accounts yet. They appear here when the extension meets a sign-up or sign-in page.</td></tr>') +
+      '</table></div>';
+  }
+
   if(view === 'report'){
     const r = D.report;
     m.innerHTML = '<h1>Latest report</h1>' + (!r ? '<p class="mut">No report yet. Run runDailyReport() in Apps Script or wait for the 07:00 trigger.</p>' :
@@ -491,6 +504,13 @@ function clearLog(){
     .withFailureHandler(e => toast('Error: ' + e.message)).dashClearActivityLog();
 }
  
+function revealPassword(id){
+  google.script.run.withSuccessHandler(r => {
+    // prompt() keeps the password selectable for copying without putting it in the page
+    prompt('Password for ' + r.email + ' on ' + r.site + ' (copy it, then close):', r.password);
+  }).withFailureHandler(e => toast('Error: ' + e.message)).dashRevealAccountPassword(id);
+}
+
 function retryApp(id){
   if(!confirm('Re-queue this failed application as a fresh prospect to try again?')) return;
   google.script.run.withSuccessHandler(() => { toast('Re-queued'); load(); })

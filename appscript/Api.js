@@ -27,6 +27,7 @@ function doPost(e) {
       answerQuestion: apiAnswerQuestion_,
       answerField: apiAnswerField_,
       decideClick: apiDecideClick_,
+      chooseNextStep: apiChooseNextStep_,
       requestReview: apiRequestReview_,
       checkApproval: apiCheckApproval_,
       captchaPause: apiCaptchaPause_,
@@ -39,6 +40,8 @@ function doPost(e) {
       createNHSFollowUp: apiCreateNHSFollowUp_,
       checkPlatformAccount: apiCheckPlatformAccount_,
       recordPlatformAccount: apiRecordPlatformAccount_,
+      platformAccount: apiPlatformAccount_,
+      updatePlatformAccount: apiUpdatePlatformAccount_,
       exportDocumentPdf: apiExportDocumentPdf_,
       listApplicationsByStatus: apiListApplicationsByStatus_
     };
@@ -173,6 +176,7 @@ function apiAnswerQuestion_(req) {
  * NEW: AI-powered field answering for individual form fields. The ATS module
  * extracts field info (label, type, options) and asks the AI what to fill in.
  * This replaces hardcoded field mapping with dynamic AI decision-making.
+ * ENHANCED: Now accepts semantic field representation with context and returns structured actions.
  */
 function apiAnswerField_(req) {
   var cand = findRow('Candidates', 'CandidateID', req.candidateId);
@@ -180,22 +184,63 @@ function apiAnswerField_(req) {
   var job = req.jobId ? findRow('Jobs', 'JobID', req.jobId) : null;
 
   var fieldInfo = req.fieldInfo || {};
-  var prompt = 'Fill in a form field for a job application. ';
+  var formContext = req.formContext || {};
+  
+  var prompt = 'You are an intelligent form-filling assistant. Decide what action to take for a single form field. ' +
+    'Return a structured JSON response with your decision.';
 
-  if (fieldInfo.options && fieldInfo.options.length > 0) {
-    // Dropdown/radio/checkbox - choose from options
-    prompt += 'This is a dropdown/radio/checkbox field. You must choose ONE option from the available options. ' +
-      'Return only the option value (not the text), or NEEDS_HUMAN if no suitable option exists. ' +
-      'Available options: ' + JSON.stringify(fieldInfo.options);
-  } else {
-    // Text field - provide answer
-    prompt += 'For common fields like "first name", "email", "phone", use the structured data. ' +
-      'For custom questions, use the AI profile. If no answer exists, return NEEDS_HUMAN.';
+  // Handle semantic field information
+  if (fieldInfo.semanticType && fieldInfo.semanticType !== 'custom_question') {
+    prompt += ' This field has been semantically classified as "' + fieldInfo.semanticType + '" with ' +
+      Math.round(fieldInfo.confidence * 100) + '% confidence.';
   }
 
-  var answer = callClaude(
-    prompt,
-    'FIELD INFO: ' + JSON.stringify(fieldInfo) +
+  var today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+
+  if (fieldInfo.options && fieldInfo.options.length > 0) {
+    prompt += ' This is a dropdown/radio/checkbox field with specific options.';
+  } else if (fieldInfo.dateKind) {
+    prompt += ' This is a DATE field. Today is ' + today + '. Return the value strictly as YYYY-MM-DD ' +
+      '(the extension converts it to the format the form expects). For start/availability dates, ' +
+      'add the candidate\'s notice period to today. For dates of birth or other personal dates not ' +
+      'present in the candidate data, return action "human". Respect min/max if given.';
+  } else {
+    prompt += ' This is a text input field.';
+  }
+
+  // Add form context if available
+  var contextInfo = '';
+  if (formContext.ats) {
+    contextInfo += '\nFORM CONTEXT:\n' +
+      'ATS Platform: ' + formContext.ats +
+      '\nMulti-step form: ' + (formContext.isMultiStep ? 'Yes (step ' + formContext.currentStep + ' of ' + formContext.totalSteps + ')' : 'No') +
+      '\nForm URL: ' + (formContext.url || 'unknown');
+  }
+
+  var decision = callClaudeJSON(
+    prompt + ' Return JSON with this exact structure: {"action": "fill|select|check|uncheck|skip|human", "value": "string", "reason": "string", "confidence": 0.0-1.0}. ' +
+    'Action types: "fill" for text fields, "select" for dropdowns (use option value), "check"/"uncheck" for checkboxes, "skip" to ignore, "human" if you need help.',
+    'SEMANTIC FIELD INFO:\n' + JSON.stringify({
+      id: fieldInfo.id,
+      label: fieldInfo.label,
+      semanticType: fieldInfo.semanticType,
+      confidence: fieldInfo.confidence,
+      type: fieldInfo.type,
+      elementType: fieldInfo.elementType,
+      required: fieldInfo.required,
+      fieldset: fieldInfo.fieldset,
+      formGroup: fieldInfo.formGroup,
+      placeholder: fieldInfo.placeholder,
+      pattern: fieldInfo.pattern,
+      min: fieldInfo.min,
+      max: fieldInfo.max,
+      maxLength: fieldInfo.maxLength,
+      description: fieldInfo.ariaDescribedBy,
+      dateKind: fieldInfo.dateKind,
+      options: fieldInfo.options
+    }) +
+    '\nTODAY: ' + today +
+    contextInfo +
     '\n\nCANDIDATE STRUCTURED FIELDS:\n' + JSON.stringify({
       fullName: cand.FullName, email: cand.Email, phone: cand.Phone, location: cand.Location,
       rightToWork: cand.RightToWork, visa: cand.VisaStatus, licence: cand.DrivingLicence,
@@ -204,21 +249,33 @@ function apiAnswerField_(req) {
       workModel: cand.WorkModel, employmentType: cand.EmploymentType,
       registrations: cand.Registrations, nationality: cand.Nationality,
       NHSUnspentConvictions: cand.NHSUnspentConvictions, NHSFitnessToPractice: cand.NHSFitnessToPractice,
-      NHSDisabilityGIS: cand.NHSDisabilityGIS, NHSEthnicity: c.NHSEthnicity,
-      NHSReligion: cand.NHSReligion, NHSSexualOrientation: c.NHSSexualOrientation,
+      NHSDisabilityGIS: cand.NHSDisabilityGIS, NHSEthnicity: cand.NHSEthnicity,
+      NHSReligion: cand.NHSReligion, NHSSexualOrientation: cand.NHSSexualOrientation,
       NHSSocioEconomicBackground: cand.NHSSocioEconomicBackground,
-      applicationEmail: cand.ApplicationEmail, applicationPassword: cand.ApplicationPassword
+      applicationEmail: cand.ApplicationEmail // passwords are never sent to the AI
     }) +
     '\n\nCANDIDATE PROFILE:\n' + cand.AIProfileJSON +
     (job ? '\n\nJOB CONTEXT:\n' + job.AnalysisJSON : '') +
-    '\n\nReturn only the answer (option value for dropdowns, text for inputs), or NEEDS_HUMAN if unanswerable.',
-    500
+    '\n\nReturn JSON: {"action": "fill|select|check|uncheck|skip|human", "value": "string", "reason": "string", "confidence": 0.0-1.0}',
+    800
   );
 
-  var trimmedAnswer = answer.trim();
-  saveAIOutput('FieldAnswerer', req.candidateId, req.jobId, { fieldInfo: fieldInfo, answer: trimmedAnswer });
+  saveAIOutput('FieldAnswerer', req.candidateId, req.jobId, { 
+    fieldInfo: fieldInfo, 
+    formContext: formContext,
+    decision: decision 
+  });
 
-  return { answer: trimmedAnswer, needsHuman: trimmedAnswer === 'NEEDS_HUMAN' };
+  // Convert structured decision to legacy format for compatibility
+  var needsHuman = decision.action === 'human';
+  var answer = (decision.action === 'fill' || decision.action === 'select') ? decision.value : null;
+
+  return { 
+    answer: answer, 
+    needsHuman: needsHuman,
+    // Also return the full structured decision for new clients
+    structuredDecision: decision
+  };
 }
 
 /**
@@ -256,6 +313,46 @@ function apiDecideClick_(req) {
     reason: decision.reason || '',
     needsHuman: !decision.shouldClick && decision.reason.toLowerCase().includes('human')
   };
+}
+
+/**
+ * Navigation step for the extension's application driver: given a page that
+ * is not yet the application form, pick which clickable element most likely
+ * leads towards it (job board -> company site -> ATS form can take several
+ * hops). The extension sends the candidates it found; we return one index.
+ */
+function apiChooseNextStep_(req) {
+  var candidates = (req.candidates || []).slice(0, 40);
+  var decision = callClaudeJSON(
+    'You are navigating a web browser towards the online application FORM for a specific job. ' +
+    'The current page is not the form yet. Choose the ONE clickable element most likely to lead to ' +
+    'the application form for this job (e.g. "Apply", "Apply now", "Apply on company website", ' +
+    '"Start application", "I\'m interested", "Continue"). ' +
+    'The browser CAN sign in and create accounts for the candidate (it has saved credentials and fills ' +
+    'sign-up forms itself), so when the site requires an account, choose the element that leads to ' +
+    'registration or sign-in ("Register", "Create account", "Sign up", "Sign in to apply") - but prefer ' +
+    '"Apply as guest"/"Apply without an account" when offered, and prefer a real Apply button over a ' +
+    'generic header "Sign in". Never choose share/save/job-alert/similar-job/cookie elements, never ' +
+    '"Sign in with Google/LinkedIn/Facebook/Apple" (social login), and never an element listed under ' +
+    'ALREADY TRIED. Pages may be in any language (e.g. German "Jetzt bewerben", "Weiter", "Registrieren"). ' +
+    'If the page says the job is closed or expired, answer "closed". Answer "human" only ' +
+    'for things the browser cannot do (payment, identity documents, an assessment to sit) or when no ' +
+    'element plausibly leads towards the application. ' +
+    'Return JSON: {"action": "click|closed|human", "index": number|null, "reason": "short string"}',
+    'TARGET JOB: ' + (req.jobTitle || 'unknown') + ' at ' + (req.company || 'unknown') +
+    '\nCURRENT URL: ' + (req.url || '') +
+    '\nPAGE TITLE: ' + (req.title || '') +
+    '\n\nPAGE TEXT (start):\n' + String(req.pageText || '').slice(0, 3000) +
+    '\n\nCLICKABLE CANDIDATES:\n' + JSON.stringify(candidates) +
+    '\n\nALREADY TRIED: ' + JSON.stringify(req.tried || []),
+    300
+  );
+  saveAIOutput('NextStepChooser', req.candidateId || '', '', { url: req.url, candidates: candidates, decision: decision });
+
+  var action = ['click', 'closed', 'human'].indexOf(decision.action) > -1 ? decision.action : 'human';
+  var index = action === 'click' ? Number(decision.index) : null;
+  if (action === 'click' && !candidates.some(function (c) { return c.index === index; })) action = 'human';
+  return { action: action, index: action === 'click' ? index : null, reason: decision.reason || '' };
 }
 
 function apiRequestReview_(req) {
@@ -409,6 +506,96 @@ function apiRecordPlatformAccount_(req) {
   return { recorded: true, accountId: id };
 }
  
+/* ------------------------- candidate site accounts ------------------------- */
+
+/**
+ * Accounts created for candidates on job sites that require one (Workday
+ * tenants, iCIMS, company career portals...): one per candidate per site
+ * host, reused on every later application to that host.
+ *
+ * Each account gets its own random password, kept in Script Properties
+ * (PLATFORM_PW_<AccountID>) - never in the sheet, which only shows site,
+ * email and status. Reviewers who need to log in by hand reveal a password
+ * from the dashboard (allowlisted Google accounts only).
+ *
+ * Status: Pending (sign-up submitted, not confirmed yet), Created (usable),
+ * Blocked-EmailVerification, Blocked-CAPTCHA, LoginFailed, Failed.
+ */
+var ACCOUNT_PW_PREFIX_ = 'PLATFORM_PW_';
+
+/** Saved account for this candidate + site; with req.create, makes one (password generated here) if none exists. */
+function apiPlatformAccount_(req) {
+  ensureColumns_('PlatformAccounts', ['Email', 'LoginURL']);
+  var cand = findRow('Candidates', 'CandidateID', req.candidateId);
+  if (!cand) throw new Error('Candidate not found');
+  var domain = normaliseDomain_(req.atsDomain || req.jobUrl);
+  var email = String(cand.ApplicationEmail || cand.Email || '').trim();
+
+  var existing = latestAccount_(req.candidateId, domain);
+  if (existing) {
+    var saved = PropertiesService.getScriptProperties().getProperty(ACCOUNT_PW_PREFIX_ + existing.AccountID);
+    return {
+      found: true, created: false, accountId: existing.AccountID, status: existing.Status,
+      email: existing.Email || email,
+      // Accounts the Workday worker made before per-site passwords used the intake password
+      password: saved || String(cand.ApplicationPassword || '') || null
+    };
+  }
+  if (!req.create) return { found: false };
+  if (!email) throw new Error('Candidate has no application email on file - add ApplicationEmail before creating site accounts.');
+
+  var id = newId('ACC');
+  var password = generateSitePassword_();
+  // Saved before the sign-up form is even submitted, so the password is never lost
+  PropertiesService.getScriptProperties().setProperty(ACCOUNT_PW_PREFIX_ + id, password);
+  appendObject('PlatformAccounts', {
+    AccountID: id, CreatedAt: new Date(), CandidateID: req.candidateId, ATSDomain: domain, Email: email,
+    LoginURL: req.jobUrl || '', Status: 'Pending', Notes: 'Sign-up started by the extension', UpdatedAt: new Date()
+  });
+  logActivity('extension', 'platform_account_signup', 'candidate', req.candidateId, domain);
+  return { found: true, created: true, accountId: id, status: 'Pending', email: email, password: password };
+}
+
+function apiUpdatePlatformAccount_(req) {
+  var acct = findRow('PlatformAccounts', 'AccountID', req.accountId);
+  if (!acct) throw new Error('Platform account not found: ' + req.accountId);
+  updateRow('PlatformAccounts', acct._row, { Status: req.status, Notes: req.notes || acct.Notes, UpdatedAt: new Date() });
+  logActivity('extension', 'platform_account_' + req.status, 'candidate', acct.CandidateID, acct.ATSDomain);
+  return { updated: true };
+}
+
+/** Latest account for candidate + site, ignoring sign-ups that failed outright. */
+function latestAccount_(candidateId, domain) {
+  var rows = readRows('PlatformAccounts').filter(function (a) {
+    return a.CandidateID === candidateId && a.ATSDomain === domain && a.Status !== 'Failed';
+  });
+  rows.sort(function (a, b) { return new Date(b.CreatedAt) - new Date(a.CreatedAt); });
+  return rows[0] || null;
+}
+
+/** 14 characters with upper, lower, digit and symbol - satisfies typical ATS password rules. */
+function generateSitePassword_() {
+  var sets = ['ABCDEFGHJKLMNPQRSTUVWXYZ', 'abcdefghijkmnpqrstuvwxyz', '23456789', '!@#$%*'];
+  var all = sets.join('');
+  var bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256,
+    Utilities.getUuid() + Utilities.getUuid() + Date.now());
+  var chars = sets.map(function (s, i) { return s.charAt((bytes[i] & 0xff) % s.length); });
+  for (var i = 4; i < 14; i++) chars.push(all.charAt((bytes[i] & 0xff) % all.length));
+  for (var j = chars.length - 1; j > 0; j--) {
+    var k = (bytes[14 + j] & 0xff) % (j + 1);
+    var t = chars[j]; chars[j] = chars[k]; chars[k] = t;
+  }
+  return chars.join('');
+}
+
+/** Adds any missing header columns to an existing sheet (sheets created before a column existed). */
+function ensureColumns_(name, cols) {
+  var sh = sheet_(name);
+  var map = getHeaderMap_(sh);
+  var next = sh.getLastColumn() + 1;
+  cols.forEach(function (c) { if (!map[c]) sh.getRange(1, next++).setValue(c); });
+}
+
 /**
  * NEW: exports a generated CV/cover letter Google Doc as a PDF and returns it
  * base64-encoded, so the Playwright worker can attach the real file to an
@@ -416,15 +603,40 @@ function apiRecordPlatformAccount_(req) {
  * the same API_TOKEN it already authenticates with. Fine for CV/cover-letter
  * sized documents; not meant for large files (Apps Script response limits).
  */
+/**
+ * Exports a generated Google Doc (CV / cover letter) for upload by the
+ * extension or worker. req.format: 'pdf' (default), 'docx' for ATS upload
+ * fields that reject PDFs, or 'txt' to paste a cover letter into a textarea.
+ */
 function apiExportDocumentPdf_(req) {
   var id = extractDocId_(req.docUrl);
   if (!id) throw new Error('Could not parse a Google Doc ID from docUrl: ' + req.docUrl);
+  var format = req.format || 'pdf';
+
+  if (format === 'txt') {
+    return { text: DocumentApp.openById(id).getBody().getText() };
+  }
+
+  if (format === 'docx') {
+    var res = UrlFetchApp.fetch('https://docs.google.com/document/d/' + id + '/export?format=docx', {
+      headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() },
+      muteHttpExceptions: true
+    });
+    if (res.getResponseCode() !== 200) throw new Error('DOCX export failed: HTTP ' + res.getResponseCode());
+    return {
+      base64: Utilities.base64Encode(res.getBlob().getBytes()),
+      filename: DriveApp.getFileById(id).getName() + '.docx',
+      mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    };
+  }
+
   var blob = DriveApp.getFileById(id).getAs(MimeType.PDF);
-  return { base64: Utilities.base64Encode(blob.getBytes()), filename: blob.getName() };
+  return { base64: Utilities.base64Encode(blob.getBytes()), filename: blob.getName(), mimeType: 'application/pdf' };
 }
  
 function extractDocId_(url) {
-  var m = String(url || '').match(/\/d\/([-\w]{25,})/);
+  // Accepts both .../d/<id>/edit and Drive's .../open?id=<id> forms
+  var m = String(url || '').match(/\/d\/([-\w]{25,})/) || String(url || '').match(/[?&]id=([-\w]{25,})/);
   return m ? m[1] : null;
 }
  
@@ -488,10 +700,41 @@ function dashData() {
       return { id: f.FollowUpID, cand: f.CandidateID, type: f.Type, company: f.Company,
                title: f.JobTitle, due: String(f.DueDate), status: f.Status, notes: f.Notes };
     }),
+    // Passwords are deliberately not included - see dashRevealAccountPassword
+    accounts: (sheet_('PlatformAccounts') ? readRows('PlatformAccounts') : []).map(function (a) {
+      return { id: a.AccountID, cand: a.CandidateID, site: a.ATSDomain, email: a.Email || '',
+               status: a.Status, notes: a.Notes, updated: String(a.UpdatedAt || a.CreatedAt) };
+    }),
     report: latestReport_()
   };
 }
  
+/**
+ * Shows a saved site password so a reviewer can log in by hand (e.g. to click
+ * an email-verification link and finish an account). The web app is reachable
+ * anonymously, so this only answers signed-in Google accounts listed in Config
+ * ACCOUNT_REVEAL_EMAILS - by default just the account that deployed the script.
+ * Every reveal is logged.
+ */
+function dashRevealAccountPassword(accountId) {
+  var viewer = String(Session.getActiveUser().getEmail() || '').toLowerCase();
+  var allowed = (getConfig('ACCOUNT_REVEAL_EMAILS') || Session.getEffectiveUser().getEmail())
+    .split(',').map(function (s) { return s.trim().toLowerCase(); }).filter(Boolean);
+  if (!viewer || allowed.indexOf(viewer) === -1) {
+    throw new Error('Only authorised reviewers can reveal passwords. Open the dashboard while signed in to an ' +
+      'authorised Google account (Config: ACCOUNT_REVEAL_EMAILS).');
+  }
+  var acct = findRow('PlatformAccounts', 'AccountID', accountId);
+  if (!acct) throw new Error('Account not found');
+  var pw = PropertiesService.getScriptProperties().getProperty(ACCOUNT_PW_PREFIX_ + accountId);
+  if (!pw) {
+    var cand = findRow('Candidates', 'CandidateID', acct.CandidateID);
+    pw = cand && cand.ApplicationPassword ? String(cand.ApplicationPassword) : '';
+  }
+  logActivity(viewer, 'account_password_revealed', 'account', accountId, acct.ATSDomain);
+  return { site: acct.ATSDomain, email: acct.Email || '', password: pw || '(no password saved)' };
+}
+
 function dashDecide(taskId, decision, notes) {
   var t = findRow('ReviewQueue', 'TaskID', taskId);
   if (!t) throw new Error('Task not found');
@@ -640,7 +883,8 @@ function normaliseJobKey_(url, company, title) {
 function normaliseDomain_(urlOrDomain) {
   var s = String(urlOrDomain || '');
   var m = s.match(/^https?:\/\/([^\/]+)/i);
-  return (m ? m[1] : s).toLowerCase();
+  // www.lemon.io and lemon.io are the same account
+  return (m ? m[1] : s).toLowerCase().replace(/^www\./, '');
 }
  
 function notifyReviewers_(subject, body) {

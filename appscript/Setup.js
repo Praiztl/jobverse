@@ -58,15 +58,15 @@ var JV = {
     ActivityLog: ['Timestamp', 'Actor', 'Action', 'RefType', 'RefID', 'Detail'],
     Reports: ['GeneratedAt', 'Period', 'MetricsJSON', 'Summary'],
     Config: ['Key', 'Value', 'Notes'],
-    // NEW: tracks per-candidate, per-ATS-tenant accounts created for sign-in
-    // walls (Workday etc). ATSDomain is the actual tenant hostname (e.g.
+    // Per-candidate, per-site accounts created for sign-in walls (Workday,
+    // iCIMS, career portals...). ATSDomain is the actual site hostname (e.g.
     // acmecorp.wd5.myworkdayjobs.com), never just "Workday" - each employer's
-    // instance is a separate account. Status: 'Created' (usable, sign in next
-    // time), 'Blocked-CAPTCHA', 'Blocked-EmailVerification', or 'Failed'.
-    // Always uses the candidate's existing ApplicationEmail/ApplicationPassword -
-    // no separate credentials stored here.
+    // instance is a separate account. Status: 'Pending', 'Created',
+    // 'Blocked-CAPTCHA', 'Blocked-EmailVerification', 'LoginFailed', 'Failed'.
+    // Each account's random password lives in Script Properties
+    // (PLATFORM_PW_<AccountID>), never in this sheet - see Api.gs.
     PlatformAccounts: [
-      'AccountID', 'CreatedAt', 'CandidateID', 'ATSDomain', 'Status', 'Notes', 'UpdatedAt'
+      'AccountID', 'CreatedAt', 'CandidateID', 'ATSDomain', 'Email', 'LoginURL', 'Status', 'Notes', 'UpdatedAt'
     ]
   },
 
@@ -78,6 +78,7 @@ var JV = {
     ['DEFAULT_TONE', 'Jobverse Standard', 'Tone profile applied unless overridden.'],
     ['REPORT_EMAILS', '', 'Comma separated emails for daily report.'],
     ['MAX_APPS_PER_CANDIDATE_PER_DAY', '15', 'Safety throttle: max applications started per candidate per day.'],
+    ['ACCOUNT_REVEAL_EMAILS', '', 'Comma separated Google accounts allowed to reveal saved job-site passwords in the dashboard. Blank = only the deploying account.'],
     ['DEFAULT_TARGET_APPLICATIONS', '50', 'Default total application goal assigned to each new candidate. Editable per candidate in the dashboard.'],
     ['REVIEW_REQUIRED', 'TRUE', 'If TRUE, extension will not submit without an approved review task.'],
     ['ADZUNA_APP_ID', '', 'Free at developer.adzuna.com. Needed for the Prospect Finder (Prospects.gs).'],
