@@ -691,7 +691,7 @@ function dashData() {
       }),
     prospects: readRows('Prospects').map(function (p) {
       return { id: p.ProspectID, cand: p.CandidateID, company: p.Company, title: p.JobTitle,
-               url: p.JobURL, status: p.Status, source: p.Source };
+               url: p.JobURL, status: p.Status, source: p.Source, found: toEpochMs_(p.FoundAt) };
     }),
     log: readRows('ActivityLog').slice(-60).reverse().map(function (l) {
       return { t: String(l.Timestamp), actor: l.Actor, action: l.Action, detail: l.Detail };
@@ -709,6 +709,17 @@ function dashData() {
   };
 }
  
+/**
+ * A sheet date cell (Date object or typed-in text) as milliseconds since 1970,
+ * or 0 when it's blank or unreadable. google.script.run can't pass Date
+ * objects to the page, but it can pass numbers, and numbers sort cleanly.
+ */
+function toEpochMs_(v) {
+  if (!v) return 0;
+  var t = (v instanceof Date) ? v.getTime() : new Date(v).getTime();
+  return isNaN(t) ? 0 : t;
+}
+
 /**
  * Shows a saved site password so a reviewer can log in by hand (e.g. to click
  * an email-verification link and finish an account). The web app is reachable

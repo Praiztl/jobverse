@@ -53,6 +53,11 @@
     .tog input{width:auto}
     .filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:end}
     .filters > div{flex:1;min-width:130px}
+    .pager{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px}
+    .pager .pg{display:flex;align-items:center;gap:6px}
+    .pager select{width:auto;padding:4px 6px}
+    .pager .btn{background:#fff;color:var(--pine);border:1px solid var(--line)}
+    .pager .btn:disabled{opacity:.45;cursor:default}
     .faq{border-bottom:1px solid var(--line);padding:10px 0}
     .faq summary{font-weight:600;cursor:pointer;font-size:14px}
     .faq p, .faq li{font-size:13.5px;color:#33413A;line-height:1.55;margin-top:6px}
@@ -237,6 +242,22 @@ function render(){
     let rows = D.prospects;
     if(F.prosCand) rows = rows.filter(p => p.cand === F.prosCand);
     if(F.prosStatus) rows = rows.filter(p => p.status === F.prosStatus);
+
+    // Sort by the day the job was found. Rows with no FoundAt always go last.
+    const sort = F.prosSort || 'newest';
+    const dir = sort === 'oldest' ? 1 : -1;
+    rows = rows.slice().sort((a, b) => {
+      if(!a.found !== !b.found) return a.found ? -1 : 1;
+      return (a.found - b.found) * dir;
+    });
+
+    // Pagination. Page is clamped so a filter or a refresh can't strand you on an empty page.
+    const size = F.prosSize || 25;
+    const total = rows.length;
+    const pages = Math.max(1, Math.ceil(total / size));
+    F.prosPage = Math.min(Math.max(1, F.prosPage || 1), pages);
+    const start = (F.prosPage - 1) * size;
+    const pageRows = rows.slice(start, start + size);
     m.innerHTML = `<h1>Prospects</h1>
       <div class="card">
         <label>Find jobs for candidate</label>
@@ -250,17 +271,33 @@ function render(){
       <div class="filters">
         <div><label>Candidate</label><select onchange="setFilter('prosCand',this.value)">${opts(cands, F.prosCand)}</select></div>
         <div><label>Status</label><select onchange="setFilter('prosStatus',this.value)">${opts(statuses, F.prosStatus)}</select></div>
+        <div><label>Date found</label><select onchange="setFilter('prosSort',this.value)">
+          <option value="newest" ${sort==='newest'?'selected':''}>Newest first</option>
+          <option value="oldest" ${sort==='oldest'?'selected':''}>Oldest first</option>
+        </select></div>
       </div>
-      <div class="card"><table><tr><th>Candidate</th><th>Company</th><th>Role</th><th>Source</th><th>Status</th><th>Link</th><th>Action</th></tr>` +
-      (rows.length ? rows.map(p => `<tr>
+      <div class="card"><table><tr><th>Found</th><th>Candidate</th><th>Company</th><th>Role</th><th>Source</th><th>Status</th><th>Link</th><th>Action</th></tr>` +
+      (pageRows.length ? pageRows.map(p => `<tr>
+        <td class="mut" style="white-space:nowrap" title="${esc(p.found ? new Date(p.found).toLocaleString('en-GB') : 'No date recorded')}">${esc(foundDay(p.found))}</td>
         <td class="mut">${esc(p.cand)}</td><td><b>${esc(p.company)}</b></td><td>${esc(p.title)}</td><td class="mut">${esc(p.source||'')}</td>
         <td>${chip(p.status)}</td><td>${p.url?`<a href="${esc(p.url)}">open</a>`:''}</td>
         <td>${p.status === 'Queued' ? '<span class="mut">queued</span>' :
           `<button class="btn approve tiny" onclick="prospectAction('${p.id}','Queued')">Queue</button>
            <button class="btn reject tiny" onclick="prospectAction('${p.id}','Skipped')">Skip</button>`}</td>
         </tr>`).join('') :
-      '<tr><td colspan="7" class="mut">No prospects match. Use "Find jobs" above, or add rows manually in the Prospects tab of the sheet.</td></tr>') +
-      '</table></div>';
+      '<tr><td colspan="8" class="mut">No prospects match. Use "Find jobs" above, or add rows manually in the Prospects tab of the sheet.</td></tr>') +
+      '</table>' + (total ? `
+        <div class="pager">
+          <span class="mut">Showing ${start + 1}-${start + pageRows.length} of ${total}</span>
+          <div class="pg">
+            <button class="btn tiny" ${F.prosPage <= 1 ? 'disabled' : ''} onclick="setFilter('prosPage', F.prosPage - 1)">&lsaquo; Prev</button>
+            <span class="mut">Page ${F.prosPage} of ${pages}</span>
+            <button class="btn tiny" ${F.prosPage >= pages ? 'disabled' : ''} onclick="setFilter('prosPage', F.prosPage + 1)">Next &rsaquo;</button>
+            <select onchange="setFilter('prosSize', Number(this.value))">
+              ${[25, 50, 100].map(n => `<option value="${n}" ${n===size?'selected':''}>${n} per page</option>`).join('')}
+            </select>
+          </div>
+        </div>` : '') + '</div>';
   }
  
   if(view === 'followups'){
@@ -346,7 +383,23 @@ function renderFindings(t){
   return `<div class="findings">${esc(pretty(t.findings))}</div>`;
 }
  
-function setFilter(key, val){ F[key] = val; render(); }
+function setFilter(key, val){
+  F[key] = val;
+  if(key !== 'prosPage') F.prosPage = 1; // any new filter, sort or page size starts back at page 1
+  render();
+}
+
+/** "Today", "Yesterday", or a short date like "3 Oct" (year added when it isn't this year). */
+function foundDay(ts){
+  if(!ts) return '-';
+  const d = new Date(ts), now = new Date();
+  const days = Math.round((new Date(now.toDateString()) - new Date(d.toDateString())) / 86400000);
+  if(days === 0) return 'Today';
+  if(days === 1) return 'Yesterday';
+  const o = { day: 'numeric', month: 'short' };
+  if(d.getFullYear() !== now.getFullYear()) o.year = 'numeric';
+  return d.toLocaleDateString('en-GB', o);
+}
 
 function setFindJobsCandidate(candId) { 
   F.pCand = candId;
