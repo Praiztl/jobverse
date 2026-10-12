@@ -335,13 +335,16 @@ function apiChooseNextStep_(req) {
     'generic header "Sign in". Never choose share/save/job-alert/similar-job/cookie elements, never ' +
     '"Sign in with Google/LinkedIn/Facebook/Apple" (social login), and never an element listed under ' +
     'ALREADY TRIED. Pages may be in any language (e.g. German "Jetzt bewerben", "Weiter", "Registrieren"). ' +
-    'If the page says the job is closed or expired, answer "closed". Answer "human" only ' +
+    'If the page says the job is closed or expired, answer "closed". If the page still looks like it is ' +
+    'loading (spinner, "Loading...", skeleton placeholders, almost no text or elements) answer "wait". ' +
+    'A site requiring an account or sign-in is NEVER a reason to answer "human". Answer "human" only ' +
     'for things the browser cannot do (payment, identity documents, an assessment to sit) or when no ' +
     'element plausibly leads towards the application. ' +
-    'Return JSON: {"action": "click|closed|human", "index": number|null, "reason": "short string"}',
+    'Return JSON: {"action": "click|closed|wait|human", "index": number|null, "reason": "short string"}',
     'TARGET JOB: ' + (req.jobTitle || 'unknown') + ' at ' + (req.company || 'unknown') +
     '\nCURRENT URL: ' + (req.url || '') +
     '\nPAGE TITLE: ' + (req.title || '') +
+    (req.loading ? '\nNOTE: the browser thinks this page may still be loading.' : '') +
     '\n\nPAGE TEXT (start):\n' + String(req.pageText || '').slice(0, 3000) +
     '\n\nCLICKABLE CANDIDATES:\n' + JSON.stringify(candidates) +
     '\n\nALREADY TRIED: ' + JSON.stringify(req.tried || []),
@@ -349,7 +352,7 @@ function apiChooseNextStep_(req) {
   );
   saveAIOutput('NextStepChooser', req.candidateId || '', '', { url: req.url, candidates: candidates, decision: decision });
 
-  var action = ['click', 'closed', 'human'].indexOf(decision.action) > -1 ? decision.action : 'human';
+  var action = ['click', 'closed', 'wait', 'human'].indexOf(decision.action) > -1 ? decision.action : 'human';
   var index = action === 'click' ? Number(decision.index) : null;
   if (action === 'click' && !candidates.some(function (c) { return c.index === index; })) action = 'human';
   return { action: action, index: action === 'click' ? index : null, reason: decision.reason || '' };
