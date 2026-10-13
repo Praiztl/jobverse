@@ -121,17 +121,31 @@ function testQueueAllData() {
   console.log('============================');
 }
  
-function load(){
+// background = the periodic refresh (or a refresh after an action): the data is
+// updated, but the page is only redrawn if that won't wipe something being typed.
+function load(background){
   google.script.run
-    .withSuccessHandler(d => { D = d; render(); })
+    .withSuccessHandler(d => {
+      D = d;
+      if(background && userIsEditing()) { document.getElementById('revCount').textContent = D.reviews.length; return; }
+      render();
+    })
     .withFailureHandler(e => {
+      if(background) { console.warn('Background refresh failed:', e.message); return; }
       document.getElementById('main').innerHTML =
         `<h1>Connection error</h1><div class="card"><p style="color:var(--red);font-weight:600">${esc(e.message)}</p>
          <p class="mut" style="margin-top:8px">The backend threw an error. Check Apps Script's Executions panel (clock icon) for the full stack trace.</p></div>`;
     })
     .dashData();
 }
-load(); setInterval(load, 45000);
+load(); setInterval(() => load(true), 45000);
+
+/** True while redrawing would lose the user's input: the Generate form, or any focused field. */
+function userIsEditing(){
+  if(view === 'generate') return true; // its form holds typed text and nothing on it needs live data
+  const a = document.activeElement;
+  return !!a && document.getElementById('main').contains(a) && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName);
+}
  
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   view = b.dataset.v;
@@ -163,9 +177,11 @@ function render(){
   const m = document.getElementById('main');
  
   if(view === 'reviews'){
-    m.innerHTML = '<h1>Review queue</h1>' + (D.reviews.length ? '' :
+    // Newest first. The sheet is oldest-first, so reversing it first keeps undated rows newest-first too.
+    const reviews = D.reviews.slice().reverse().sort((a, b) => (b.createdMs || 0) - (a.createdMs || 0));
+    m.innerHTML = '<h1>Review queue</h1>' + (reviews.length ? '' :
       '<p class="mut">Nothing waiting. New CVs, cover letters, NHS statements and paused submissions appear here.</p>') +
-      D.reviews.map(t => `
+      reviews.map(t => `
         <div class="card">
           <b>${esc(t.summary)}</b> <span class="mut">${esc(t.type)} · ${esc(t.cand)} · score ${esc(t.score||'-')}</span>
           ${renderFindings(t)}
@@ -313,7 +329,7 @@ function render(){
           <td>${chip(f.status)}</td>
           <td>${f.status==='Pending'?`<button class="btn approve tiny" onclick="markFollowUpDone('${f.id}')">Mark done</button>`:'<span class="mut">-</span>'}</td>
         </tr>`;
-      }).join('') : '<tr><td colspan="6" class="mut">Nothing tracked yet. NHS applications automatically log a Trac claim/verify follow-up here after submission.</td></tr>') +
+      }).join('') : '<tr><td colspan="6" class="mut">Nothing tracked yet. Every submitted application gets a follow-up here (NHS applications also get a Trac claim/verify one).</td></tr>') +
       '</table></div>';
   }
  
@@ -420,7 +436,7 @@ function gen(){
   google.script.run.withSuccessHandler(r => {
     document.getElementById('gMsg').innerHTML =
       `Done: <a href="${r.cvUrl}">CV</a> · <a href="${r.letterUrl}">Cover letter</a> (both queued for review)`;
-    load();
+    load(true);
   }).withFailureHandler(e => { document.getElementById('gMsg').textContent = 'Error: ' + e.message; })
     .dashGenerate(document.getElementById('gCand').value, jd, document.getElementById('gUrl').value, document.getElementById('gTone').value);
 }
@@ -525,8 +541,15 @@ function queueAll(){
 }
  
 function prospectAction(id, status){
-  google.script.run.withSuccessHandler(() => { toast(status); load(); })
-    .withFailureHandler(e => toast('Error: ' + e.message)).dashSetProspectStatus(id, status);
+  const p = D.prospects.find(x => x.id === id);
+  if(!p) return;
+  const before = p.status;
+  p.status = status; // show it straight away; the sheet is updated in the background
+  render();
+  toast(status);
+  google.script.run
+    .withFailureHandler(e => { p.status = before; render(); toast('Error: ' + e.message); })
+    .dashSetProspectStatus(id, status);
 }
  
 function setActive(id, active){

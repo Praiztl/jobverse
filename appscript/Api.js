@@ -410,10 +410,15 @@ function apiConfirmSubmission_(req) {
       .getFoldersByName('Screenshots').next().createFile(blob);
     shotUrl = f.getUrl();
   }
+  var submittedAt = new Date();
   updateRow('Applications', app._row, {
-    Status: 'Submitted', SubmittedAt: new Date(), ConfirmationScreenshotURL: shotUrl
+    Status: 'Submitted', SubmittedAt: submittedAt, ConfirmationScreenshotURL: shotUrl
   });
   logActivity('extension', 'application_submitted', 'application', req.applicationId, app.Company);
+  app.SubmittedAt = submittedAt;
+  // The submission is recorded either way - a follow-up hiccup mustn't make the caller think it wasn't
+  try { createSubmissionFollowUp(app); }
+  catch (e) { logActivity('system', 'followup_error', 'application', req.applicationId, e.message); }
   return { recorded: true, screenshotUrl: shotUrl };
 }
  
@@ -690,7 +695,8 @@ function dashData() {
     reviews: readRows('ReviewQueue').filter(function (t) { return t.Status === 'Awaiting Human'; })
       .map(function (t) {
         return { id: t.TaskID, type: t.Type, cand: t.CandidateID, summary: t.Summary,
-                 score: t.AIScore, findings: t.AIFindings, created: String(t.CreatedAt) };
+                 score: t.AIScore, findings: t.AIFindings, created: String(t.CreatedAt),
+                 createdMs: toEpochMs_(t.CreatedAt) };
       }),
     prospects: readRows('Prospects').map(function (p) {
       return { id: p.ProspectID, cand: p.CandidateID, company: p.Company, title: p.JobTitle,

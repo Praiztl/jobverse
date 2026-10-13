@@ -88,7 +88,8 @@ var JV = {
     ['REED_API_KEY', '', 'Free at reed.co.uk/developers. UK-only source for the Prospect Finder.'],
     ['RAPIDAPI_KEY', '', 'Free/metered at rapidapi.com, subscribe to the JSearch API. Broader global coverage for the Prospect Finder.'],
     ['PROSPECT_SOURCES', 'adzuna,reed,jsearch', 'Comma separated list of sources to use. A source with no key set is skipped silently.'],
-    ['NHS_TRAC_FOLLOWUP_DEFAULT_DAYS', '14', 'If the vacancy closing date cannot be found on the NHS Jobs page, the Trac follow-up is scheduled this many days out instead.']
+    ['NHS_TRAC_FOLLOWUP_DEFAULT_DAYS', '14', 'If the vacancy closing date cannot be found on the NHS Jobs page, the Trac follow-up is scheduled this many days out instead.'],
+    ['FOLLOWUP_DAYS_AFTER_SUBMIT', '7', 'Every submitted application gets a follow-up (chase the employer) due this many days after submission.']
   ],
 
   TONE_DEFAULTS: [

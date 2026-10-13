@@ -1,10 +1,10 @@
 /**
  * JOBVERSE MVP - FollowUps.gs
  * Tracks tasks that are logged automatically but require a human at a later
- * date - currently just the NHS Trac claim/verify step, which can only
- * happen after a vacancy closes and needs the candidate's own identity
- * verification (see RISK_MITIGATION.md / README Part 2 for why that step
- * can't be automated).
+ * date: chasing the employer on every submitted application, and the NHS
+ * Trac claim/verify step, which can only happen after a vacancy closes and
+ * needs the candidate's own identity verification (see RISK_MITIGATION.md /
+ * README Part 2 for why that step can't be automated).
  */
 
 function createFollowUp(candidateId, applicationId, type, company, jobTitle, dueDate, notes) {
@@ -40,8 +40,48 @@ function createNHSTracFollowUp(candidateId, applicationId, company, jobTitle, cl
     closingDateStr ? 'Closing date detected: ' + closingDateStr : 'No closing date detected on the posting - used the default window instead.');
 }
 
+/**
+ * The follow-up every submitted application gets: chase the employer
+ * FOLLOWUP_DAYS_AFTER_SUBMIT days after submission. One per application -
+ * returns the existing id if it's already been logged.
+ */
+function createSubmissionFollowUp(app) {
+  var existing = readRows('FollowUps').filter(function (f) {
+    return f.ApplicationID === app.ApplicationID && f.Type === 'Application Follow-up';
+  })[0];
+  if (existing) return existing.FollowUpID;
+  var days = parseInt(getConfig('FOLLOWUP_DAYS_AFTER_SUBMIT') || '7', 10);
+  var submitted = app.SubmittedAt ? new Date(app.SubmittedAt) : new Date();
+  if (isNaN(submitted.getTime())) submitted = new Date();
+  var due = new Date(submitted.getTime() + days * 24 * 60 * 60 * 1000);
+  return createFollowUp(app.CandidateID, app.ApplicationID, 'Application Follow-up', app.Company, app.JobTitle, due,
+    'Submitted ' + Utilities.formatDate(submitted, 'GMT', 'yyyy-MM-dd') + ' - check for a reply and chase the employer if there is none.');
+}
+
+/**
+ * Logs the follow-up for any Submitted application that doesn't have one yet
+ * (applications submitted before follow-ups were automatic, or marked
+ * Submitted by hand in the sheet). Run once from the editor to backfill; the
+ * daily reminder trigger also runs it as a safety net.
+ */
+function backfillSubmissionFollowUps() {
+  var have = {};
+  readRows('FollowUps').forEach(function (f) {
+    if (f.Type === 'Application Follow-up') have[f.ApplicationID] = true;
+  });
+  var added = 0;
+  readRows('Applications').forEach(function (a) {
+    if (a.Status === 'Submitted' && a.ApplicationID && !have[a.ApplicationID]) {
+      createSubmissionFollowUp(a);
+      added++;
+    }
+  });
+  return added + ' follow-up(s) added.';
+}
+
 /** Daily 07:30 trigger. Emails REPORT_EMAILS anything due today or overdue and not yet done. */
 function sendDueFollowUpReminders() {
+  backfillSubmissionFollowUps();
   var today = new Date(); today.setHours(23, 59, 59, 999);
   var due = readRows('FollowUps').filter(function (f) {
     return f.Status === 'Pending' && new Date(f.DueDate) <= today;
