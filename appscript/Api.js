@@ -334,7 +334,10 @@ function apiChooseNextStep_(req) {
     '"Apply as guest"/"Apply without an account" when offered, and prefer a real Apply button over a ' +
     'generic header "Sign in". Never choose share/save/job-alert/similar-job/cookie elements, never ' +
     '"Sign in with Google/LinkedIn/Facebook/Apple" (social login), and never an element listed under ' +
-    'ALREADY TRIED. Pages may be in any language (e.g. German "Jetzt bewerben", "Weiter", "Registrieren"). ' +
+    'ALREADY TRIED. Job posts (Notion pages, blogs, careers pages) often end with "How to apply: please apply ' +
+    'via this form -> <link>" where the link text is just a name (e.g. "The Acme Creative Network") - each ' +
+    'candidate\'s "context" field is the text around it and HOW-TO-APPLY TEXT quotes those instructions, so a ' +
+    'link the instructions point to IS the way to apply, whatever its own text says. Pages may be in any language (e.g. German "Jetzt bewerben", "Weiter", "Registrieren"). ' +
     'If the page says the job is closed or expired, answer "closed". If the page still looks like it is ' +
     'loading (spinner, "Loading...", skeleton placeholders, almost no text or elements) answer "wait". ' +
     'A site requiring an account or sign-in is NEVER a reason to answer "human". Answer "human" only ' +
@@ -346,6 +349,7 @@ function apiChooseNextStep_(req) {
     '\nPAGE TITLE: ' + (req.title || '') +
     (req.loading ? '\nNOTE: the browser thinks this page may still be loading.' : '') +
     '\n\nPAGE TEXT (start):\n' + String(req.pageText || '').slice(0, 3000) +
+    (req.applySection ? '\n\nHOW-TO-APPLY TEXT (found further down the page):\n' + String(req.applySection).slice(0, 1500) : '') +
     '\n\nCLICKABLE CANDIDATES:\n' + JSON.stringify(candidates) +
     '\n\nALREADY TRIED: ' + JSON.stringify(req.tried || []),
     300
