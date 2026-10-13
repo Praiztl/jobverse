@@ -108,10 +108,18 @@ function runResumeBuilder(candidateId, jobId, toneName) {
     '\n\nCONTACT: ' + cand.FullName + ', ' + cand.Email + ', ' + cand.Phone + ', ' + cand.Location +
     (cand.LinkedIn ? ', ' + cand.LinkedIn : '') +
     '\n\nTARGET JOB ANALYSIS:\n' + job.AnalysisJSON +
+    '\n\nWriting rules: headline is the target role title plus one specialism, under 10 words. ' +
+    'profile_summary is 3-4 sentences, no first person pronouns. skills is 8-14 short ' +
+    'items (1-3 words each), most relevant to the job first. Experience is reverse ' +
+    'chronological; each role has 3-6 bullets that start with a strong past-tense verb ' +
+    '(present tense for a current role), lead with impact, and keep any numbers from the ' +
+    'profile. Format dates as "Mon YYYY - Mon YYYY" or "Mon YYYY - Present" where the ' +
+    'profile allows, otherwise copy them as given. Leave location empty if unknown.' +
     '\n\nReturn JSON: {"headline": string, "profile_summary": string, ' +
     '"skills": [string], "experience": [{"employer": string, "title": string, ' +
-    '"dates": string, "bullets": [string]}], "education": [{"line": string}], ' +
-    '"certifications": [string]}',
+    '"location": string, "dates": string, "bullets": [string]}], ' +
+    '"education": [{"qualification": string, "institution": string, "year": string, ' +
+    '"line": string}], "certifications": [string]}',
     4000
   );
 
@@ -134,33 +142,92 @@ function runResumeBuilder(candidateId, jobId, toneName) {
   return versionId;
 }
 
+/**
+ * Renders the CV as a modern, single-column Google Doc: accent-coloured name,
+ * linked contact line, ruled section headings, role title + employer meta
+ * lines, and tight bullets. Deliberately avoids tables, columns, text boxes
+ * and images so ATS parsers read the exported PDF/DOCX in the right order.
+ * Font and accent colour come from Config (CV_FONT, CV_ACCENT_COLOR).
+ */
 function renderCVDoc_(cand, job, cv, versionId) {
   var doc = DocumentApp.create(cand.FullName + ' CV - ' + job.Company + ' - ' + versionId);
   var body = doc.getBody();
-  body.setAttributes(styleAttrs_(11));
+  var t = cvTheme_();
+  body.setMarginTop(40).setMarginBottom(40).setMarginLeft(54).setMarginRight(54);
 
-  addPara_(body, cand.FullName, DocumentApp.ParagraphHeading.TITLE);
-  addPara_(body, [cand.Location, cand.Phone, cand.Email, cand.LinkedIn].filter(Boolean).join(' | '));
-  addPara_(body, cv.headline || '', DocumentApp.ParagraphHeading.SUBTITLE);
+  // Header: name, headline, contact line
+  var name = body.getParagraphs()[0];
+  name.setText(cand.FullName || '');
+  name.setHeading(DocumentApp.ParagraphHeading.TITLE);
+  cvStyle_(name, t, { size: 26, bold: true, color: t.accent, after: 0, line: 1 });
 
-  addPara_(body, 'Profile', DocumentApp.ParagraphHeading.HEADING1);
-  addPara_(body, cv.profile_summary || '');
+  if (cv.headline) {
+    cvStyle_(body.appendParagraph(cv.headline), t, { size: 12.5, color: t.ink, after: 4, line: 1.1 });
+  }
 
-  addPara_(body, 'Key Skills', DocumentApp.ParagraphHeading.HEADING1);
-  addPara_(body, (cv.skills || []).join('  |  '));
+  var contact = [];
+  [cand.Location, cand.Phone].forEach(function (v) { if (v) contact.push({ text: String(v) }); });
+  if (cand.Email) contact.push({ text: String(cand.Email), link: 'mailto:' + cand.Email });
+  if (cand.LinkedIn) {
+    var li = String(cand.LinkedIn).trim();
+    contact.push({ text: li.replace(/^https?:\/\/(www\.)?/i, '').replace(/\/$/, ''), link: /^https?:/i.test(li) ? li : 'https://' + li });
+  }
+  if (contact.length) {
+    cvLine_(body, t, cvJoin_(contact, t), { size: 9.5, color: t.muted, after: 2 });
+  }
+  cvRule_(body, 4);
 
-  addPara_(body, 'Experience', DocumentApp.ParagraphHeading.HEADING1);
-  (cv.experience || []).forEach(function (e) {
-    addPara_(body, e.title + ', ' + e.employer + '  (' + e.dates + ')', DocumentApp.ParagraphHeading.HEADING2);
-    (e.bullets || []).forEach(function (b) { body.appendListItem(b).setGlyphType(DocumentApp.GlyphType.BULLET); });
-  });
+  // Profile
+  if (cv.profile_summary) {
+    cvSection_(body, t, 'Profile');
+    cvStyle_(body.appendParagraph(cv.profile_summary), t, { line: 1.2, after: 2 });
+  }
 
-  addPara_(body, 'Education', DocumentApp.ParagraphHeading.HEADING1);
-  (cv.education || []).forEach(function (e) { addPara_(body, e.line); });
+  // Skills as a dotted strip
+  if ((cv.skills || []).length) {
+    cvSection_(body, t, 'Key Skills');
+    cvLine_(body, t, cvJoin_(cv.skills.map(function (s) { return { text: s, color: t.ink }; }), t), { line: 1.4, after: 2 });
+  }
 
+  // Experience
+  if ((cv.experience || []).length) {
+    cvSection_(body, t, 'Experience');
+    cv.experience.forEach(function (e, i) {
+      var title = body.appendParagraph(e.title || '');
+      title.setHeading(DocumentApp.ParagraphHeading.HEADING3);
+      cvStyle_(title, t, { size: 11.5, bold: true, color: t.ink, before: i ? 10 : 2, after: 0 });
+
+      var meta = [];
+      if (e.employer) meta.push({ text: e.employer, color: t.accent, bold: true });
+      if (e.location) meta.push({ text: e.location });
+      if (e.dates) meta.push({ text: e.dates, italic: true });
+      if (meta.length) cvLine_(body, t, cvJoin_(meta, t, '  |  '), { size: 10, color: t.muted, after: 3 });
+
+      (e.bullets || []).forEach(function (b) { cvBullet_(body, t, b); });
+    });
+  }
+
+  // Education
+  if ((cv.education || []).length) {
+    cvSection_(body, t, 'Education');
+    cv.education.forEach(function (e, i) {
+      if (e.qualification || e.institution) {
+        var q = body.appendParagraph(e.qualification || e.institution);
+        cvStyle_(q, t, { size: 11, bold: true, color: t.ink, before: i ? 6 : 2 });
+        var meta = [];
+        if (e.qualification && e.institution) meta.push({ text: e.institution, color: t.accent, bold: true });
+        if (e.year) meta.push({ text: String(e.year), italic: true });
+        if (meta.length) cvLine_(body, t, cvJoin_(meta, t, '  |  '), { size: 10, color: t.muted });
+      } else if (e.line) {
+        cvStyle_(body.appendParagraph(e.line), t, { before: i ? 4 : 2 });
+      }
+    });
+  }
+
+  // Certifications
   if ((cv.certifications || []).length) {
-    addPara_(body, 'Certifications', DocumentApp.ParagraphHeading.HEADING1);
-    cv.certifications.forEach(function (c) { addPara_(body, c); });
+    cvSection_(body, t, 'Certifications');
+    cv.certifications.forEach(function (c) { cvBullet_(body, t, c); });
   }
 
   doc.saveAndClose();
@@ -170,193 +237,83 @@ function renderCVDoc_(cand, job, cv, versionId) {
   return doc;
 }
 
-/* -------------------------- Cover Letter Builder ------------------------- */
+/* ----------------------------- CV template ------------------------------ */
 
-function runCoverLetterBuilder(candidateId, jobId, toneName) {
-  var cand = findRow('Candidates', 'CandidateID', candidateId);
-  var job = findRow('Jobs', 'JobID', jobId);
-  if (!cand || !job) throw new Error('Candidate or job not found.');
-
-  var tone = getTone_(toneName);
-  var letter = callClaude(
-    'You write one page UK cover letters. Evidence based: every claim must trace to the ' +
-    'candidate profile. Company specific and role specific. Human sounding, no template ' +
-    'phrases, no "I am writing to apply". Maximum 320 words. Style: ' + tone,
-    'CANDIDATE PROFILE:\n' + cand.AIProfileJSON +
-    '\n\nCANDIDATE NAME: ' + cand.FullName +
-    '\n\nJOB ANALYSIS:\n' + job.AnalysisJSON +
-    '\n\nWrite the letter body only, starting "Dear Hiring Manager," (or the named ' +
-    'manager if present in the analysis) and ending "Yours sincerely,\n' + cand.FullName + '".',
-    1500
-  );
-
-  var letterId = newId('CL');
-  var doc = DocumentApp.create(cand.FullName + ' Cover Letter - ' + job.Company + ' - ' + letterId);
-  var body = doc.getBody();
-  body.setAttributes(styleAttrs_(11));
-  letter.split('\n').forEach(function (line) { addPara_(body, line); });
-  doc.saveAndClose();
-  DriveApp.getFileById(doc.getId()).moveTo(
-    DriveApp.getFolderById(getConfig('ROOT_FOLDER_ID')).getFoldersByName('Cover Letters').next()
-  );
-
-  appendObject('CoverLetters', {
-    LetterID: letterId,
-    CreatedAt: new Date(),
-    CandidateID: candidateId,
-    JobID: jobId,
-    DocURL: doc.getUrl(),
-    DocID: doc.getId(),
-    ReviewStatus: 'Pending',
-    ToneProfile: toneName || getConfig('DEFAULT_TONE')
-  });
-  saveAIOutput('CoverLetterBuilder', candidateId, jobId, { letter: letter });
-  runReviewerAgent('CoverLetter', letterId, candidateId, jobId, letter);
-  logActivity('ai', 'letter_generated', 'letter', letterId, job.Company);
-  return letterId;
+function cvTheme_() {
+  var accent = getConfig('CV_ACCENT_COLOR');
+  return {
+    font: getConfig('CV_FONT') || 'Lato',
+    accent: /^#[0-9a-f]{6}$/i.test(accent) ? accent : '#1F4E79',
+    ink: '#1A1A1A',
+    body: '#333333',
+    muted: '#666666'
+  };
 }
 
-/* -------------------------- NHS Supporting Statement --------------------- */
-
-/**
- * Generates the long-form supporting statement NHS applications require,
- * addressing the person specification point by point. Grounded strictly in
- * the candidate's profile - same hallucination controls as the CV/cover
- * letter agents. Stored as a reviewable Doc, and the plain text is returned
- * directly so the extension can paste it into the NHS Jobs form field.
- *
- * NOTE: this covers only the "further information" section. It does NOT
- * touch the legal/protected-characteristic declaration sections (unspent
- * convictions, fitness to practice, GIS, equality/diversity, socio-economic
- * background) - those are filled elsewhere directly from the candidate's own
- * stored answers (NHSUnspentConvictions etc. on the Candidates row), never
- * generated or guessed by AI. See README Part 2 for why.
- */
-function runNHSSupportingStatement(candidateId, jobId, toneName) {
-  var cand = findRow('Candidates', 'CandidateID', candidateId);
-  var job = findRow('Jobs', 'JobID', jobId);
-  if (!cand || !job) throw new Error('Candidate or job not found.');
-  if (!cand.AIProfileJSON) runResumeAnalyst(candidateId);
-
-  var tone = getTone_(toneName || 'NHS');
-  var statement = callClaude(
-    'You write NHS job application supporting statements. Structure the response to address ' +
-    'each point in the job\'s person specification / required and preferred skills directly, ' +
-    'using specific evidence from the candidate profile only - never invent employers, dates, ' +
-    'or achievements. Reference NHS values (care, compassion, respect, dignity, teamwork) only ' +
-    'where genuinely evidenced by the candidate\'s actual experience. Style: ' + tone,
-    'CANDIDATE PROFILE:\n' + cand.AIProfileJSON +
-    '\n\nJOB ANALYSIS (person specification / requirements):\n' + job.AnalysisJSON +
-    '\n\nWrite the supporting statement body only, no salutation or sign-off, 500-1200 words, ' +
-    'organised under clear subheadings matching the person specification categories.',
-    3000
-  );
-
-  var statementId = newId('NHS');
-  var doc = DocumentApp.create(cand.FullName + ' NHS Supporting Statement - ' + job.Company + ' - ' + statementId);
-  var body = doc.getBody();
-  body.setAttributes(styleAttrs_(11));
-  statement.split('\n').forEach(function (line) { addPara_(body, line); });
-  doc.saveAndClose();
-  var folder = DriveApp.getFolderById(getConfig('ROOT_FOLDER_ID'));
-  var target = folderOrCreate_(folder, 'NHS Supporting Statements');
-  DriveApp.getFileById(doc.getId()).moveTo(target);
-
-  appendObject('NHSStatements', {
-    StatementID: statementId, CreatedAt: new Date(), CandidateID: candidateId, JobID: jobId,
-    DocURL: doc.getUrl(), DocID: doc.getId(), ReviewStatus: 'Pending', ToneProfile: toneName || 'NHS'
-  });
-  saveAIOutput('NHSSupportingStatement', candidateId, jobId, { statement: statement });
-  runReviewerAgent('NHSStatement', statementId, candidateId, jobId, statement);
-  logActivity('ai', 'nhs_statement_generated', 'nhsstatement', statementId, job.Company);
-  return { statementId: statementId, docUrl: doc.getUrl(), text: statement };
-}
-
-function folderOrCreate_(parent, name) {
-  var it = parent.getFoldersByName(name);
-  return it.hasNext() ? it.next() : parent.createFolder(name);
-}
-
-/* ---------------------------- Reviewer Agent ----------------------------- */
-
-function runReviewerAgent(type, refId, candidateId, jobId, contentText) {
-  var cand = findRow('Candidates', 'CandidateID', candidateId);
-  var job = jobId ? findRow('Jobs', 'JobID', jobId) : null;
-
-  var review = callClaudeJSON(
-    'You are a strict quality reviewer for AI generated application documents. Check: ' +
-    '1) generic wording, 2) claims not supported by the candidate profile (list each one), ' +
-    '3) missing ATS keywords from the job analysis, 4) grammar, 5) chronology consistency. ' +
-    'Give an ATS score 0-100 and a confidence 0-100.',
-    'DOCUMENT (' + type + '):\n' + String(contentText).slice(0, 20000) +
-    '\n\nCANDIDATE PROFILE:\n' + (cand ? cand.AIProfileJSON : '{}') +
-    '\n\nJOB ANALYSIS:\n' + (job ? job.AnalysisJSON : '{}') +
-    '\n\nReturn JSON: {"ats_score": number, "confidence": number, ' +
-    '"unsupported_claims": [string], "missing_keywords": [string], ' +
-    '"issues": [string], "verdict": "approve" | "revise"}',
-    2000
-  );
-
-  var taskId = newId('REV');
-  appendObject('ReviewQueue', {
-    TaskID: taskId,
-    CreatedAt: new Date(),
-    Type: type,
-    CandidateID: candidateId,
-    JobID: jobId || '',
-    RefID: refId,
-    Summary: (job ? job.Company + ' - ' + job.JobTitle : type),
-    AIScore: review.ats_score,
-    AIFindings: JSON.stringify(review).slice(0, 20000),
-    Status: 'Awaiting Human'
-  });
-
-  var target = type === 'CV' ? 'CVVersions' : (type === 'CoverLetter' ? 'CoverLetters' : (type === 'NHSStatement' ? 'NHSStatements' : null));
-  if (target) {
-    var row = findRow(target, type === 'CV' ? 'VersionID' : 'LetterID', refId);
-    if (row) updateRow(target, row._row, { ReviewScore: review.ats_score, ReviewerNotes: (review.issues || []).join('; ') });
-  }
-  saveAIOutput('ReviewerAgent', candidateId, jobId, review);
-  return taskId;
-}
-
-/* ------------------------ ATS Question Answering ------------------------- */
-
-/** Called by the Chrome extension for screening questions it cannot map. */
-function answerScreeningQuestion(candidateId, jobId, questionText) {
-  var cand = findRow('Candidates', 'CandidateID', candidateId);
-  var job = jobId ? findRow('Jobs', 'JobID', jobId) : null;
-  var answer = callClaude(
-    'Answer an ATS screening question on behalf of a candidate. Use only facts from ' +
-    'their profile and structured fields. If the profile does not contain the answer, ' +
-    'reply exactly NEEDS_HUMAN. Be concise and truthful. British English. Style: ' + getTone_(),
-    'CANDIDATE STRUCTURED FIELDS:\n' + JSON.stringify({
-      name: cand.FullName, email: cand.Email, phone: cand.Phone, location: cand.Location,
-      rightToWork: cand.RightToWork, visa: cand.VisaStatus, licence: cand.DrivingLicence,
-      salary: cand.MinSalary, notice: cand.NoticePeriod, registrations: cand.Registrations,
-      relocate: cand.WillingToRelocate, workModel: cand.WorkModel
-    }) +
-    '\n\nCANDIDATE PROFILE:\n' + cand.AIProfileJSON +
-    (job ? '\n\nJOB CONTEXT:\n' + job.AnalysisJSON : '') +
-    '\n\nQUESTION: ' + questionText,
-    800
-  );
-  saveAIOutput('QuestionAnswerer', candidateId, jobId, { q: questionText, a: answer });
-  return answer.trim();
-}
-
-/* ------------------------------- helpers -------------------------------- */
-
-function styleAttrs_(size) {
+/** Applies font, size, colour and spacing to a whole paragraph or list item. */
+function cvStyle_(el, t, o) {
+  o = o || {};
   var a = {};
-  a[DocumentApp.Attribute.FONT_FAMILY] = 'Times New Roman';
-  a[DocumentApp.Attribute.FONT_SIZE] = size;
-  a[DocumentApp.Attribute.FOREGROUND_COLOR] = '#000000';
-  return a;
+  a[DocumentApp.Attribute.FONT_FAMILY] = t.font;
+  a[DocumentApp.Attribute.FONT_SIZE] = o.size || 10.5;
+  a[DocumentApp.Attribute.FOREGROUND_COLOR] = o.color || t.body;
+  a[DocumentApp.Attribute.BOLD] = !!o.bold;
+  a[DocumentApp.Attribute.ITALIC] = !!o.italic;
+  el.setAttributes(a);
+  el.setLineSpacing(o.line || 1.15);
+  el.setSpacingBefore(o.before || 0);
+  el.setSpacingAfter(o.after || 0);
+  return el;
 }
 
-function addPara_(body, text, heading) {
-  var p = body.appendParagraph(text || '');
-  if (heading) p.setHeading(heading);
+/** Appends a paragraph built from styled runs ({text, color, bold, italic, link}). */
+function cvLine_(body, t, runs, base) {
+  var p = body.appendParagraph(runs.map(function (r) { return r.text; }).join(''));
+  cvStyle_(p, t, base);
+  var text = p.editAsText();
+  var pos = 0;
+  runs.forEach(function (r) {
+    if (!r.text) return;
+    var end = pos + r.text.length - 1;
+    if (r.color) text.setForegroundColor(pos, end, r.color);
+    if (r.bold) text.setBold(pos, end, true);
+    if (r.italic) text.setItalic(pos, end, true);
+    if (r.link) text.setLinkUrl(pos, end, r.link).setUnderline(pos, end, false);
+    pos = end + 1;
+  });
   return p;
+}
+
+/** Interleaves runs with an accent-coloured separator (default: a bullet). */
+function cvJoin_(runs, t, sep) {
+  var out = [];
+  runs.forEach(function (r, i) {
+    if (i) out.push({ text: sep || '  •  ', color: t.accent });
+    out.push(r);
+  });
+  return out;
+}
+
+/** Uppercase accent heading with a hairline rule underneath. */
+function cvSection_(body, t, title) {
+  var h = body.appendParagraph(title.toUpperCase());
+  h.setHeading(DocumentApp.ParagraphHeading.HEADING2);
+  cvStyle_(h, t, { size: 11, bold: true, color: t.accent, before: 14, after: 0, line: 1 });
+  cvRule_(body, 4);
+}
+
+function cvRule_(body, after) {
+  var p = body.appendHorizontalRule().getParent().asParagraph();
+  var a = {};
+  a[DocumentApp.Attribute.FONT_SIZE] = 2;
+  p.setAttributes(a);
+  p.setSpacingBefore(0).setSpacingAfter(after || 0).setLineSpacing(1);
+}
+
+function cvBullet_(body, t, text) {
+  var li = body.appendListItem(text || '');
+  li.setGlyphType(DocumentApp.GlyphType.BULLET);
+  cvStyle_(li, t, { line: 1.15, after: 2 });
+  li.setIndentFirstLine(10).setIndentStart(24);
+  return li;
 }

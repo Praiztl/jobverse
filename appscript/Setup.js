@@ -76,6 +76,8 @@ var JV = {
     ['API_TOKEN', '', 'Filled automatically. Shared secret for the Chrome extension.'],
     ['ANTHROPIC_MODEL', 'claude-sonnet-4-6', 'Model used by all agents.'],
     ['DEFAULT_TONE', 'Jobverse Standard', 'Tone profile applied unless overridden.'],
+    ['CV_FONT', 'Lato', 'Font used in generated CVs (any Google Docs font, e.g. Lato, Roboto, Arial).'],
+    ['CV_ACCENT_COLOR', '#1F4E79', 'Hex accent colour for CV name, section headings and employer names.'],
     ['REPORT_EMAILS', '', 'Comma separated emails for daily report.'],
     ['MAX_APPS_PER_CANDIDATE_PER_DAY', '15', 'Safety throttle: max applications started per candidate per day.'],
     ['ACCOUNT_REVEAL_EMAILS', '', 'Comma separated Google accounts allowed to reveal saved job-site passwords in the dashboard. Blank = only the deploying account.'],
