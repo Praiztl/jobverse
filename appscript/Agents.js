@@ -143,92 +143,24 @@ function runResumeBuilder(candidateId, jobId, toneName) {
 }
 
 /**
- * Renders the CV as a modern, single-column Google Doc: accent-coloured name,
- * linked contact line, ruled section headings, role title + employer meta
- * lines, and tight bullets. Deliberately avoids tables, columns, text boxes
- * and images so ATS parsers read the exported PDF/DOCX in the right order.
- * Font and accent colour come from Config (CV_FONT, CV_ACCENT_COLOR).
+ * Renders a tailored CV into a new Google Doc using the template named in
+ * Config CV_TEMPLATE:
+ *   'Modern' (default) - A4, accent header band, right-aligned dates, skills
+ *     grid and accent section rules. Uses borderless tables for alignment;
+ *     these export to PDF/DOCX as plain left-to-right text, which mainstream
+ *     ATS parsers read correctly.
+ *   'ATS Simple' - pure single-column paragraphs with no tables, for portals
+ *     known to choke on anything but flat text.
+ * Font and accent colour come from CV_FONT and CV_ACCENT_COLOR.
  */
 function renderCVDoc_(cand, job, cv, versionId) {
   var doc = DocumentApp.create(cand.FullName + ' CV - ' + job.Company + ' - ' + versionId);
   var body = doc.getBody();
   var t = cvTheme_();
-  body.setMarginTop(40).setMarginBottom(40).setMarginLeft(54).setMarginRight(54);
 
-  // Header: name, headline, contact line
-  var name = body.getParagraphs()[0];
-  name.setText(cand.FullName || '');
-  name.setHeading(DocumentApp.ParagraphHeading.TITLE);
-  cvStyle_(name, t, { size: 26, bold: true, color: t.accent, after: 0, line: 1 });
-
-  if (cv.headline) {
-    cvStyle_(body.appendParagraph(cv.headline), t, { size: 12.5, color: t.ink, after: 4, line: 1.1 });
-  }
-
-  var contact = [];
-  [cand.Location, cand.Phone].forEach(function (v) { if (v) contact.push({ text: String(v) }); });
-  if (cand.Email) contact.push({ text: String(cand.Email), link: 'mailto:' + cand.Email });
-  if (cand.LinkedIn) {
-    var li = String(cand.LinkedIn).trim();
-    contact.push({ text: li.replace(/^https?:\/\/(www\.)?/i, '').replace(/\/$/, ''), link: /^https?:/i.test(li) ? li : 'https://' + li });
-  }
-  if (contact.length) {
-    cvLine_(body, t, cvJoin_(contact, t), { size: 9.5, color: t.muted, after: 2 });
-  }
-  cvRule_(body, 4);
-
-  // Profile
-  if (cv.profile_summary) {
-    cvSection_(body, t, 'Profile');
-    cvStyle_(body.appendParagraph(cv.profile_summary), t, { line: 1.2, after: 2 });
-  }
-
-  // Skills as a dotted strip
-  if ((cv.skills || []).length) {
-    cvSection_(body, t, 'Key Skills');
-    cvLine_(body, t, cvJoin_(cv.skills.map(function (s) { return { text: s, color: t.ink }; }), t), { line: 1.4, after: 2 });
-  }
-
-  // Experience
-  if ((cv.experience || []).length) {
-    cvSection_(body, t, 'Experience');
-    cv.experience.forEach(function (e, i) {
-      var title = body.appendParagraph(e.title || '');
-      title.setHeading(DocumentApp.ParagraphHeading.HEADING3);
-      cvStyle_(title, t, { size: 11.5, bold: true, color: t.ink, before: i ? 10 : 2, after: 0 });
-
-      var meta = [];
-      if (e.employer) meta.push({ text: e.employer, color: t.accent, bold: true });
-      if (e.location) meta.push({ text: e.location });
-      if (e.dates) meta.push({ text: e.dates, italic: true });
-      if (meta.length) cvLine_(body, t, cvJoin_(meta, t, '  |  '), { size: 10, color: t.muted, after: 3 });
-
-      (e.bullets || []).forEach(function (b) { cvBullet_(body, t, b); });
-    });
-  }
-
-  // Education
-  if ((cv.education || []).length) {
-    cvSection_(body, t, 'Education');
-    cv.education.forEach(function (e, i) {
-      if (e.qualification || e.institution) {
-        var q = body.appendParagraph(e.qualification || e.institution);
-        cvStyle_(q, t, { size: 11, bold: true, color: t.ink, before: i ? 6 : 2 });
-        var meta = [];
-        if (e.qualification && e.institution) meta.push({ text: e.institution, color: t.accent, bold: true });
-        if (e.year) meta.push({ text: String(e.year), italic: true });
-        if (meta.length) cvLine_(body, t, cvJoin_(meta, t, '  |  '), { size: 10, color: t.muted });
-      } else if (e.line) {
-        cvStyle_(body.appendParagraph(e.line), t, { before: i ? 4 : 2 });
-      }
-    });
-  }
-
-  // Certifications
-  if ((cv.certifications || []).length) {
-    cvSection_(body, t, 'Certifications');
-    cv.certifications.forEach(function (c) { cvBullet_(body, t, c); });
-  }
+  if (t.template === 'ats simple') cvRenderSimple_(body, cand, cv, t);
+  else cvRenderModern_(body, cand, cv, t);
+  cvTidy_(body);
 
   doc.saveAndClose();
   DriveApp.getFileById(doc.getId()).moveTo(
@@ -237,68 +169,152 @@ function renderCVDoc_(cand, job, cv, versionId) {
   return doc;
 }
 
-/* ----------------------------- CV template ------------------------------ */
+/* --------------------------- Modern template ---------------------------- */
 
-function cvTheme_() {
-  var accent = getConfig('CV_ACCENT_COLOR');
-  return {
-    font: getConfig('CV_FONT') || 'Lato',
-    accent: /^#[0-9a-f]{6}$/i.test(accent) ? accent : '#1F4E79',
-    ink: '#1A1A1A',
-    body: '#333333',
-    muted: '#666666'
-  };
+function cvRenderModern_(body, cand, cv, t) {
+  var H = DocumentApp.ParagraphHeading;
+  var RIGHT = DocumentApp.HorizontalAlignment.RIGHT;
+  body.setPageWidth(595.28).setPageHeight(841.89); // A4
+  body.setMarginTop(34).setMarginBottom(34).setMarginLeft(40).setMarginRight(40);
+  var W = 595.28 - 80;
+
+  // Header band: name, headline and contact details on the accent colour
+  var head = cvTable_(body, 1, [W]).getCell(0, 0);
+  head.setBackgroundColor(t.accent).setPaddingTop(20).setPaddingBottom(18).setPaddingLeft(22).setPaddingRight(22);
+  cvLine_(head, t, [{ text: cand.FullName || '' }], { heading: H.TITLE, size: 25, bold: true, color: t.onAccent, line: 1 });
+  if (cv.headline) cvLine_(head, t, [{ text: cv.headline }], { size: 12, color: t.onAccentSoft, before: 3, line: 1.1 });
+  var contact = cvContact_(cand, t.onAccent);
+  if (contact.length) {
+    cvLine_(head, t, cvJoin_(contact, t.onAccentSoft), { size: 9.5, color: t.onAccent, before: 10, line: 1.2 });
+  }
+
+  if (cv.profile_summary) {
+    cvSectionModern_(body, t, 'Profile', W);
+    cvLine_(body, t, [{ text: cv.profile_summary }], { line: 1.3, before: 6 });
+  }
+
+  // Skills as a three-column grid with accent markers
+  var skills = (cv.skills || []).filter(Boolean);
+  if (skills.length) {
+    cvSectionModern_(body, t, 'Key Skills', W);
+    var cols = 3, grid = cvTable_(body, Math.ceil(skills.length / cols), [W / cols, W / cols, W / cols]);
+    skills.forEach(function (s, i) {
+      var c = grid.getCell(Math.floor(i / cols), i % cols);
+      c.setPaddingTop(i < cols ? 6 : 1).setPaddingBottom(1).setPaddingRight(6);
+      cvLine_(c, t, [{ text: '■  ', color: t.accent, size: 7 }, { text: s, color: t.ink }], { size: 10 });
+    });
+  }
+
+  // Experience: title/employer on the left, dates/location right-aligned
+  var roles = cv.experience || [];
+  if (roles.length) {
+    cvSectionModern_(body, t, 'Experience', W);
+    roles.forEach(function (e, i) {
+      var row = cvTable_(body, 1, [W * 0.68, W * 0.32]);
+      var left = row.getCell(0, 0), right = row.getCell(0, 1);
+      left.setPaddingTop(i ? 12 : 7);
+      right.setPaddingTop(i ? 12 : 7);
+      cvLine_(left, t, [{ text: e.title || '' }], { heading: H.HEADING3, size: 11.5, bold: true, color: t.ink, line: 1.1 });
+      if (e.employer) cvLine_(left, t, [{ text: e.employer }], { size: 10.5, bold: true, color: t.accent, before: 1 });
+      if (e.dates) cvLine_(right, t, [{ text: e.dates }], { size: 9.5, bold: true, color: t.muted, align: RIGHT, before: 1.5 });
+      if (e.location) cvLine_(right, t, [{ text: e.location }], { size: 9.5, italic: true, color: t.muted, align: RIGHT, before: 2 });
+
+      (e.bullets || []).forEach(function (b, j) { cvBullet_(body, t, b, j ? 0 : 4); });
+    });
+  }
+
+  // Education: one table, qualification + institution left, year right
+  var edu = cv.education || [];
+  if (edu.length) {
+    cvSectionModern_(body, t, 'Education', W);
+    var et = cvTable_(body, edu.length, [W * 0.78, W * 0.22]);
+    edu.forEach(function (e, i) {
+      var left = et.getCell(i, 0), right = et.getCell(i, 1);
+      left.setPaddingTop(i ? 8 : 6);
+      right.setPaddingTop(i ? 8 : 6);
+      if (e.qualification || e.institution) {
+        cvLine_(left, t, [{ text: e.qualification || e.institution }], { size: 11, bold: true, color: t.ink });
+        if (e.qualification && e.institution) cvLine_(left, t, [{ text: e.institution }], { size: 10, color: t.accent, before: 1 });
+      } else {
+        cvLine_(left, t, [{ text: e.line || '' }], {});
+      }
+      if (e.year) cvLine_(right, t, [{ text: String(e.year) }], { size: 9.5, bold: true, color: t.muted, align: RIGHT, before: 1.5 });
+    });
+  }
+
+  if ((cv.certifications || []).length) {
+    cvSectionModern_(body, t, 'Certifications', W);
+    cv.certifications.forEach(function (c, j) { cvBullet_(body, t, c, j ? 0 : 6); });
+  }
 }
 
-/** Applies font, size, colour and spacing to a whole paragraph or list item. */
-function cvStyle_(el, t, o) {
-  o = o || {};
+/** Uppercase accent heading over a thin full-width accent bar. */
+function cvSectionModern_(body, t, title, W) {
+  cvLine_(body, t, [{ text: title.toUpperCase() }],
+    { heading: DocumentApp.ParagraphHeading.HEADING2, size: 10.5, bold: true, color: t.accent, before: 16, after: 3, line: 1 });
+  var bar = cvTable_(body, 1, [W]).getCell(0, 0);
+  bar.setBackgroundColor(t.accent);
   var a = {};
-  a[DocumentApp.Attribute.FONT_FAMILY] = t.font;
-  a[DocumentApp.Attribute.FONT_SIZE] = o.size || 10.5;
-  a[DocumentApp.Attribute.FOREGROUND_COLOR] = o.color || t.body;
-  a[DocumentApp.Attribute.BOLD] = !!o.bold;
-  a[DocumentApp.Attribute.ITALIC] = !!o.italic;
-  el.setAttributes(a);
-  el.setLineSpacing(o.line || 1.15);
-  el.setSpacingBefore(o.before || 0);
-  el.setSpacingAfter(o.after || 0);
-  return el;
+  a[DocumentApp.Attribute.FONT_SIZE] = 1;
+  bar.getChild(0).asParagraph().setAttributes(a).setLineSpacing(1).setSpacingBefore(0).setSpacingAfter(0);
 }
 
-/** Appends a paragraph built from styled runs ({text, color, bold, italic, link}). */
-function cvLine_(body, t, runs, base) {
-  var p = body.appendParagraph(runs.map(function (r) { return r.text; }).join(''));
-  cvStyle_(p, t, base);
-  var text = p.editAsText();
-  var pos = 0;
-  runs.forEach(function (r) {
-    if (!r.text) return;
-    var end = pos + r.text.length - 1;
-    if (r.color) text.setForegroundColor(pos, end, r.color);
-    if (r.bold) text.setBold(pos, end, true);
-    if (r.italic) text.setItalic(pos, end, true);
-    if (r.link) text.setLinkUrl(pos, end, r.link).setUnderline(pos, end, false);
-    pos = end + 1;
-  });
-  return p;
+/* ------------------------- ATS Simple template -------------------------- */
+
+function cvRenderSimple_(body, cand, cv, t) {
+  var H = DocumentApp.ParagraphHeading;
+  body.setPageWidth(595.28).setPageHeight(841.89);
+  body.setMarginTop(40).setMarginBottom(40).setMarginLeft(54).setMarginRight(54);
+
+  cvLine_(body, t, [{ text: cand.FullName || '' }], { heading: H.TITLE, size: 26, bold: true, color: t.accent, line: 1 });
+  if (cv.headline) cvLine_(body, t, [{ text: cv.headline }], { size: 12.5, color: t.ink, after: 4, line: 1.1 });
+  var contact = cvContact_(cand, t.muted);
+  if (contact.length) cvLine_(body, t, cvJoin_(contact, t.accent), { size: 9.5, color: t.muted, after: 2 });
+  cvRule_(body, 4);
+
+  if (cv.profile_summary) {
+    cvSectionSimple_(body, t, 'Profile');
+    cvLine_(body, t, [{ text: cv.profile_summary }], { line: 1.2, after: 2 });
+  }
+  if ((cv.skills || []).length) {
+    cvSectionSimple_(body, t, 'Key Skills');
+    cvLine_(body, t, cvJoin_(cv.skills.map(function (s) { return { text: s, color: t.ink }; }), t.accent), { line: 1.4, after: 2 });
+  }
+  if ((cv.experience || []).length) {
+    cvSectionSimple_(body, t, 'Experience');
+    cv.experience.forEach(function (e, i) {
+      cvLine_(body, t, [{ text: e.title || '' }], { heading: H.HEADING3, size: 11.5, bold: true, color: t.ink, before: i ? 10 : 2 });
+      var meta = [];
+      if (e.employer) meta.push({ text: e.employer, color: t.accent, bold: true });
+      if (e.location) meta.push({ text: e.location });
+      if (e.dates) meta.push({ text: e.dates, italic: true });
+      if (meta.length) cvLine_(body, t, cvJoin_(meta, t.accent, '  |  '), { size: 10, color: t.muted, after: 3 });
+      (e.bullets || []).forEach(function (b) { cvBullet_(body, t, b, 0); });
+    });
+  }
+  if ((cv.education || []).length) {
+    cvSectionSimple_(body, t, 'Education');
+    cv.education.forEach(function (e, i) {
+      if (e.qualification || e.institution) {
+        cvLine_(body, t, [{ text: e.qualification || e.institution }], { size: 11, bold: true, color: t.ink, before: i ? 6 : 2 });
+        var meta = [];
+        if (e.qualification && e.institution) meta.push({ text: e.institution, color: t.accent, bold: true });
+        if (e.year) meta.push({ text: String(e.year), italic: true });
+        if (meta.length) cvLine_(body, t, cvJoin_(meta, t.accent, '  |  '), { size: 10, color: t.muted });
+      } else if (e.line) {
+        cvLine_(body, t, [{ text: e.line }], { before: i ? 4 : 2 });
+      }
+    });
+  }
+  if ((cv.certifications || []).length) {
+    cvSectionSimple_(body, t, 'Certifications');
+    cv.certifications.forEach(function (c) { cvBullet_(body, t, c, 0); });
+  }
 }
 
-/** Interleaves runs with an accent-coloured separator (default: a bullet). */
-function cvJoin_(runs, t, sep) {
-  var out = [];
-  runs.forEach(function (r, i) {
-    if (i) out.push({ text: sep || '  •  ', color: t.accent });
-    out.push(r);
-  });
-  return out;
-}
-
-/** Uppercase accent heading with a hairline rule underneath. */
-function cvSection_(body, t, title) {
-  var h = body.appendParagraph(title.toUpperCase());
-  h.setHeading(DocumentApp.ParagraphHeading.HEADING2);
-  cvStyle_(h, t, { size: 11, bold: true, color: t.accent, before: 14, after: 0, line: 1 });
+function cvSectionSimple_(body, t, title) {
+  cvLine_(body, t, [{ text: title.toUpperCase() }],
+    { heading: DocumentApp.ParagraphHeading.HEADING2, size: 11, bold: true, color: t.accent, before: 14, line: 1 });
   cvRule_(body, 4);
 }
 
@@ -310,10 +326,191 @@ function cvRule_(body, after) {
   p.setSpacingBefore(0).setSpacingAfter(after || 0).setLineSpacing(1);
 }
 
-function cvBullet_(body, t, text) {
+/* --------------------------- shared helpers ----------------------------- */
+
+function cvTheme_() {
+  var accent = getConfig('CV_ACCENT_COLOR');
+  accent = /^#[0-9a-f]{6}$/i.test(accent) ? accent : '#1F4E79';
+  var n = parseInt(accent.slice(1), 16);
+  var light = (0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255 > 0.6;
+  return {
+    template: (getConfig('CV_TEMPLATE') || 'Modern').trim().toLowerCase(),
+    font: getConfig('CV_FONT') || 'Lato',
+    accent: accent,
+    onAccent: light ? '#1A1A1A' : '#FFFFFF',          // text on the header band
+    onAccentSoft: light ? '#404040' : cvMix_(accent, 0.72),
+    ink: '#1A1A1A',
+    body: '#3A3A3A',
+    muted: '#6B6B6B'
+  };
+}
+
+/** Blends a hex colour towards white by fraction f (0-1). */
+function cvMix_(hex, f) {
+  var n = parseInt(hex.slice(1), 16);
+  return '#' + [n >> 16, (n >> 8) & 255, n & 255].map(function (c) {
+    return ('0' + Math.round(c + (255 - c) * f).toString(16)).slice(-2);
+  }).join('');
+}
+
+function cvContact_(cand, color) {
+  var out = [];
+  [cand.Location, cand.Phone].forEach(function (v) { if (v) out.push({ text: String(v), color: color }); });
+  if (cand.Email) out.push({ text: String(cand.Email), link: 'mailto:' + cand.Email, color: color });
+  if (cand.LinkedIn) {
+    var li = String(cand.LinkedIn).trim();
+    out.push({
+      text: li.replace(/^https?:\/\/(www\.)?/i, '').replace(/\/$/, ''),
+      link: /^https?:/i.test(li) ? li : 'https://' + li,
+      color: color
+    });
+  }
+  return out;
+}
+
+/** Applies heading, font, size, colour, alignment and spacing to a paragraph. */
+function cvStyle_(el, t, o) {
+  o = o || {};
+  if (o.heading) el.setHeading(o.heading);
+  var a = {};
+  a[DocumentApp.Attribute.FONT_FAMILY] = t.font;
+  a[DocumentApp.Attribute.FONT_SIZE] = o.size || 10.5;
+  a[DocumentApp.Attribute.FOREGROUND_COLOR] = o.color || t.body;
+  a[DocumentApp.Attribute.BOLD] = !!o.bold;
+  a[DocumentApp.Attribute.ITALIC] = !!o.italic;
+  a[DocumentApp.Attribute.UNDERLINE] = false;
+  el.setAttributes(a);
+  if (o.align) el.setAlignment(o.align);
+  el.setLineSpacing(o.line || 1.15);
+  el.setSpacingBefore(o.before || 0);
+  el.setSpacingAfter(o.after || 0);
+  return el;
+}
+
+/**
+ * Appends a paragraph to a body or table cell, built from styled runs
+ * ({text, color, bold, italic, size, link}) over base paragraph style.
+ */
+function cvLine_(container, t, runs, base) {
+  var p = container.appendParagraph(runs.map(function (r) { return r.text; }).join(''));
+  cvStyle_(p, t, base);
+  var text = p.editAsText();
+  var pos = 0;
+  runs.forEach(function (r) {
+    if (!r.text) return;
+    var end = pos + r.text.length - 1;
+    if (r.link) text.setLinkUrl(pos, end, r.link).setUnderline(pos, end, false);
+    if (r.color) text.setForegroundColor(pos, end, r.color);
+    if (r.size) text.setFontSize(pos, end, r.size);
+    if (r.bold) text.setBold(pos, end, true);
+    if (r.italic) text.setItalic(pos, end, true);
+    pos = end + 1;
+  });
+  return p;
+}
+
+/** Interleaves runs with a separator in the given colour (default: a bullet). */
+function cvJoin_(runs, color, sep) {
+  var out = [];
+  runs.forEach(function (r, i) {
+    if (i) out.push({ text: sep || '   •   ', color: color });
+    out.push(r);
+  });
+  return out;
+}
+
+/** Borderless, zero-padding table with fixed column widths in points. */
+function cvTable_(body, rows, widths) {
+  var cells = [];
+  for (var r = 0; r < rows; r++) cells.push(widths.map(function () { return ''; }));
+  var tbl = body.appendTable(cells);
+  tbl.setBorderWidth(0).setBorderColor('#FFFFFF');
+  widths.forEach(function (w, i) { tbl.setColumnWidth(i, w); });
+  for (r = 0; r < rows; r++) {
+    for (var c = 0; c < widths.length; c++) {
+      tbl.getCell(r, c).setPaddingTop(0).setPaddingBottom(0).setPaddingLeft(0).setPaddingRight(0)
+        .setVerticalAlignment(DocumentApp.VerticalAlignment.TOP);
+    }
+  }
+  return tbl;
+}
+
+function cvBullet_(body, t, text, before) {
   var li = body.appendListItem(text || '');
   li.setGlyphType(DocumentApp.GlyphType.BULLET);
-  cvStyle_(li, t, { line: 1.15, after: 2 });
-  li.setIndentFirstLine(10).setIndentStart(24);
+  cvStyle_(li, t, { line: 1.2, before: before || 0, after: 2.5 });
+  li.setIndentFirstLine(6).setIndentStart(20);
   return li;
+}
+
+/**
+ * Removes the placeholder paragraph Docs puts in every new table cell (and
+ * the doc's own leading blank line), and shrinks any blank spacer paragraphs
+ * Docs inserts between adjacent tables so they don't open visible gaps.
+ */
+function cvTidy_(body) {
+  body.getTables().forEach(function (tbl) {
+    for (var r = 0; r < tbl.getNumRows(); r++) {
+      for (var c = 0; c < tbl.getRow(r).getNumCells(); c++) {
+        var cell = tbl.getCell(r, c);
+        if (cell.getNumChildren() > 1 && cvIsBlank_(cell.getChild(0))) cell.getChild(0).removeFromParent();
+      }
+    }
+  });
+  if (body.getNumChildren() > 1 && cvIsBlank_(body.getChild(0))) {
+    try { body.getChild(0).removeFromParent(); } catch (e) { /* Docs may insist on a leading paragraph */ }
+  }
+  var a = {};
+  a[DocumentApp.Attribute.FONT_SIZE] = 2;
+  for (var i = 0; i < body.getNumChildren(); i++) {
+    var el = body.getChild(i);
+    if (cvIsBlank_(el)) el.asParagraph().setAttributes(a).setSpacingBefore(0).setSpacingAfter(0).setLineSpacing(1);
+  }
+}
+
+/** True for a paragraph with no text and no inline content (e.g. not a rule). */
+function cvIsBlank_(el) {
+  if (el.getType() !== DocumentApp.ElementType.PARAGRAPH) return false;
+  var p = el.asParagraph();
+  if (p.getText() !== '') return false;
+  for (var i = 0; i < p.getNumChildren(); i++) {
+    if (p.getChild(i).getType() !== DocumentApp.ElementType.TEXT) return false;
+  }
+  return true;
+}
+/**
+ * Manual check for the CV template: run from the Apps Script editor to render
+ * a sample CV (no AI call) into Generated CVs, then open the logged URL.
+ */
+function previewCVTemplate() {
+  var cand = {
+    FullName: 'Amara Okafor', Email: 'amara.okafor@example.com', Phone: '07700 900123',
+    Location: 'Manchester, UK', LinkedIn: 'linkedin.com/in/amara-okafor'
+  };
+  var cv = {
+    headline: 'Senior Staff Nurse - Acute Medicine',
+    profile_summary: 'Band 6 staff nurse with eight years of acute medical experience across busy NHS wards. ' +
+      'Leads shifts of up to 12 staff, mentors student nurses and drives measurable improvements in patient safety. ' +
+      'Calm under pressure, with a strong record of audit-led change and multidisciplinary collaboration.',
+    skills: ['Acute patient care', 'Shift leadership', 'Clinical audit', 'IV therapy', 'Mentoring',
+      'Discharge planning', 'Sepsis management', 'EPR systems', 'Safeguarding'],
+    experience: [
+      { title: 'Senior Staff Nurse (Band 6)', employer: 'Manchester University NHS Foundation Trust',
+        location: 'Manchester', dates: 'Mar 2021 - Present', bullets: [
+          'Lead nurse in charge on a 28-bed acute medical unit, coordinating 10-12 staff per shift.',
+          'Introduced a falls-risk huddle that cut inpatient falls by 22% over 12 months.',
+          'Mentor 15+ student nurses a year, with a 100% placement pass rate.'] },
+      { title: 'Staff Nurse (Band 5)', employer: 'Salford Royal Hospital', location: 'Salford',
+        dates: 'Sep 2017 - Feb 2021', bullets: [
+          'Delivered holistic care to up to 8 patients per shift on a respiratory ward.',
+          'Completed IV and venepuncture competencies within the first six months.'] }
+    ],
+    education: [
+      { qualification: 'BSc (Hons) Adult Nursing, 2:1', institution: 'University of Manchester', year: '2017' }
+    ],
+    certifications: ['NMC Registered Nurse (PIN on request)', 'Immediate Life Support (ILS), 2025']
+  };
+  var doc = renderCVDoc_(cand, { Company: 'Template Preview' }, cv, 'PREVIEW');
+  Logger.log(doc.getUrl());
+  return doc.getUrl();
 }

@@ -76,6 +76,7 @@ var JV = {
     ['API_TOKEN', '', 'Filled automatically. Shared secret for the Chrome extension.'],
     ['ANTHROPIC_MODEL', 'claude-sonnet-4-6', 'Model used by all agents.'],
     ['DEFAULT_TONE', 'Jobverse Standard', 'Tone profile applied unless overridden.'],
+    ['CV_TEMPLATE', 'Modern', 'CV layout: Modern (header band, aligned dates, skills grid) or ATS Simple (plain single column).'],
     ['CV_FONT', 'Lato', 'Font used in generated CVs (any Google Docs font, e.g. Lato, Roboto, Arial).'],
     ['CV_ACCENT_COLOR', '#1F4E79', 'Hex accent colour for CV name, section headings and employer names.'],
     ['REPORT_EMAILS', '', 'Comma separated emails for daily report.'],

@@ -22,6 +22,9 @@ function doPost(e) {
       listCandidates: apiListCandidates_,
       getCandidatePayload: apiGetCandidatePayload_,
       analyseJob: apiAnalyseJob_,
+      analyseJobPosting: apiAnalyseJobPosting_,
+      buildTailoredCV: apiBuildTailoredCV_,
+      buildCoverLetter: apiBuildCoverLetter_,
       startApplication: apiStartApplication_,
       precheckApplication: apiPrecheckApplication_,
       answerQuestion: apiAnswerQuestion_,
@@ -103,7 +106,32 @@ function apiAnalyseJob_(req) {
     cvUrl: cv.DocURL, letterUrl: letter.DocURL
   };
 }
- 
+
+/*
+ * analyseJob split into three calls so the extension can show each stage and
+ * build the CV and cover letter in parallel (two concurrent executions).
+ * analyseJob stays for the worker and older extension builds.
+ */
+function apiAnalyseJobPosting_(req) {
+  var jobId = runJobAnalyst(req.candidateId, req.jobUrl, req.jdText, req.ats);
+  var job = findRow('Jobs', 'JobID', jobId);
+  // Build the candidate profile now, so the parallel CV and letter calls
+  // don't both try to create it.
+  var cand = findRow('Candidates', 'CandidateID', req.candidateId);
+  if (cand && !cand.AIProfileJSON) runResumeAnalyst(req.candidateId);
+  return { jobId: jobId, company: job.Company, title: job.JobTitle, suitability: job.SuitabilityScore };
+}
+
+function apiBuildTailoredCV_(req) {
+  var cvId = runResumeBuilder(req.candidateId, req.jobId, req.tone);
+  return { cvUrl: findRow('CVVersions', 'VersionID', cvId).DocURL };
+}
+
+function apiBuildCoverLetter_(req) {
+  var letterId = runCoverLetterBuilder(req.candidateId, req.jobId, req.tone);
+  return { letterUrl: findRow('CoverLetters', 'LetterID', letterId).DocURL };
+}
+
 function apiPrecheckApplication_(req) {
   var cand = findRow('Candidates', 'CandidateID', req.candidateId);
   if (!cand) throw new Error('Candidate not found');
