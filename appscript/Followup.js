@@ -7,9 +7,9 @@
  * README Part 2 for why that step can't be automated).
  */
 
-function createFollowUp(candidateId, applicationId, type, company, jobTitle, dueDate, notes) {
-  var id = newId('FU');
-  appendObject('FollowUps', {
+function createFollowUp_(candidateId, applicationId, type, company, jobTitle, dueDate, notes) {
+  var id = newId_('FU');
+  appendObject_('FollowUps', {
     FollowUpID: id,
     CreatedAt: new Date(),
     CandidateID: candidateId,
@@ -21,22 +21,22 @@ function createFollowUp(candidateId, applicationId, type, company, jobTitle, due
     Status: 'Pending',
     Notes: notes || ''
   });
-  logActivity('system', 'followup_created', 'followup', id, type + ' due ' + Utilities.formatDate(new Date(dueDate), 'GMT', 'yyyy-MM-dd'));
+  logActivity_('system', 'followup_created', 'followup', id, type + ' due ' + Utilities.formatDate(new Date(dueDate), 'GMT', 'yyyy-MM-dd'));
   return id;
 }
 
 /** Creates the standard NHS Trac follow-up: closing date + 2 days, or a config-driven default if no closing date was found. */
-function createNHSTracFollowUp(candidateId, applicationId, company, jobTitle, closingDateStr) {
+function createNHSTracFollowUp_(candidateId, applicationId, company, jobTitle, closingDateStr) {
   var due;
   if (closingDateStr) {
     var parsed = new Date(closingDateStr);
     if (!isNaN(parsed.getTime())) due = new Date(parsed.getTime() + 2 * 24 * 60 * 60 * 1000);
   }
   if (!due) {
-    var defaultDays = parseInt(getConfig('NHS_TRAC_FOLLOWUP_DEFAULT_DAYS') || '14', 10);
+    var defaultDays = parseInt(getConfig_('NHS_TRAC_FOLLOWUP_DEFAULT_DAYS') || '14', 10);
     due = new Date(Date.now() + defaultDays * 24 * 60 * 60 * 1000);
   }
-  return createFollowUp(candidateId, applicationId, 'NHS Trac Claim/Verify', company, jobTitle, due,
+  return createFollowUp_(candidateId, applicationId, 'NHS Trac Claim/Verify', company, jobTitle, due,
     closingDateStr ? 'Closing date detected: ' + closingDateStr : 'No closing date detected on the posting - used the default window instead.');
 }
 
@@ -45,16 +45,16 @@ function createNHSTracFollowUp(candidateId, applicationId, company, jobTitle, cl
  * FOLLOWUP_DAYS_AFTER_SUBMIT days after submission. One per application -
  * returns the existing id if it's already been logged.
  */
-function createSubmissionFollowUp(app) {
-  var existing = readRows('FollowUps').filter(function (f) {
+function createSubmissionFollowUp_(app) {
+  var existing = readRows_('FollowUps').filter(function (f) {
     return f.ApplicationID === app.ApplicationID && f.Type === 'Application Follow-up';
   })[0];
   if (existing) return existing.FollowUpID;
-  var days = parseInt(getConfig('FOLLOWUP_DAYS_AFTER_SUBMIT') || '7', 10);
+  var days = parseInt(getConfig_('FOLLOWUP_DAYS_AFTER_SUBMIT') || '7', 10);
   var submitted = app.SubmittedAt ? new Date(app.SubmittedAt) : new Date();
   if (isNaN(submitted.getTime())) submitted = new Date();
   var due = new Date(submitted.getTime() + days * 24 * 60 * 60 * 1000);
-  return createFollowUp(app.CandidateID, app.ApplicationID, 'Application Follow-up', app.Company, app.JobTitle, due,
+  return createFollowUp_(app.CandidateID, app.ApplicationID, 'Application Follow-up', app.Company, app.JobTitle, due,
     'Submitted ' + Utilities.formatDate(submitted, 'GMT', 'yyyy-MM-dd') + ' - check for a reply and chase the employer if there is none.');
 }
 
@@ -66,13 +66,13 @@ function createSubmissionFollowUp(app) {
  */
 function backfillSubmissionFollowUps() {
   var have = {};
-  readRows('FollowUps').forEach(function (f) {
+  readRows_('FollowUps').forEach(function (f) {
     if (f.Type === 'Application Follow-up') have[f.ApplicationID] = true;
   });
   var added = 0;
-  readRows('Applications').forEach(function (a) {
+  readRows_('Applications').forEach(function (a) {
     if (a.Status === 'Submitted' && a.ApplicationID && !have[a.ApplicationID]) {
-      createSubmissionFollowUp(a);
+      createSubmissionFollowUp_(a);
       added++;
     }
   });
@@ -83,12 +83,12 @@ function backfillSubmissionFollowUps() {
 function sendDueFollowUpReminders() {
   backfillSubmissionFollowUps();
   var today = new Date(); today.setHours(23, 59, 59, 999);
-  var due = readRows('FollowUps').filter(function (f) {
+  var due = readRows_('FollowUps').filter(function (f) {
     return f.Status === 'Pending' && new Date(f.DueDate) <= today;
   });
   if (!due.length) return 'None due.';
 
-  var emails = getConfig('REPORT_EMAILS');
+  var emails = getConfig_('REPORT_EMAILS');
   if (emails) {
     var body = 'Follow-ups due or overdue:\n\n' + due.map(function (f) {
       return '- ' + f.Type + ': ' + f.Company + ' - ' + f.JobTitle + ' (candidate ' + f.CandidateID +
@@ -98,6 +98,6 @@ function sendDueFollowUpReminders() {
       try { MailApp.sendEmail(to, '[Jobverse] ' + due.length + ' follow-up(s) due', body); } catch (ignored) {}
     });
   }
-  logActivity('system', 'followup_reminders_sent', 'system', '-', due.length + ' due');
+  logActivity_('system', 'followup_reminders_sent', 'system', '-', due.length + ' due');
   return due.length + ' reminder(s) sent.';
 }

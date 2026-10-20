@@ -15,7 +15,7 @@
  * it), and email if REPORT_EMAILS is set (best-effort, never blocks).
  */
 function reviewerAccuracyReport() {
-  var rows = readRows('ReviewQueue').filter(function (r) { return r.Status === 'Decided'; });
+  var rows = readRows_('ReviewQueue').filter(function (r) { return r.Status === 'Decided'; });
   var byType = {};
 
   rows.forEach(function (r) {
@@ -70,11 +70,11 @@ function reviewerAccuracyReport() {
 
   // Easiest place to actually read this: the ActivityLog sheet tab,
   // most recent row, Detail column.
-  logActivity('system', 'reviewer_accuracy_report', 'system', '-', report);
+  logActivity_('system', 'reviewer_accuracy_report', 'system', '-', report);
 
   // Best-effort only - never let a permissions/scope issue here stop the
   // report from completing.
-  var emails = getConfig('REPORT_EMAILS');
+  var emails = getConfig_('REPORT_EMAILS');
   if (emails) {
     emails.split(',').map(function (s) { return s.trim(); }).filter(Boolean).forEach(function (to) {
       try {

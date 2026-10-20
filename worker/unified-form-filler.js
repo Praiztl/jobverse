@@ -1,633 +1,401 @@
 /**
- * Unified Form Filler - A Playwright-based system that can fill any job application form
- * by combining mechanical detection with AI-powered decision making.
+ * Unified Form Filler - a Playwright-based filler for any job application
+ * form, combining mechanical detection with AI decisions for field values.
  *
  * Core principles:
- * 1. Mechanical operations: handle predictable patterns automatically (buttons, navigation)
- * 2. AI-powered decisions: ask AI for complex decisions (field values, ambiguous elements)
- * 3. Human intervention: detect and flag situations requiring human help (CAPTCHAs, unusual patterns)
- * 4. Progressive enhancement: start with mechanical, fall back to AI, escalate to human
+ * 1. fillForm NEVER submits. It fills fields, uploads documents and follows
+ *    "Next"/"Continue" through multi-step forms, but never clicks anything
+ *    that looks like Submit / Apply / Send / Finish on a form. Submitting is
+ *    clickSubmit's job alone, and the worker only calls that after a human
+ *    approved the application in the Review queue.
+ * 2. Mechanical where predictable (file uploads, Next buttons, the "Apply"
+ *    link on a job ad that opens the form).
+ * 3. AI for field values (answerField), with the candidate's data.
+ * 4. Fields the AI can't answer are recorded as human interventions in the
+ *    snapshot the reviewer sees - not emailed one by one.
  */
 
-const { chromium } = require('playwright');
+const path = require('path');
+
+const MAX_ITERATIONS = 20;
+
+// Text of a control that would send the application. Never clicked by fillForm.
+const SUBMIT_LIKE = /submit|send|apply|finish|complete|confirm|bewerb|envoyer|enviar/i;
+// Text of a control that moves a multi-step form on without sending it.
+const NEXT_LIKE = /^\s*(next|continue|proceed|save (and|&) continue|next step|weiter|suivant|siguiente)\b/i;
+// "Continue with LinkedIn" and similar are sign-ins, not steps.
+const SOCIAL_OR_AUTH = /with (linkedin|google|indeed|facebook|apple|microsoft)|sign ?in|log ?in|sign ?up|register/i;
+// The link/button on a job ad that opens the application form.
+const OPEN_FORM = /^\s*(apply|apply now|apply for this (job|position|role)|i'?m interested|start (your )?application)\s*$/i;
+const CONFIRMATION = /application (has been |was )?(received|submitted|sent)|thank(s| you) for (applying|your application|your interest)|successfully (applied|submitted)|we('ve| have) received your application/i;
+
+const FIELD_SELECTOR = [
+  'input:not([type])', 'input[type="text"]', 'input[type="email"]', 'input[type="tel"]',
+  'input[type="number"]', 'input[type="url"]', 'input[type="date"]',
+  'input[type="radio"]', 'input[type="checkbox"]', 'textarea', 'select',
+].join(', ');
 
 class UnifiedFormFiller {
   constructor(page, api) {
     this.page = page;
     this.api = api;
+    this.frame = page.mainFrame();
     this.formState = {
       currentStep: 0,
-      totalSteps: 0,
-      visitedElements: new Set(),
+      visited: new Set(),
+      uploaded: new Set(),
       filledFields: [],
       skippedFields: [],
-      humanInterventions: []
+      humanInterventions: [],
     };
   }
 
-  /**
-   * Main entry point - fills a complete application form
-   */
-  async fillApplication(application, files, candidate) {
+  /** Main entry point - fills every step of the form, stopping before submit. */
+  async fillApplication(application, files) {
     console.log(`[${application.applicationId}] Starting unified form filling`);
-    
-    try {
-      // Initial page analysis
-      await this.analyzePage();
-      
-      // Handle file uploads first (mechanical)
+    await this.settle();
+    await this.openFormIfNeeded();
+    await this.selectFormFrame();
+
+    let lastUrl = this.page.url();
+    for (let i = 1; i <= MAX_ITERATIONS; i++) {
       await this.handleFileUploads(files);
-      
-      // Main form filling loop
-      let maxIterations = 20; // Prevent infinite loops
-      let iterations = 0;
-      
-      while (iterations < maxIterations && !await this.isFormComplete()) {
-        iterations++;
-        console.log(`[${application.applicationId}] Form iteration ${iterations}`);
-        
-        // Detect all interactive elements
-        const elements = await this.detectInteractiveElements();
-        
-        // Process each element
-        for (const { element, info, context } of elements) {
-          const elementId = this.generateElementId(info);
-          if (this.formState.visitedElements.has(elementId)) {
-            continue; // Skip already processed elements
-          }
-          
-          const action = await this.decideAction(element, info, application, candidate);
-          await this.executeAction(element, action, application, candidate, info);
-          
-          this.formState.visitedElements.add(elementId);
-        }
-        
-        // Check for navigation/multi-step forms
-        await this.handleNavigation();
-        
-        // Wait for page stability
-        await this.page.waitForTimeout(1000);
-      }
-      
-      return this.buildResult();
-    } catch (error) {
-      console.error(`[${application.applicationId}] Form filling error:`, error.message);
-      throw error;
-    }
-  }
+      const processed = await this.fillVisibleFields(application);
+      console.log(`[${application.applicationId}] Pass ${i}: ${processed} new field(s)`);
+      if (processed) continue; // filling can reveal conditional fields - look again before moving on
 
-  /**
-   * Analyze the initial page state
-   */
-  async analyzePage() {
-    this.formState.initialUrl = this.page.url();
-    this.formState.pageTitle = await this.page.title();
-    
-    // Detect if there's an iframe (common in ATS systems)
-    const frames = this.page.frames();
-    this.formState.hasIframe = frames.length > 1;
-    
-    console.log(`Page analysis: ${this.formState.pageTitle}, iframe: ${this.formState.hasIframe}`);
-  }
-
-  /**
-   * Detect all interactive elements on the page
-   */
-  async detectInteractiveElements() {
-    const elements = [];
-    
-    // Get the appropriate context (page or iframe)
-    let context;
-    try {
-      if (this.formState.hasIframe) {
-        const iframe = this.page.frameLocator('iframe').first();
-        const hasIframe = await iframe.locator('body').count().catch(() => 0);
-        context = hasIframe > 0 ? iframe : this.page;
-      } else {
-        context = this.page;
-      }
-    } catch (error) {
-      context = this.page;
-    }
-    
-    // Detect all interactive elements
-    const selectors = [
-      'input[type="text"]',
-      'input[type="email"]', 
-      'input[type="tel"]',
-      'input[type="number"]',
-      'input[type="file"]',
-      'textarea',
-      'select',
-      'input[type="radio"]',
-      'input[type="checkbox"]',
-      'button',
-      'a[href]',
-      '[role="button"]',
-      '[onclick]'
-    ];
-    
-    for (const selector of selectors) {
-      try {
-        const matched = await context.locator(selector).all();
-        for (const element of matched) {
-          const info = await this.extractElementInfo(element);
-          if (info && info.isVisible) {
-            elements.push({ element, info, context });
-          }
-        }
-      } catch (error) {
-        // Selector might not match anything, continue
-      }
-    }
-    
-    return elements;
-  }
-
-  /**
-   * Extract comprehensive information about an element
-   */
-  async extractElementInfo(element) {
-    try {
-      const tagName = await element.evaluate(el => el.tagName.toLowerCase());
-      const type = await element.getAttribute('type') || '';
-      const id = await element.getAttribute('id') || '';
-      const name = await element.getAttribute('name') || '';
-      const className = await element.getAttribute('class') || '';
-      const text = await element.textContent().catch(() => '');
-      const ariaLabel = await element.getAttribute('aria-label') || '';
-      const placeholder = await element.getAttribute('placeholder') || '';
-      const value = await element.inputValue().catch(() => '');
-      const href = await element.getAttribute('href') || '';
-      
-      // Get nearby text for context
-      const nearbyText = await element.evaluate(el => {
-        const parent = el.parentElement;
-        if (parent) {
-          return parent.textContent.replace(el.value || '', '').trim().substring(0, 200);
-        }
-        return '';
-      }).catch(() => '');
-      
-      return {
-        tagName,
-        type,
-        id,
-        name,
-        className,
-        text: text?.trim(),
-        ariaLabel,
-        placeholder,
-        value,
-        href,
-        nearbyText,
-        isVisible: await element.isVisible().catch(() => false)
-      };
-    } catch (error) {
-      return null;
-    }
-  }
-
-  /**
-   * Decide what action to take for an element
-   * Returns: 'mechanical-click', 'ai-fill', 'ai-click', 'human-intervention', 'skip'
-   */
-  async decideAction(element, elementInfo, application, candidate) {
-    // Mechanical detection for common patterns
-    const mechanicalAction = this.detectMechanicalAction(elementInfo);
-    if (mechanicalAction) {
-      return { type: mechanicalAction, confidence: 'high' };
-    }
-    
-    // Detect inputs that need AI-powered filling
-    if (this.isInputField(elementInfo)) {
-      // Ask AI if this field needs filling or should be skipped
-      const aiDecision = await this.askAIAboutField(element, elementInfo, application, candidate);
-      return aiDecision;
-    }
-    
-    // Detect ambiguous buttons/links that need AI decision
-    if (this.isClickableElement(elementInfo)) {
-      const aiDecision = await this.askAIAboutClick(elementInfo, application, candidate);
-      return aiDecision;
-    }
-    
-    // Default to skip
-    return { type: 'skip', reason: 'Unrecognized element type' };
-  }
-
-  /**
-   * Detect mechanical actions that can be handled automatically
-   */
-  detectMechanicalAction(elementInfo) {
-    const text = (elementInfo.text || '').toLowerCase();
-    const id = (elementInfo.id || '').toLowerCase();
-    const name = (elementInfo.name || '').toLowerCase();
-    
-    // File upload inputs
-    if (elementInfo.tagName === 'input' && elementInfo.type === 'file') {
-      return 'mechanical-file-upload';
-    }
-    
-    // Apply buttons
-    if (text.includes('apply') || text.includes('submit application') || 
-        id.includes('apply') || name.includes('apply')) {
-      return 'mechanical-apply-click';
-    }
-    
-    // Next/continue buttons in multi-step forms
-    if (text.includes('next') || text.includes('continue') || text.includes('proceed') ||
-        id.includes('next') || name.includes('next')) {
-      return 'mechanical-next-click';
-    }
-    
-    // Submit buttons (only if form appears complete)
-    if (text.includes('submit') && !text.includes('application') ||
-        id.includes('submit') || name.includes('submit')) {
-      return 'mechanical-submit-click';
-    }
-    
-    // Skip/decline buttons
-    if (text.includes('skip') || text.includes('decline') || text.includes('not applicable')) {
-      return 'mechanical-skip-click';
-    }
-    
-    return null; // Not a mechanical action
-  }
-
-  /**
-   * Check if element is an input field
-   */
-  isInputField(elementInfo) {
-    const inputTypes = ['text', 'email', 'tel', 'number', 'textarea', 'select'];
-    return elementInfo.tagName === 'input' && inputTypes.includes(elementInfo.type) ||
-           elementInfo.tagName === 'textarea' ||
-           elementInfo.tagName === 'select';
-  }
-
-  /**
-   * Check if element is clickable
-   */
-  isClickableElement(elementInfo) {
-    return elementInfo.tagName === 'button' ||
-           elementInfo.tagName === 'a' ||
-           elementInfo.className?.includes('button') ||
-           elementInfo.href !== '';
-  }
-
-  /**
-   * Ask AI what to do with a form field
-   */
-  async askAIAboutField(element, elementInfo, application, candidate) {
-    try {
-      const options = await this.extractFieldOptions(element, elementInfo);
-      
-      const response = await this.api('answerField', {
-        candidateId: application.candidateId,
-        jobId: application.jobId,
-        fieldInfo: {
-          label: elementInfo.ariaLabel || elementInfo.placeholder || elementInfo.nearbyText || elementInfo.name,
-          type: elementInfo.type,
-          tagName: elementInfo.tagName,
-          required: elementInfo.required || false,
-          options: options,
-          context: elementInfo.nearbyText
-        }
-      });
-      
-      if (response.needsHuman) {
-        return { type: 'human-intervention', reason: 'AI requested human input' };
-      }
-      
-      if (response.answer) {
-        return { type: 'ai-fill', value: response.answer };
-      }
-      
-      return { type: 'skip', reason: 'AI chose to skip field' };
-    } catch (error) {
-      console.error('AI field decision error:', error.message);
-      return { type: 'skip', reason: 'AI decision failed' };
-    }
-  }
-
-  /**
-   * Extract options from select/radio/checkbox fields
-   */
-  async extractFieldOptions(element, elementInfo) {
-    try {
-      if (elementInfo.tagName === 'select') {
-        const options = await element.locator('option').all();
-        const optionData = [];
-        for (const option of options) {
-          const value = await option.getAttribute('value');
-          const text = await option.textContent();
-          if (value && text) {
-            optionData.push({ value, text: text.trim() });
-          }
-        }
-        return optionData;
-      } else if (elementInfo.type === 'radio') {
-        const name = elementInfo.name;
-        if (!name) return [];
-        
-        const allRadios = await this.page.locator(`input[type="radio"][name="${name}"]`).all();
-        const options = [];
-        
-        for (const radio of allRadios) {
-          const value = await radio.getAttribute('value');
-          const label = await radio.evaluate(el => {
-            const id = el.id;
-            if (id) {
-              const label = document.querySelector(`label[for="${id}"]`);
-              if (label) return label.textContent;
-            }
-            const parentLabel = el.closest('label');
-            if (parentLabel) return parentLabel.textContent;
-            return '';
-          });
-          
-          if (value && label) {
-            options.push({ value, text: label.trim() });
-          }
-        }
-        return options;
-      } else if (elementInfo.type === 'checkbox') {
-        const name = elementInfo.name;
-        if (!name) return [];
-        
-        const allCheckboxes = await this.page.locator(`input[type="checkbox"][name="${name}"]`).all();
-        const options = [];
-        
-        for (const checkbox of allCheckboxes) {
-          const value = await checkbox.getAttribute('value');
-          const label = await checkbox.evaluate(el => {
-            const id = el.id;
-            if (id) {
-              const label = document.querySelector(`label[for="${id}"]`);
-              if (label) return label.textContent;
-            }
-            const parentLabel = el.closest('label');
-            if (parentLabel) return parentLabel.textContent;
-            return '';
-          });
-          
-          if (value && label) {
-            options.push({ value, text: label.trim() });
-          }
-        }
-        return options;
-      }
-      
-      return [];
-    } catch (error) {
-      console.error('Error extracting field options:', error.message);
-      return [];
-    }
-  }
-
-  /**
-   * Ask AI whether to click an element
-   */
-  async askAIAboutClick(elementInfo, application, candidate) {
-    try {
-      const response = await this.api('decideClick', {
-        candidateId: application.candidateId,
-        jobId: application.jobId,
-        currentUrl: this.page.url(),
-        elementInfo: {
-          text: elementInfo.text,
-          id: elementInfo.id,
-          name: elementInfo.name,
-          href: elementInfo.href,
-          context: elementInfo.nearbyText
-        }
-      });
-      
-      if (response.needsHuman) {
-        return { type: 'human-intervention', reason: 'AI requested human decision' };
-      }
-      
-      if (response.shouldClick) {
-        return { type: 'ai-click', reason: response.reason };
-      }
-      
-      return { type: 'skip', reason: response.reason || 'AI chose not to click' };
-    } catch (error) {
-      console.error('AI click decision error:', error.message);
-      return { type: 'skip', reason: 'AI decision failed' };
-    }
-  }
-
-  /**
-   * Execute the decided action
-   */
-  async executeAction(element, action, application, candidate, elementInfo) {
-    try {
-      switch (action.type) {
-        case 'mechanical-file-upload':
-          // Already handled in handleFileUploads
-          break;
-          
-        case 'mechanical-apply-click':
-        case 'mechanical-next-click':
-          await element.click();
-          await this.page.waitForTimeout(500);
-          break;
-          
-        case 'mechanical-submit-click':
-          if (await this.isFormComplete()) {
-            await element.click();
-            this.formState.submitted = true;
-          } else {
-            console.log('Submit button found but form not complete, skipping');
-          }
-          break;
-          
-        case 'mechanical-skip-click':
-          await element.click();
-          break;
-          
-        case 'ai-fill':
-          await this.fillField(element, action.value);
-          this.formState.filledFields.push(action.value);
-          break;
-          
-        case 'ai-click':
-          await element.click();
-          await this.page.waitForTimeout(500);
-          break;
-          
-        case 'human-intervention':
-          this.formState.humanInterventions.push({
-            element: elementInfo,
-            reason: action.reason
-          });
-          await this.requestHumanIntervention(application, action.reason);
-          break;
-          
-        case 'skip':
-          console.log(`Skipping element: ${action.reason}`);
-          break;
-      }
-    } catch (error) {
-      console.error(`Action execution error:`, error.message);
-    }
-  }
-
-  /**
-   * Fill a form field with the given value
-   */
-  async fillField(element, value) {
-    const tagName = await element.evaluate(el => el.tagName.toLowerCase());
-    const type = await element.getAttribute('type') || '';
-    
-    switch (tagName) {
-      case 'select':
-        await element.selectOption(value);
-        break;
-      case 'input':
-        if (type === 'radio' || type === 'checkbox') {
-          await element.check();
-        } else {
-          await element.fill(value);
-        }
-        break;
-      case 'textarea':
-        await element.fill(value);
-        break;
-      default:
-        await element.fill(value);
-    }
-  }
-
-  /**
-   * Handle file uploads
-   */
-  async handleFileUploads(files) {
-    if (!files) return;
-    
-    const fileInputs = await this.page.locator('input[type="file"]').all();
-    
-    for (const fileInput of fileInputs) {
-      const name = await fileInput.getAttribute('name') || '';
-      const id = await fileInput.getAttribute('id') || '';
-      
-      // Resume upload
-      if (files.cv && (name.includes('resume') || id.includes('resume') || name.includes('cv'))) {
-        await fileInput.setInputFiles(files.cv);
-        console.log('Uploaded CV');
-      }
-      
-      // Cover letter upload
-      if (files.coverLetter && (name.includes('cover') || id.includes('cover') || name.includes('letter'))) {
-        await fileInput.setInputFiles(files.coverLetter);
-        console.log('Uploaded cover letter');
-      }
-    }
-  }
-
-  /**
-   * Handle navigation in multi-step forms
-   */
-  async handleNavigation() {
-    const currentUrl = this.page.url();
-    
-    if (currentUrl !== this.formState.initialUrl) {
+      // Nothing new on this step: move to the next one, or stop (final step - submit waits for review)
+      if (!(await this.clickNext())) break;
       this.formState.currentStep++;
-      console.log(`Navigation detected: step ${this.formState.currentStep}`);
-      this.formState.visitedElements.clear(); // Reset for new page
+      await this.settle();
+      if (this.page.url() !== lastUrl) {
+        lastUrl = this.page.url();
+        this.formState.visited.clear();
+        this.formState.uploaded.clear();
+        await this.selectFormFrame();
+      }
+    }
+    return this.buildResult();
+  }
+
+  async settle() {
+    await this.page.waitForLoadState('domcontentloaded').catch(() => {});
+    await this.page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {});
+    await this.page.waitForTimeout(800);
+  }
+
+  /** Visible form controls in a frame. */
+  async countFields(frame) {
+    return frame.evaluate((sel) => Array.from(document.querySelectorAll(sel))
+      .filter((el) => el.getClientRects().length && !el.disabled).length, FIELD_SELECTOR).catch(() => 0);
+  }
+
+  /** The frame holding the form: the one with the most visible fields (ATS forms are often embedded iframes). */
+  async selectFormFrame() {
+    let best = this.page.mainFrame();
+    let bestCount = await this.countFields(best);
+    for (const frame of this.page.frames()) {
+      if (frame === this.page.mainFrame()) continue;
+      const n = await this.countFields(frame);
+      if (n > bestCount) { best = frame; bestCount = n; }
+    }
+    this.frame = best;
+  }
+
+  /**
+   * On a job ad (no form yet), click its "Apply" link/button once to open the
+   * form. Only when there is no form on the page - on a form, "Apply" means submit.
+   */
+  async openFormIfNeeded() {
+    for (const frame of this.page.frames()) {
+      if (await this.countFields(frame) >= 3) return;
+    }
+    const target = this.page.locator('a, button, [role="button"]').filter({ hasText: /apply|interested|application/i });
+    for (const el of await target.all()) {
+      const text = ((await el.textContent().catch(() => '')) || '').trim();
+      const inForm = await el.evaluate((n) => !!n.closest('form')).catch(() => true);
+      if (!OPEN_FORM.test(text) || inForm || !(await el.isVisible().catch(() => false))) continue;
+      console.log(`Opening the application form via "${text}"`);
+      await el.click();
+      await this.settle();
+      return;
     }
   }
 
-  /**
-   * Check if form is complete and ready for submission
-   */
-  async isFormComplete() {
-    if (this.formState.submitted) return true;
-    
-    // Simple heuristic: if we've processed many elements and haven't hit navigation,
-    // assume we're done
-    return this.formState.visitedElements.size > 5 && this.formState.currentStep === 0;
-  }
-
-  /**
-   * Request human intervention
-   */
-  async requestHumanIntervention(application, reason) {
-    await this.api('captchaPause', {
-      applicationId: application.applicationId,
-      reason: 'HumanIntervention',
-      notes: reason
+  /** Everything the AI and the snapshot need to know about one control. */
+  async describe(el) {
+    return el.evaluate((n) => {
+      const text = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+      let label = '';
+      if (n.labels && n.labels.length) label = n.labels[0].innerText;
+      if (!label) label = n.getAttribute('aria-label') || '';
+      if (!label && n.getAttribute('aria-labelledby')) {
+        label = n.getAttribute('aria-labelledby').split(/\s+/)
+          .map((id) => (document.getElementById(id) || {}).innerText || '').join(' ');
+      }
+      const group = n.closest('fieldset');
+      const legend = group && group.querySelector('legend') ? group.querySelector('legend').innerText : '';
+      const wrap = n.closest('div, li, fieldset');
+      const context = wrap ? wrap.innerText.slice(0, 300) : '';
+      return {
+        tagName: n.tagName.toLowerCase(),
+        type: (n.getAttribute('type') || (n.tagName === 'INPUT' ? 'text' : '')).toLowerCase(),
+        id: n.id || '',
+        name: n.getAttribute('name') || '',
+        value: n.value || '',
+        checked: !!n.checked,
+        required: !!(n.required || n.getAttribute('aria-required') === 'true'),
+        placeholder: n.getAttribute('placeholder') || '',
+        label: text(label || legend || n.getAttribute('placeholder') || n.getAttribute('name')),
+        groupLabel: text(legend),
+        context: text(context),
+        // Styled radios/checkboxes often hide the input itself behind a visible label
+        visible: !!(n.getClientRects().length || (n.labels && n.labels[0] && n.labels[0].getClientRects().length)),
+        disabled: !!(n.disabled || n.readOnly),
+      };
     });
   }
 
-  /**
-   * Get unique identifier for an element
-   */
-  generateElementId(elementInfo) {
-    return `${elementInfo.tagName}-${elementInfo.id || elementInfo.name || elementInfo.text?.substring(0, 20)}`;
+  /** Fills every field on the current step not handled yet. Returns how many were new. */
+  async fillVisibleFields(application) {
+    let processed = 0;
+    for (const el of await this.frame.locator(FIELD_SELECTOR).all()) {
+      const info = await this.describe(el).catch(() => null);
+      if (!info || !info.visible || info.disabled) continue;
+      const key = this.fieldKey(info);
+      if (this.formState.visited.has(key)) continue;
+      this.formState.visited.add(key);
+      processed++;
+
+      // Pre-filled text (autofill, earlier step) is left alone
+      if (!['radio', 'checkbox'].includes(info.type) && info.tagName !== 'select' && info.value) continue;
+
+      try {
+        await this.fillOne(el, info, application);
+      } catch (err) {
+        console.error(`Field "${info.label}" failed:`, err.message);
+        this.formState.skippedFields.push({ label: info.label, reason: err.message });
+      }
+    }
+    return processed;
   }
 
-  /**
-   * Build result object
-   */
+  /** One key per question: radio buttons of a group share theirs. */
+  fieldKey(info) {
+    if (info.type === 'radio') return `radio:${info.name || info.groupLabel}`;
+    if (info.type === 'checkbox') return `checkbox:${info.name}:${info.id || info.label}`;
+    return `${info.tagName}:${info.id || info.name || info.label}`;
+  }
+
+  async fillOne(el, info, application) {
+    const options = await this.fieldOptions(el, info);
+    const label = info.type === 'radio' ? (info.groupLabel || info.context || info.label) : info.label;
+    const response = await this.api('answerField', {
+      candidateId: application.candidateId,
+      jobId: application.jobId,
+      fieldInfo: {
+        id: info.id || info.name,
+        label,
+        type: info.type,
+        elementType: info.tagName,
+        required: info.required,
+        placeholder: info.placeholder,
+        formGroup: info.context,
+        options,
+      },
+      formContext: { url: this.page.url(), isMultiStep: this.formState.currentStep > 0, currentStep: this.formState.currentStep + 1 },
+    });
+    const decision = response.structuredDecision || {};
+    const action = response.needsHuman ? 'human' : (decision.action || (response.answer ? 'fill' : 'skip'));
+    const value = decision.value != null && decision.value !== '' ? String(decision.value) : (response.answer || '');
+
+    if (action === 'human') {
+      this.formState.humanInterventions.push({ label, reason: decision.reason || 'AI could not answer from the candidate data', required: info.required });
+      return;
+    }
+    if (action === 'skip' || (['fill', 'select'].includes(action) && !value)) {
+      this.formState.skippedFields.push({ label, reason: decision.reason || 'AI chose to skip' });
+      return;
+    }
+
+    if (info.type === 'checkbox') {
+      const want = action === 'check' || (action !== 'uncheck' && /^(true|yes|1|checked)$/i.test(value));
+      if (want !== info.checked) await setChecked(el, want);
+      this.formState.filledFields.push({ label, value: want ? 'Checked' : 'Unchecked' });
+    } else if (info.type === 'radio') {
+      const picked = await this.checkRadio(info, options, value);
+      if (!picked) throw new Error(`No option matching "${value}"`);
+      this.formState.filledFields.push({ label, value: picked });
+    } else if (info.tagName === 'select') {
+      const opt = options.find((o) => o.value === value) ||
+        options.find((o) => o.text.toLowerCase() === value.toLowerCase());
+      await el.selectOption(opt ? opt.value : { label: value });
+      this.formState.filledFields.push({ label, value: opt ? opt.text : value });
+    } else {
+      await el.fill(value);
+      this.formState.filledFields.push({ label, value });
+    }
+  }
+
+  /** {value, text} options for a select or radio group. */
+  async fieldOptions(el, info) {
+    if (info.tagName === 'select') {
+      return el.evaluate((n) => Array.from(n.options)
+        .filter((o) => o.value && !o.disabled)
+        .map((o) => ({ value: o.value, text: o.text.trim() })));
+    }
+    if (info.type === 'radio') {
+      const radios = await this.radioGroup(info);
+      const out = [];
+      for (const r of radios) {
+        const o = await r.evaluate((n) => ({
+          value: n.value,
+          text: ((n.labels && n.labels[0] && n.labels[0].innerText) || n.getAttribute('aria-label') || n.value || '').trim(),
+        }));
+        if (o.value || o.text) out.push(o);
+      }
+      return out;
+    }
+    if (info.type === 'checkbox') return [{ value: 'true', text: info.label }];
+    return [];
+  }
+
+  radioGroup(info) {
+    if (!info.name) return this.frame.locator(`input[type="radio"][id="${cssEscape(info.id)}"]`).all();
+    return this.frame.locator(`input[type="radio"][name="${cssEscape(info.name)}"]`).all();
+  }
+
+  /** Checks the radio whose value or label matches; returns its label, or null. */
+  async checkRadio(info, options, value) {
+    const v = value.trim().toLowerCase();
+    const idx = options.findIndex((o) => o.value.toLowerCase() === v) > -1
+      ? options.findIndex((o) => o.value.toLowerCase() === v)
+      : options.findIndex((o) => o.text.toLowerCase() === v);
+    if (idx < 0) return null;
+    const radios = await this.radioGroup(info);
+    await setChecked(radios[idx], true);
+    return options[idx].text || options[idx].value;
+  }
+
+  /** CV and cover letter into the matching file inputs, in every frame. */
+  async handleFileUploads(files) {
+    if (!files) return;
+    const inputs = [];
+    for (const frame of this.page.frames()) {
+      for (const input of await frame.locator('input[type="file"]').all()) {
+        const hint = await input.evaluate((n) => {
+          const wrap = n.closest('div, li, fieldset, label');
+          return [n.name, n.id, n.getAttribute('aria-label'), n.getAttribute('accept'),
+            n.labels && n.labels[0] ? n.labels[0].innerText : '', wrap ? wrap.innerText.slice(0, 200) : '']
+            .join(' ').toLowerCase();
+        }).catch(() => '');
+        inputs.push({ input, hint, key: hint });
+      }
+    }
+    const fresh = inputs.filter((i) => !this.formState.uploaded.has(i.key));
+    const put = async (i, file, what) => {
+      await i.input.setInputFiles(file);
+      this.formState.uploaded.add(i.key);
+      this.formState.filledFields.push({ label: what, value: path.basename(file) });
+      console.log(`Uploaded ${what}`);
+    };
+    const letterInput = fresh.find((i) => /cover|letter|motivation/.test(i.hint));
+    const cvInput = fresh.find((i) => i !== letterInput && /resume|cv|curriculum|lebenslauf/.test(i.hint)) ||
+      fresh.find((i) => i !== letterInput); // a single unlabelled upload is the CV
+    if (cvInput && files.cv) await put(cvInput, files.cv, 'CV');
+    if (letterInput && files.coverLetter) await put(letterInput, files.coverLetter, 'Cover letter');
+  }
+
+  /** Clicks a visible Next/Continue button (never a submit or sign-in). True if one was clicked. */
+  async clickNext() {
+    for (const el of await this.frame.locator('button, input[type="submit"], input[type="button"], [role="button"]').all()) {
+      if (!(await el.isVisible().catch(() => false))) continue;
+      const text = ((await el.textContent().catch(() => '')) || (await el.getAttribute('value').catch(() => '')) || '').trim();
+      if (!NEXT_LIKE.test(text) || SUBMIT_LIKE.test(text) || SOCIAL_OR_AUTH.test(text)) continue;
+      console.log(`Moving to the next step via "${text}"`);
+      await el.click();
+      return true;
+    }
+    return false;
+  }
+
   buildResult() {
     return {
-      system: 'unified-form-filler',
-      stepsCompleted: this.formState.currentStep,
+      system: 'unified-form-filler', // dashDecide recognises worker-filled applications by this
+      stepsCompleted: this.formState.currentStep + 1,
       fieldsFilled: this.formState.filledFields.length,
       fieldsSkipped: this.formState.skippedFields.length,
       humanInterventions: this.formState.humanInterventions.length,
-      submitted: this.formState.submitted,
       filledFields: this.formState.filledFields,
       skippedFields: this.formState.skippedFields,
-      interventions: this.formState.humanInterventions
+      interventions: this.formState.humanInterventions,
     };
   }
 }
 
-/**
- * Main function that replaces the ATS-specific modules
- */
+/** For a value inside a quoted attribute selector. */
+function cssEscape(s) {
+  return String(s).replace(/["\\]/g, '\\$&');
+}
+
+/** Checks/unchecks a radio or checkbox, including ones hidden behind a styled label. */
+async function setChecked(el, want) {
+  if (await el.isVisible().catch(() => false)) return want ? el.check() : el.uncheck();
+  // A DOM click on the hidden input fires the same events (and React handlers) as clicking its label
+  await el.evaluate((n, w) => { if (n.checked !== w) n.click(); }, want);
+}
+
+/** Fills the whole form for review. Never submits - see clickSubmit. */
 async function fillForm(page, application, files, candidate, api) {
   const filler = new UnifiedFormFiller(page, api);
-  return await filler.fillApplication(application, files, candidate);
+  return filler.fillApplication(application, files, candidate);
+}
+
+/** True once any frame of the page shows a "we received your application" message. */
+async function waitForConfirmation(page, timeoutMs) {
+  const until = Date.now() + timeoutMs;
+  while (Date.now() < until) {
+    for (const frame of page.frames()) {
+      const text = await frame.evaluate(() => (document.body ? document.body.innerText : '')).catch(() => '');
+      if (CONFIRMATION.test(text)) return true;
+    }
+    await page.waitForTimeout(1000);
+  }
+  return false;
 }
 
 /**
- * Submit the form after human approval
+ * Submits the filled form - only ever called after a human approved it.
+ * Returns true if the employer's confirmation was seen, false if Submit was
+ * clicked but no confirmation appeared (the caller flags it for a person
+ * rather than recording it as submitted). Throws if there is no submit button.
  */
 async function clickSubmit(page) {
-  // Look for submit button with multiple strategies
-  const submitStrategies = [
-    'button[type="submit"]',
-    'button:has-text("Submit")',
-    'button:has-text("Apply")',
-    'input[type="submit"]',
-    '[role="button"]:has-text("Submit")',
-    '[role="button"]:has-text("Apply")'
-  ];
-  
-  for (const strategy of submitStrategies) {
-    try {
-      const button = page.locator(strategy).first();
-      if (await button.count() > 0) {
-        await button.click();
-        
-        // Wait for submission confirmation
-        await page.waitForSelector(
-          'text=/application.*received|thank you|successfully submitted|your application has been sent/i',
-          { timeout: 15000 }
-        ).catch(() => {});
-        
-        return;
+  // The frame holding the form first (embedded ATS iframes), so a page-header button can't win
+  const filler = new UnifiedFormFiller(page, null);
+  const counted = [];
+  for (const frame of page.frames()) counted.push({ frame, n: await filler.countFields(frame) });
+  counted.sort((a, b) => b.n - a.n);
+  for (const { frame } of counted) {
+    const candidates = frame.locator('button, input[type="submit"], [role="button"]');
+    let fallback = null;
+    for (const el of await candidates.all()) {
+      if (!(await el.isVisible().catch(() => false))) continue;
+      const text = ((await el.textContent().catch(() => '')) || (await el.getAttribute('value').catch(() => '')) || '').trim();
+      if (SOCIAL_OR_AUTH.test(text) || NEXT_LIKE.test(text)) continue;
+      if (/submit|send application|apply/i.test(text)) {
+        await el.click();
+        return waitForConfirmation(page, 20000);
       }
-    } catch (error) {
-      // Try next strategy
+      if (!fallback && (await el.getAttribute('type').catch(() => '')) === 'submit' &&
+          (await el.evaluate((n) => !!n.closest('form')).catch(() => false))) fallback = el;
+    }
+    if (fallback) {
+      await fallback.click();
+      return waitForConfirmation(page, 20000);
     }
   }
-  
-  throw new Error('Could not find or click submit button');
+  throw new Error('Could not find the submit button');
 }
 
 module.exports = { fillForm, clickSubmit, UnifiedFormFiller };

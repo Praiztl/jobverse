@@ -4,12 +4,12 @@
  * Key lives in Script Properties as ANTHROPIC_API_KEY, never in the sheet.
  */
 
-function callClaude(systemPrompt, userPrompt, maxTokens) {
+function callClaude_(systemPrompt, userPrompt, maxTokens) {
   var apiKey = PropertiesService.getScriptProperties().getProperty('ANTHROPIC_API_KEY');
   if (!apiKey) throw new Error('Set ANTHROPIC_API_KEY in Script properties.');
 
   var payload = {
-    model: getConfig('ANTHROPIC_MODEL') || 'claude-sonnet-4-6',
+    model: getConfig_('ANTHROPIC_MODEL') || 'claude-sonnet-4-6',
     max_tokens: maxTokens || 4000,
     system: systemPrompt,
     messages: [{ role: 'user', content: userPrompt }]
@@ -43,8 +43,8 @@ function callClaude(systemPrompt, userPrompt, maxTokens) {
 }
 
 /** Ask for JSON and parse it defensively (strips code fences, finds outer braces). */
-function callClaudeJSON(systemPrompt, userPrompt, maxTokens) {
-  var text = callClaude(
+function callClaudeJSON_(systemPrompt, userPrompt, maxTokens) {
+  var text = callClaude_(
     systemPrompt + '\nRespond with valid JSON only. No markdown, no commentary.',
     userPrompt, maxTokens
   );
@@ -55,23 +55,23 @@ function callClaudeJSON(systemPrompt, userPrompt, maxTokens) {
   return JSON.parse(clean);
 }
 
-function saveAIOutput(agent, candidateId, jobId, outputObj) {
-  var id = newId('OUT');
-  appendObject('AIOutputs', {
+function saveAIOutput_(agent, candidateId, jobId, outputObj) {
+  var id = newId_('OUT');
+  appendObject_('AIOutputs', {
     OutputID: id,
     CreatedAt: new Date(),
     Agent: agent,
     CandidateID: candidateId || '',
     JobID: jobId || '',
-    Model: getConfig('ANTHROPIC_MODEL'),
+    Model: getConfig_('ANTHROPIC_MODEL'),
     OutputJSON: JSON.stringify(outputObj).slice(0, 45000)
   });
   return id;
 }
 
 function getTone_(name) {
-  var rows = readRows('ToneProfiles');
-  var wanted = name || getConfig('DEFAULT_TONE');
+  var rows = readRows_('ToneProfiles');
+  var wanted = name || getConfig_('DEFAULT_TONE');
   for (var i = 0; i < rows.length; i++) {
     if (rows[i].ProfileName === wanted) return rows[i].StyleInstructions;
   }

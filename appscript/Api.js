@@ -5,19 +5,52 @@
  *  - POST (JSON + token)   -> the Chrome extension API
  *
  * Extension requests are authenticated with the shared API_TOKEN from Config.
+ *
+ * The deployment has to stay "Anyone, even anonymous" so the extension and
+ * worker can POST without a Google login, which means anyone holding the
+ * /exec URL can GET it too. The dashboard is therefore only served to a
+ * signed-in account listed in DASHBOARD_EMAILS (default: the deploying
+ * account) or with ?key=<DASHBOARD_KEY>, and every dash* RPC re-checks the
+ * key. Everything else server-side is private (trailing underscore), so
+ * google.script.run can't reach it.
  */
- 
+
 function doGet(e) {
-  return HtmlService.createTemplateFromFile('Dashboard').evaluate()
+  var key = (e && e.parameter && e.parameter.key) || '';
+  if (!dashAccessAllowed_(key)) {
+    // Plain text, not HtmlService: an HtmlService page would carry google.script.run
+    return ContentService.createTextOutput('Access denied. Open the Jobverse Console with its ?key= link, ' +
+      'or while signed in to an authorised Google account.');
+  }
+  var t = HtmlService.createTemplateFromFile('Dashboard');
+  t.dashKey = key;
+  return t.evaluate()
     .setTitle('Jobverse Console')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
 }
- 
+
+/** True for the dashboard key, or a signed-in account in DASHBOARD_EMAILS (default: the deployer). */
+function dashAccessAllowed_(key) {
+  var expected = getConfig_('DASHBOARD_KEY');
+  if (expected && key && key === expected) return true;
+  var viewer = String(Session.getActiveUser().getEmail() || '').toLowerCase();
+  if (!viewer) return false;
+  var allowed = (getConfig_('DASHBOARD_EMAILS') || Session.getEffectiveUser().getEmail())
+    .split(',').map(function (s) { return s.trim().toLowerCase(); }).filter(Boolean);
+  return allowed.indexOf(viewer) > -1;
+}
+
+/** First line of every dash* RPC: google.script.run calls are reachable by anyone who has the page. */
+function requireDashAccess_(key) {
+  if (!dashAccessAllowed_(key)) throw new Error('Access denied - reopen the Jobverse Console with its ?key= link.');
+}
+
 function doPost(e) {
   var out;
   try {
     var req = JSON.parse(e.postData.contents);
-    if (req.token !== getConfig('API_TOKEN')) throw new Error('Unauthorised');
+    var token = getConfig_('API_TOKEN');
+    if (!token || req.token !== token) throw new Error('Unauthorised');
     var handlers = {
       listCandidates: apiListCandidates_,
       getCandidatePayload: apiGetCandidatePayload_,
@@ -60,7 +93,7 @@ function doPost(e) {
 /* --------------------------- extension handlers -------------------------- */
  
 function apiListCandidates_(req) {
-  return readRows('Candidates')
+  return readRows_('Candidates', ['CandidateID', 'FullName', 'Email', 'Status', 'Active'])
     .filter(function (c) { return c.Status !== 'Archived' && String(c.Active).toUpperCase() !== 'FALSE'; })
     .map(function (c) {
       return { id: c.CandidateID, name: c.FullName, email: c.Email, status: c.Status };
@@ -68,7 +101,7 @@ function apiListCandidates_(req) {
 }
  
 function apiGetCandidatePayload_(req) {
-  var c = findRow('Candidates', 'CandidateID', req.candidateId);
+  var c = findRow_('Candidates', 'CandidateID', req.candidateId);
   if (!c) throw new Error('Candidate not found');
   var profile = {};
   try { profile = JSON.parse(c.AIProfileJSON || '{}'); } catch (ignored) {}
@@ -93,13 +126,13 @@ function apiGetCandidatePayload_(req) {
 }
  
 function apiAnalyseJob_(req) {
-  var jobId = runJobAnalyst(req.candidateId, req.jobUrl, req.jdText, req.ats);
-  var job = findRow('Jobs', 'JobID', jobId);
+  var jobId = runJobAnalyst_(req.candidateId, req.jobUrl, req.jdText, req.ats);
+  var job = findRow_('Jobs', 'JobID', jobId);
  
-  var cvId = runResumeBuilder(req.candidateId, jobId, req.tone);
-  var letterId = runCoverLetterBuilder(req.candidateId, jobId, req.tone);
-  var cv = findRow('CVVersions', 'VersionID', cvId);
-  var letter = findRow('CoverLetters', 'LetterID', letterId);
+  var cvId = runResumeBuilder_(req.candidateId, jobId, req.tone);
+  var letterId = runCoverLetterBuilder_(req.candidateId, jobId, req.tone);
+  var cv = findRow_('CVVersions', 'VersionID', cvId);
+  var letter = findRow_('CoverLetters', 'LetterID', letterId);
  
   return {
     jobId: jobId, company: job.Company, title: job.JobTitle, suitability: job.SuitabilityScore,
@@ -113,41 +146,41 @@ function apiAnalyseJob_(req) {
  * analyseJob stays for the worker and older extension builds.
  */
 function apiAnalyseJobPosting_(req) {
-  var jobId = runJobAnalyst(req.candidateId, req.jobUrl, req.jdText, req.ats);
-  var job = findRow('Jobs', 'JobID', jobId);
+  var jobId = runJobAnalyst_(req.candidateId, req.jobUrl, req.jdText, req.ats);
+  var job = findRow_('Jobs', 'JobID', jobId);
   // Build the candidate profile now, so the parallel CV and letter calls
   // don't both try to create it.
-  var cand = findRow('Candidates', 'CandidateID', req.candidateId);
-  if (cand && !cand.AIProfileJSON) runResumeAnalyst(req.candidateId);
+  var cand = findRow_('Candidates', 'CandidateID', req.candidateId);
+  if (cand && !cand.AIProfileJSON) runResumeAnalyst_(req.candidateId);
   return { jobId: jobId, company: job.Company, title: job.JobTitle, suitability: job.SuitabilityScore };
 }
 
 function apiBuildTailoredCV_(req) {
-  var cvId = runResumeBuilder(req.candidateId, req.jobId, req.tone);
-  return { cvUrl: findRow('CVVersions', 'VersionID', cvId).DocURL };
+  var cvId = runResumeBuilder_(req.candidateId, req.jobId, req.tone);
+  return { cvUrl: findRow_('CVVersions', 'VersionID', cvId).DocURL };
 }
 
 function apiBuildCoverLetter_(req) {
-  var letterId = runCoverLetterBuilder(req.candidateId, req.jobId, req.tone);
-  return { letterUrl: findRow('CoverLetters', 'LetterID', letterId).DocURL };
+  var letterId = runCoverLetterBuilder_(req.candidateId, req.jobId, req.tone);
+  return { letterUrl: findRow_('CoverLetters', 'LetterID', letterId).DocURL };
 }
 
 function apiPrecheckApplication_(req) {
-  var cand = findRow('Candidates', 'CandidateID', req.candidateId);
+  var cand = findRow_('Candidates', 'CandidateID', req.candidateId);
   if (!cand) throw new Error('Candidate not found');
   if (String(cand.Active).toUpperCase() === 'FALSE') return { block: 'inactive' };
  
-  var allApps = readRows('Applications');
+  var allApps = readRows_('Applications', ['CandidateID', 'Status', 'DedupeHash', 'CreatedAt']);
  
   var basis = req.candidateId + '|' + normaliseJobKey_(req.jobUrl, req.company, req.jobTitle);
   var hash = Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, basis)).slice(0, 24);
-  if (allApps.some(function (a) { return a.DedupeHash === hash && a.Status !== 'Failed'; })) return { block: 'duplicate' };
+  if (allApps.some(function (a) { return a.DedupeHash === hash && countsAsApplication_(a.Status); })) return { block: 'duplicate' };
  
-  var target = parseInt(cand.TargetApplications || getConfig('DEFAULT_TARGET_APPLICATIONS') || '50', 10);
-  var totalForCand = allApps.filter(function (a) { return a.CandidateID === req.candidateId && a.Status !== 'Failed'; }).length;
+  var target = parseInt(cand.TargetApplications || getConfig_('DEFAULT_TARGET_APPLICATIONS') || '50', 10);
+  var totalForCand = allApps.filter(function (a) { return a.CandidateID === req.candidateId && countsAsApplication_(a.Status); }).length;
   if (target > 0 && totalForCand >= target) return { block: 'targetMet', target: target };
  
-  var limit = parseInt(getConfig('MAX_APPS_PER_CANDIDATE_PER_DAY') || '15', 10);
+  var limit = parseInt(getConfig_('MAX_APPS_PER_CANDIDATE_PER_DAY') || '15', 10);
   var today = Utilities.formatDate(new Date(), 'GMT', 'yyyy-MM-dd');
   var todayCount = allApps.filter(function (a) {
     return a.CandidateID === req.candidateId &&
@@ -159,7 +192,14 @@ function apiPrecheckApplication_(req) {
 }
  
 function apiStartApplication_(req) {
-  var cand = findRow('Candidates', 'CandidateID', req.candidateId);
+  // The worker and the extension can start the same job at once: check-then-append under one lock
+  var lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try { return startApplicationLocked_(req); } finally { lock.releaseLock(); }
+}
+
+function startApplicationLocked_(req) {
+  var cand = findRow_('Candidates', 'CandidateID', req.candidateId);
   if (!cand) throw new Error('Candidate not found');
  
   if (String(cand.Active).toUpperCase() === 'FALSE') return { inactive: true };
@@ -167,17 +207,17 @@ function apiStartApplication_(req) {
   var basis = req.candidateId + '|' + normaliseJobKey_(req.jobUrl, req.company, req.jobTitle);
   var hash = Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, basis)).slice(0, 24);
  
-  var allApps = readRows('Applications');
-  var dupe = allApps.some(function (a) { return a.DedupeHash === hash && a.Status !== 'Failed'; });
+  var allApps = readRows_('Applications', ['CandidateID', 'Status', 'DedupeHash', 'CreatedAt']);
+  var dupe = allApps.some(function (a) { return a.DedupeHash === hash && countsAsApplication_(a.Status); });
   if (dupe) return { duplicate: true };
  
-  var target = parseInt(cand.TargetApplications || getConfig('DEFAULT_TARGET_APPLICATIONS') || '50', 10);
+  var target = parseInt(cand.TargetApplications || getConfig_('DEFAULT_TARGET_APPLICATIONS') || '50', 10);
   var totalForCand = allApps.filter(function (a) {
-    return a.CandidateID === req.candidateId && a.Status !== 'Failed';
+    return a.CandidateID === req.candidateId && countsAsApplication_(a.Status);
   }).length;
   if (target > 0 && totalForCand >= target) return { targetMet: true, target: target };
  
-  var limit = parseInt(getConfig('MAX_APPS_PER_CANDIDATE_PER_DAY') || '15', 10);
+  var limit = parseInt(getConfig_('MAX_APPS_PER_CANDIDATE_PER_DAY') || '15', 10);
   var today = Utilities.formatDate(new Date(), 'GMT', 'yyyy-MM-dd');
   var todayCount = allApps.filter(function (a) {
     return a.CandidateID === req.candidateId &&
@@ -185,18 +225,18 @@ function apiStartApplication_(req) {
   }).length;
   if (todayCount >= limit) return { throttled: true, limit: limit };
  
-  var appId = newId('APP');
-  appendObject('Applications', {
+  var appId = newId_('APP');
+  appendObject_('Applications', {
     ApplicationID: appId, CreatedAt: new Date(), CandidateID: req.candidateId,
     JobID: req.jobId || '', Company: req.company || '', JobTitle: req.jobTitle || '',
     JobURL: req.jobUrl || '', ATS: req.ats || '', Status: 'In Progress', DedupeHash: hash
   });
-  logActivity('extension', 'application_started', 'application', appId, req.company + ' - ' + req.jobTitle);
+  logActivity_('extension', 'application_started', 'application', appId, req.company + ' - ' + req.jobTitle);
   return { duplicate: false, applicationId: appId };
 }
  
 function apiAnswerQuestion_(req) {
-  var a = answerScreeningQuestion(req.candidateId, req.jobId, req.question);
+  var a = answerScreeningQuestion_(req.candidateId, req.jobId, req.question);
   return { answer: a, needsHuman: a === 'NEEDS_HUMAN' };
 }
 
@@ -207,9 +247,9 @@ function apiAnswerQuestion_(req) {
  * ENHANCED: Now accepts semantic field representation with context and returns structured actions.
  */
 function apiAnswerField_(req) {
-  var cand = findRow('Candidates', 'CandidateID', req.candidateId);
+  var cand = findRow_('Candidates', 'CandidateID', req.candidateId);
   if (!cand) throw new Error('Candidate not found');
-  var job = req.jobId ? findRow('Jobs', 'JobID', req.jobId) : null;
+  var job = req.jobId ? findRow_('Jobs', 'JobID', req.jobId) : null;
 
   var fieldInfo = req.fieldInfo || {};
   var formContext = req.formContext || {};
@@ -245,7 +285,7 @@ function apiAnswerField_(req) {
       '\nForm URL: ' + (formContext.url || 'unknown');
   }
 
-  var decision = callClaudeJSON(
+  var decision = callClaudeJSON_(
     prompt + ' Return JSON with this exact structure: {"action": "fill|select|check|uncheck|skip|human", "value": "string", "reason": "string", "confidence": 0.0-1.0}. ' +
     'Action types: "fill" for text fields, "select" for dropdowns (use option value), "check"/"uncheck" for checkboxes, "skip" to ignore, "human" if you need help.',
     'SEMANTIC FIELD INFO:\n' + JSON.stringify({
@@ -288,7 +328,7 @@ function apiAnswerField_(req) {
     800
   );
 
-  saveAIOutput('FieldAnswerer', req.candidateId, req.jobId, { 
+  saveAIOutput_('FieldAnswerer', req.candidateId, req.jobId, { 
     fieldInfo: fieldInfo, 
     formContext: formContext,
     decision: decision 
@@ -312,9 +352,9 @@ function apiAnswerField_(req) {
  * navigation decisions that can't be determined mechanically.
  */
 function apiDecideClick_(req) {
-  var cand = findRow('Candidates', 'CandidateID', req.candidateId);
+  var cand = findRow_('Candidates', 'CandidateID', req.candidateId);
   if (!cand) throw new Error('Candidate not found');
-  var job = req.jobId ? findRow('Jobs', 'JobID', req.jobId) : null;
+  var job = req.jobId ? findRow_('Jobs', 'JobID', req.jobId) : null;
 
   var elementInfo = req.elementInfo || {};
   var prompt = 'Decide whether to click a button/link during job application form filling. ' +
@@ -322,7 +362,7 @@ function apiDecideClick_(req) {
     'Return JSON with { "shouldClick": boolean, "reason": string }. ' +
     'If uncertain, set shouldClick to false and explain why in reason.';
 
-  var decision = callClaudeJSON(
+  var decision = callClaudeJSON_(
     prompt,
     'ELEMENT INFO: ' + JSON.stringify(elementInfo) +
     '\n\nCANDIDATE CONTEXT:\n' + JSON.stringify({
@@ -334,12 +374,12 @@ function apiDecideClick_(req) {
     300
   );
 
-  saveAIOutput('ClickDecider', req.candidateId, req.jobId, { elementInfo: elementInfo, decision: decision });
+  saveAIOutput_('ClickDecider', req.candidateId, req.jobId, { elementInfo: elementInfo, decision: decision });
 
   return {
     shouldClick: decision.shouldClick || false,
     reason: decision.reason || '',
-    needsHuman: !decision.shouldClick && decision.reason.toLowerCase().includes('human')
+    needsHuman: !decision.shouldClick && /human/i.test(String(decision.reason || ''))
   };
 }
 
@@ -351,7 +391,7 @@ function apiDecideClick_(req) {
  */
 function apiChooseNextStep_(req) {
   var candidates = (req.candidates || []).slice(0, 40);
-  var decision = callClaudeJSON(
+  var decision = callClaudeJSON_(
     'You are navigating a web browser towards the online application FORM for a specific job. ' +
     'The current page is not the form yet. Choose the ONE clickable element most likely to lead to ' +
     'the application form for this job (e.g. "Apply", "Apply now", "Apply on company website", ' +
@@ -382,7 +422,7 @@ function apiChooseNextStep_(req) {
     '\n\nALREADY TRIED: ' + JSON.stringify(req.tried || []),
     300
   );
-  saveAIOutput('NextStepChooser', req.candidateId || '', '', { url: req.url, candidates: candidates, decision: decision });
+  saveAIOutput_('NextStepChooser', req.candidateId || '', '', { url: req.url, candidates: candidates, decision: decision });
 
   var action = ['click', 'closed', 'wait', 'human'].indexOf(decision.action) > -1 ? decision.action : 'human';
   var index = action === 'click' ? Number(decision.index) : null;
@@ -391,23 +431,27 @@ function apiChooseNextStep_(req) {
 }
 
 function apiRequestReview_(req) {
-  var taskId = newId('REV');
-  appendObject('ReviewQueue', {
+  var taskId = newId_('REV');
+  appendObject_('ReviewQueue', {
     TaskID: taskId, CreatedAt: new Date(), Type: 'Submission',
     CandidateID: req.candidateId, JobID: req.jobId || '', RefID: req.applicationId,
     Summary: req.company + ' - ' + req.jobTitle,
     AIFindings: JSON.stringify(req.snapshot || {}).slice(0, 40000),
     Status: 'Awaiting Human'
   });
-  var app = findRow('Applications', 'ApplicationID', req.applicationId);
-  if (app) updateRow('Applications', app._row, { Status: 'Awaiting Review' });
+  var app = findRow_('Applications', 'ApplicationID', req.applicationId);
+  if (app) {
+    // Who filled it decides who submits it after approval (see dashDecide) - never both
+    ensureColumns_('Applications', ['FilledBy']);
+    updateRow_('Applications', app._row, { Status: 'Awaiting Review', FilledBy: req.filledBy === 'worker' ? 'worker' : 'extension' });
+  }
   notifyReviewers_('Review needed: ' + req.company + ' - ' + req.jobTitle,
     'A completed application is paused for approval. Open the Jobverse Console review queue. Task ' + taskId);
   return { taskId: taskId };
 }
  
 function apiCheckApproval_(req) {
-  var t = findRow('ReviewQueue', 'TaskID', req.taskId);
+  var t = findRow_('ReviewQueue', 'TaskID', req.taskId);
   if (!t) throw new Error('Task not found');
   return { status: t.Status, decision: t.Decision || '', notes: t.Notes || '' };
 }
@@ -420,10 +464,10 @@ function apiCheckApproval_(req) {
  * reason instead.
  */
 function apiCaptchaPause_(req) {
-  var app = findRow('Applications', 'ApplicationID', req.applicationId);
+  var app = findRow_('Applications', 'ApplicationID', req.applicationId);
   var reason = req.reason || 'CAPTCHA';
-  if (app) updateRow('Applications', app._row, { Status: reason + ' - Human Needed' });
-  logActivity('extension', 'automation_pause', 'application', req.applicationId, reason + ': ' + (req.jobUrl || ''));
+  if (app) updateRow_('Applications', app._row, { Status: reason + ' - Human Needed' });
+  logActivity_('extension', 'automation_pause', 'application', req.applicationId, reason + ': ' + (req.jobUrl || ''));
   notifyReviewers_(reason + ' needs a human: ' + (req.company || ''),
     'Application ' + req.applicationId + ' hit "' + reason + '" at ' + (req.jobUrl || '') +
     '. Open the tab and resolve it' + (reason === 'CAPTCHA' ? ', then the extension resumes automatically.' : '.'));
@@ -431,35 +475,35 @@ function apiCaptchaPause_(req) {
 }
  
 function apiConfirmSubmission_(req) {
-  var app = findRow('Applications', 'ApplicationID', req.applicationId);
+  var app = findRow_('Applications', 'ApplicationID', req.applicationId);
   if (!app) throw new Error('Application not found');
  
   var shotUrl = '';
   if (req.screenshotBase64) {
     var blob = Utilities.newBlob(Utilities.base64Decode(req.screenshotBase64), 'image/png',
       req.applicationId + '-confirmation.png');
-    var f = DriveApp.getFolderById(getConfig('ROOT_FOLDER_ID'))
+    var f = DriveApp.getFolderById(getConfig_('ROOT_FOLDER_ID'))
       .getFoldersByName('Screenshots').next().createFile(blob);
     shotUrl = f.getUrl();
   }
   var submittedAt = new Date();
-  updateRow('Applications', app._row, {
+  updateRow_('Applications', app._row, {
     Status: 'Submitted', SubmittedAt: submittedAt, ConfirmationScreenshotURL: shotUrl
   });
-  logActivity('extension', 'application_submitted', 'application', req.applicationId, app.Company);
+  logActivity_('extension', 'application_submitted', 'application', req.applicationId, app.Company);
   app.SubmittedAt = submittedAt;
   // The submission is recorded either way - a follow-up hiccup mustn't make the caller think it wasn't
-  try { createSubmissionFollowUp(app); }
-  catch (e) { logActivity('system', 'followup_error', 'application', req.applicationId, e.message); }
+  try { createSubmissionFollowUp_(app); }
+  catch (e) { logActivity_('system', 'followup_error', 'application', req.applicationId, e.message); }
   return { recorded: true, screenshotUrl: shotUrl };
 }
  
 function apiReportError_(req) {
-  var app = req.applicationId ? findRow('Applications', 'ApplicationID', req.applicationId) : null;
-  if (app) updateRow('Applications', app._row, {
+  var app = req.applicationId ? findRow_('Applications', 'ApplicationID', req.applicationId) : null;
+  if (app) updateRow_('Applications', app._row, {
     Status: 'Failed', ErrorLog: (String(app.ErrorLog || '') + '\n' + req.message).slice(0, 5000)
   });
-  logActivity('extension', 'error', 'application', req.applicationId || '-', req.message);
+  logActivity_('extension', 'error', 'application', req.applicationId || '-', req.message);
   return { logged: true };
 }
  
@@ -470,7 +514,7 @@ function apiReportError_(req) {
  * this had nothing to give the worker until now.
  */
 function apiListProspects_(req) {
-  return readRows('Prospects')
+  return readRows_('Prospects', ['ProspectID', 'CandidateID', 'Status', 'JobURL', 'Company', 'JobTitle'])
     .filter(function (p) { return p.CandidateID === req.candidateId && (!req.status || p.Status === req.status); })
     .map(function (p) {
       return { id: p.ProspectID, url: p.JobURL, company: p.Company, title: p.JobTitle, ats: detectATSName_(p.JobURL) };
@@ -489,28 +533,28 @@ function detectATSName_(url) {
 }
  
 function apiUpdateProspectStatus_(req) {
-  var p = findRow('Prospects', 'ProspectID', req.prospectId);
+  var p = findRow_('Prospects', 'ProspectID', req.prospectId);
   if (!p) throw new Error('Prospect not found');
-  updateRow('Prospects', p._row, { Status: req.status, Notes: req.notes || p.Notes });
-  logActivity('extension', 'prospect_status', 'prospect', req.prospectId, req.status);
+  updateRow_('Prospects', p._row, { Status: req.status, Notes: req.notes || p.Notes });
+  logActivity_('extension', 'prospect_status', 'prospect', req.prospectId, req.status);
   return { updated: true };
 }
  
 function apiGetCandidateCVText_(req) {
-  var c = findRow('Candidates', 'CandidateID', req.candidateId);
+  var c = findRow_('Candidates', 'CandidateID', req.candidateId);
   if (!c) throw new Error('Candidate not found');
   if (!c.CVFileID) return { text: '' };
-  return { text: extractFileText(c.CVFileID).slice(0, 40000) };
+  return { text: extractFileText_(c.CVFileID).slice(0, 40000) };
 }
  
 function apiGenerateNHSStatement_(req) {
-  var jobId = runJobAnalyst(req.candidateId, req.jobUrl, req.jdText, 'NHS Jobs');
-  var result = runNHSSupportingStatement(req.candidateId, jobId, req.tone || 'NHS');
+  var jobId = runJobAnalyst_(req.candidateId, req.jobUrl, req.jdText, 'NHS Jobs');
+  var result = runNHSSupportingStatement_(req.candidateId, jobId, req.tone || 'NHS');
   return { jobId: jobId, statementText: result.text, docUrl: result.docUrl };
 }
  
 function apiCreateNHSFollowUp_(req) {
-  var id = createNHSTracFollowUp(req.candidateId, req.applicationId, req.company, req.jobTitle, req.closingDate);
+  var id = createNHSTracFollowUp_(req.candidateId, req.applicationId, req.company, req.jobTitle, req.closingDate);
   return { followUpId: id };
 }
  
@@ -521,7 +565,7 @@ function apiCreateNHSFollowUp_(req) {
  */
 function apiCheckPlatformAccount_(req) {
   var domain = normaliseDomain_(req.atsDomain || req.jobUrl);
-  var matches = readRows('PlatformAccounts').filter(function (a) {
+  var matches = readRows_('PlatformAccounts').filter(function (a) {
     return a.CandidateID === req.candidateId && a.ATSDomain === domain;
   });
   if (!matches.length) return { found: false };
@@ -537,12 +581,12 @@ function apiCheckPlatformAccount_(req) {
  */
 function apiRecordPlatformAccount_(req) {
   var domain = normaliseDomain_(req.atsDomain || req.jobUrl);
-  var id = newId('ACC');
-  appendObject('PlatformAccounts', {
+  var id = newId_('ACC');
+  appendObject_('PlatformAccounts', {
     AccountID: id, CreatedAt: new Date(), CandidateID: req.candidateId,
     ATSDomain: domain, Status: req.status, Notes: req.notes || '', UpdatedAt: new Date()
   });
-  logActivity('extension', 'platform_account_' + req.status, 'candidate', req.candidateId, domain);
+  logActivity_('extension', 'platform_account_' + req.status, 'candidate', req.candidateId, domain);
   return { recorded: true, accountId: id };
 }
  
@@ -566,7 +610,7 @@ var ACCOUNT_PW_PREFIX_ = 'PLATFORM_PW_';
 /** Saved account for this candidate + site; with req.create, makes one (password generated here) if none exists. */
 function apiPlatformAccount_(req) {
   ensureColumns_('PlatformAccounts', ['Email', 'LoginURL']);
-  var cand = findRow('Candidates', 'CandidateID', req.candidateId);
+  var cand = findRow_('Candidates', 'CandidateID', req.candidateId);
   if (!cand) throw new Error('Candidate not found');
   var domain = normaliseDomain_(req.atsDomain || req.jobUrl);
   var email = String(cand.ApplicationEmail || cand.Email || '').trim();
@@ -584,29 +628,29 @@ function apiPlatformAccount_(req) {
   if (!req.create) return { found: false };
   if (!email) throw new Error('Candidate has no application email on file - add ApplicationEmail before creating site accounts.');
 
-  var id = newId('ACC');
+  var id = newId_('ACC');
   var password = generateSitePassword_();
   // Saved before the sign-up form is even submitted, so the password is never lost
   PropertiesService.getScriptProperties().setProperty(ACCOUNT_PW_PREFIX_ + id, password);
-  appendObject('PlatformAccounts', {
+  appendObject_('PlatformAccounts', {
     AccountID: id, CreatedAt: new Date(), CandidateID: req.candidateId, ATSDomain: domain, Email: email,
     LoginURL: req.jobUrl || '', Status: 'Pending', Notes: 'Sign-up started by the extension', UpdatedAt: new Date()
   });
-  logActivity('extension', 'platform_account_signup', 'candidate', req.candidateId, domain);
+  logActivity_('extension', 'platform_account_signup', 'candidate', req.candidateId, domain);
   return { found: true, created: true, accountId: id, status: 'Pending', email: email, password: password };
 }
 
 function apiUpdatePlatformAccount_(req) {
-  var acct = findRow('PlatformAccounts', 'AccountID', req.accountId);
+  var acct = findRow_('PlatformAccounts', 'AccountID', req.accountId);
   if (!acct) throw new Error('Platform account not found: ' + req.accountId);
-  updateRow('PlatformAccounts', acct._row, { Status: req.status, Notes: req.notes || acct.Notes, UpdatedAt: new Date() });
-  logActivity('extension', 'platform_account_' + req.status, 'candidate', acct.CandidateID, acct.ATSDomain);
+  updateRow_('PlatformAccounts', acct._row, { Status: req.status, Notes: req.notes || acct.Notes, UpdatedAt: new Date() });
+  logActivity_('extension', 'platform_account_' + req.status, 'candidate', acct.CandidateID, acct.ATSDomain);
   return { updated: true };
 }
 
 /** Latest account for candidate + site, ignoring sign-ups that failed outright. */
 function latestAccount_(candidateId, domain) {
-  var rows = readRows('PlatformAccounts').filter(function (a) {
+  var rows = readRows_('PlatformAccounts').filter(function (a) {
     return a.CandidateID === candidateId && a.ATSDomain === domain && a.Status !== 'Failed';
   });
   rows.sort(function (a, b) { return new Date(b.CreatedAt) - new Date(a.CreatedAt); });
@@ -633,7 +677,9 @@ function ensureColumns_(name, cols) {
   var sh = sheet_(name);
   var map = getHeaderMap_(sh);
   var next = sh.getLastColumn() + 1;
-  cols.forEach(function (c) { if (!map[c]) sh.getRange(1, next++).setValue(c); });
+  var added = false;
+  cols.forEach(function (c) { if (!map[c]) { sh.getRange(1, next++).setValue(c); added = true; } });
+  if (added) clearHeaderCache_(sh);
 }
 
 /**
@@ -689,10 +735,10 @@ function extractDocId_(url) {
  */
 function apiListApplicationsByStatus_(req) {
   var cvByJob = {}, clByJob = {};
-  readRows('CVVersions').forEach(function (v) { cvByJob[v.JobID] = v.DocURL; });
-  readRows('CoverLetters').forEach(function (l) { clByJob[l.JobID] = l.DocURL; });
+  readRows_('CVVersions', ['JobID', 'DocURL']).forEach(function (v) { cvByJob[v.JobID] = v.DocURL; });
+  readRows_('CoverLetters', ['JobID', 'DocURL']).forEach(function (l) { clByJob[l.JobID] = l.DocURL; });
  
-  return readRows('Applications')
+  return readRows_('Applications', ['ApplicationID', 'CandidateID', 'JobID', 'Company', 'JobTitle', 'JobURL', 'ATS', 'Status'])
     .filter(function (a) { return a.Status === req.status && (!req.candidateId || a.CandidateID === req.candidateId); })
     .map(function (a) {
       return {
@@ -705,51 +751,84 @@ function apiListApplicationsByStatus_(req) {
  
 /* ------------------------- dashboard RPC (google.script.run) ------------------------- */
  
-function dashData() {
-  var allApps = readRows('Applications');
+function dashData(key) {
+  requireDashAccess_(key);
+  requireDashAccess_(key);
+  // Only the columns the dashboard shows - Candidates.AIProfileJSON and
+  // ReviewQueue.AIFindings alone can be tens of KB per row.
+  var apps = readRows_('Applications', ['ApplicationID', 'CandidateID', 'Company', 'JobTitle', 'ATS', 'Status',
+    'JobURL', 'SubmittedAt', 'ConfirmationScreenshotURL', 'Outcome']);
   var countByCand = {};
-  allApps.forEach(function (a) {
-    if (a.Status !== 'Failed') countByCand[a.CandidateID] = (countByCand[a.CandidateID] || 0) + 1;
+  apps.forEach(function (a) {
+    if (countsAsApplication_(a.Status)) countByCand[a.CandidateID] = (countByCand[a.CandidateID] || 0) + 1;
   });
   return {
-    candidates: readRows('Candidates').map(function (c) {
+    candidates: readRows_('Candidates', ['CandidateID', 'FullName', 'Email', 'Status', 'Active',
+      'TargetApplications', 'PreferredRoles', 'Location', 'CreatedAt']).map(function (c) {
       return { id: c.CandidateID, name: c.FullName, email: c.Email, status: c.Status,
                active: String(c.Active).toUpperCase() !== 'FALSE',
                target: parseInt(c.TargetApplications || '0', 10) || 0,
                applied: countByCand[c.CandidateID] || 0,
                roles: c.PreferredRoles, location: c.Location, created: String(c.CreatedAt) };
     }),
-    applications: readRows('Applications').map(function (a) {
+    applications: apps.map(function (a) {
       return { id: a.ApplicationID, cand: a.CandidateID, company: a.Company, title: a.JobTitle,
                ats: a.ATS, status: a.Status, url: a.JobURL, submitted: String(a.SubmittedAt || ''),
                shot: a.ConfirmationScreenshotURL, outcome: a.Outcome };
     }),
-    reviews: readRows('ReviewQueue').filter(function (t) { return t.Status === 'Awaiting Human'; })
-      .map(function (t) {
-        return { id: t.TaskID, type: t.Type, cand: t.CandidateID, summary: t.Summary,
-                 score: t.AIScore, findings: t.AIFindings, created: String(t.CreatedAt),
-                 createdMs: toEpochMs_(t.CreatedAt) };
-      }),
-    prospects: readRows('Prospects').map(function (p) {
+    reviews: awaitingReviews_(),
+    prospects: readRows_('Prospects', ['ProspectID', 'CandidateID', 'Company', 'JobTitle', 'JobURL', 'Status',
+      'Source', 'FoundAt']).map(function (p) {
       return { id: p.ProspectID, cand: p.CandidateID, company: p.Company, title: p.JobTitle,
                url: p.JobURL, status: p.Status, source: p.Source, found: toEpochMs_(p.FoundAt) };
     }),
-    log: readRows('ActivityLog').slice(-60).reverse().map(function (l) {
-      return { t: String(l.Timestamp), actor: l.Actor, action: l.Action, detail: l.Detail };
-    }),
-    followUps: readRows('FollowUps').map(function (f) {
+    log: recentActivity_(60),
+    followUps: readRows_('FollowUps').map(function (f) {
       return { id: f.FollowUpID, cand: f.CandidateID, type: f.Type, company: f.Company,
-               title: f.JobTitle, due: String(f.DueDate), status: f.Status, notes: f.Notes };
+               title: f.JobTitle, due: sheetDateIso_(f.DueDate), status: f.Status, notes: f.Notes };
     }),
     // Passwords are deliberately not included - see dashRevealAccountPassword
-    accounts: (sheet_('PlatformAccounts') ? readRows('PlatformAccounts') : []).map(function (a) {
+    accounts: readRows_('PlatformAccounts').map(function (a) {
       return { id: a.AccountID, cand: a.CandidateID, site: a.ATSDomain, email: a.Email || '',
                status: a.Status, notes: a.Notes, updated: String(a.UpdatedAt || a.CreatedAt) };
     }),
     report: latestReport_()
   };
 }
- 
+
+/**
+ * ReviewQueue rows still waiting on a human, in one read and without
+ * AIFindings (up to 40 KB each). The dashboard fetches findings per card
+ * with dashReviewFindings when a reviewer opens it.
+ */
+function awaitingReviews_() {
+  return readRows_('ReviewQueue', ['TaskID', 'Type', 'CandidateID', 'Summary', 'AIScore', 'Status', 'CreatedAt'])
+    .filter(function (t) { return t.Status === 'Awaiting Human'; })
+    .map(function (t) {
+      return { id: t.TaskID, type: t.Type, cand: t.CandidateID, summary: t.Summary,
+               score: t.AIScore, created: String(t.CreatedAt), createdMs: toEpochMs_(t.CreatedAt) };
+    });
+}
+
+/** Full AI findings for one review card, loaded when the reviewer opens it. */
+function dashReviewFindings(key, taskId) {
+  requireDashAccess_(key);
+  var t = findRow_('ReviewQueue', 'TaskID', taskId);
+  if (!t) throw new Error('Review item not found - it may have been decided already.');
+  return { id: t.TaskID, findings: t.AIFindings || '' };
+}
+
+/** The newest `n` ActivityLog entries, newest first, without reading the whole log. */
+function recentActivity_(n) {
+  var sh = sheet_('ActivityLog');
+  var last = sh ? sh.getLastRow() : 0;
+  if (last < 2) return [];
+  var from = Math.max(2, last - n + 1);
+  return sh.getRange(from, 1, last - from + 1, 6).getValues().reverse().map(function (l) {
+    return { t: String(l[0]), actor: l[1], action: l[2], detail: l[5] };
+  });
+}
+
 /**
  * A sheet date cell (Date object or typed-in text) as milliseconds since 1970,
  * or 0 when it's blank or unreadable. google.script.run can't pass Date
@@ -768,161 +847,217 @@ function toEpochMs_(v) {
  * ACCOUNT_REVEAL_EMAILS - by default just the account that deployed the script.
  * Every reveal is logged.
  */
-function dashRevealAccountPassword(accountId) {
+function dashRevealAccountPassword(key, accountId) {
+  requireDashAccess_(key);
   var viewer = String(Session.getActiveUser().getEmail() || '').toLowerCase();
-  var allowed = (getConfig('ACCOUNT_REVEAL_EMAILS') || Session.getEffectiveUser().getEmail())
+  var allowed = (getConfig_('ACCOUNT_REVEAL_EMAILS') || Session.getEffectiveUser().getEmail())
     .split(',').map(function (s) { return s.trim().toLowerCase(); }).filter(Boolean);
   if (!viewer || allowed.indexOf(viewer) === -1) {
     throw new Error('Only authorised reviewers can reveal passwords. Open the dashboard while signed in to an ' +
       'authorised Google account (Config: ACCOUNT_REVEAL_EMAILS).');
   }
-  var acct = findRow('PlatformAccounts', 'AccountID', accountId);
+  var acct = findRow_('PlatformAccounts', 'AccountID', accountId);
   if (!acct) throw new Error('Account not found');
   var pw = PropertiesService.getScriptProperties().getProperty(ACCOUNT_PW_PREFIX_ + accountId);
   if (!pw) {
-    var cand = findRow('Candidates', 'CandidateID', acct.CandidateID);
+    var cand = findRow_('Candidates', 'CandidateID', acct.CandidateID);
     pw = cand && cand.ApplicationPassword ? String(cand.ApplicationPassword) : '';
   }
-  logActivity(viewer, 'account_password_revealed', 'account', accountId, acct.ATSDomain);
+  logActivity_(viewer, 'account_password_revealed', 'account', accountId, acct.ATSDomain);
   return { site: acct.ATSDomain, email: acct.Email || '', password: pw || '(no password saved)' };
 }
 
-function dashDecide(taskId, decision, notes) {
-  var t = findRow('ReviewQueue', 'TaskID', taskId);
+/**
+ * Records a reviewer's decision. What "Send back" (revise) does depends on
+ * the item:
+ *  - CV / CoverLetter / NHSStatement: a new version is generated in the
+ *    background from the reviewer's notes and the AI findings, and lands back
+ *    in the Review queue (see processRevisionQueue in Revisions.gs).
+ *  - Submission: the application is not submitted. It's marked Rejected and
+ *    can be re-queued from Applications with Retry.
+ */
+function dashDecide(key, taskId, decision, notes) {
+  requireDashAccess_(key);
+  var t = findRow_('ReviewQueue', 'TaskID', taskId);
   if (!t) throw new Error('Task not found');
-  updateRow('ReviewQueue', t._row, {
+  // A double click or a second reviewer: the first decision stands
+  if (t.Status !== 'Awaiting Human') return { already: true, decision: t.Decision };
+  var who = Session.getActiveUser().getEmail();
+  updateRow_('ReviewQueue', t._row, {
     Status: 'Decided', Decision: decision, Notes: notes || '',
-    Reviewer: Session.getActiveUser().getEmail(), DecidedAt: new Date()
+    Reviewer: who, DecidedAt: new Date()
   });
   if (t.Type === 'Submission') {
-    var app = findRow('Applications', 'ApplicationID', t.RefID);
-    if (app) updateRow('Applications', app._row, {
-      Status: decision === 'approve' ? 'Approved - Submitting' : 'Rejected'
+    var app = findRow_('Applications', 'ApplicationID', t.RefID);
+    if (app) updateRow_('Applications', app._row, {
+      Status: decision !== 'approve' ? 'Rejected' : (submittedByWorker_(app, t) ? 'Approved - Submitting' : 'Approved - Extension')
     });
   }
-  if (t.Type === 'CV') {
-    var v = findRow('CVVersions', 'VersionID', t.RefID);
-    if (v) updateRow('CVVersions', v._row, { ReviewStatus: decision });
+  var revising = false;
+  var docTab = REVISABLE_DOCS_[t.Type];
+  if (docTab) {
+    var d = findRow_(docTab.sheet, docTab.idField, t.RefID);
+    if (d) updateRow_(docTab.sheet, d._row, { ReviewStatus: decision });
+    if (decision === 'revise') { scheduleRevisions_(); revising = true; }
   }
-  if (t.Type === 'CoverLetter') {
-    var l = findRow('CoverLetters', 'LetterID', t.RefID);
-    if (l) updateRow('CoverLetters', l._row, { ReviewStatus: decision });
-  }
-  if (t.Type === 'NHSStatement') {
-    var n = findRow('NHSStatements', 'StatementID', t.RefID);
-    if (n) updateRow('NHSStatements', n._row, { ReviewStatus: decision });
-  }
-  logActivity(Session.getActiveUser().getEmail() || 'reviewer', 'review_' + decision, t.Type, t.RefID, notes || '');
-  return true;
+  logActivity_(who || 'reviewer', 'review_' + decision, t.Type, t.RefID, notes || '');
+  return { decided: true, revising: revising };
 }
- 
-function dashGenerate(candidateId, jdText, jobUrl, tone) {
-  var jobId = runJobAnalyst(candidateId, jobUrl || '', jdText, '');
-  var cvId = runResumeBuilder(candidateId, jobId, tone);
-  var clId = runCoverLetterBuilder(candidateId, jobId, tone);
-  var cv = findRow('CVVersions', 'VersionID', cvId);
-  var cl = findRow('CoverLetters', 'LetterID', clId);
+
+function dashGenerate(key, candidateId, jdText, jobUrl, tone) {
+  requireDashAccess_(key);
+  var jobId = runJobAnalyst_(candidateId, jobUrl || '', jdText, '');
+  var cvId = runResumeBuilder_(candidateId, jobId, tone);
+  var clId = runCoverLetterBuilder_(candidateId, jobId, tone);
+  var cv = findRow_('CVVersions', 'VersionID', cvId);
+  var cl = findRow_('CoverLetters', 'LetterID', clId);
   return { jobId: jobId, cvUrl: cv.DocURL, letterUrl: cl.DocURL };
 }
  
-function dashFindProspects(candidateId) {
-  return findProspectsForCandidate(candidateId);
+function dashFindProspects(key, candidateId) {
+  requireDashAccess_(key);
+  return findProspectsForCandidate_(candidateId);
 }
  
-function dashSetProspectStatus(prospectId, status) {
-  var p = findRow('Prospects', 'ProspectID', prospectId);
+function dashSetProspectStatus(key, prospectId, status) {
+  requireDashAccess_(key);
+  var p = findRow_('Prospects', 'ProspectID', prospectId);
   if (!p) throw new Error('Prospect not found');
-  updateRow('Prospects', p._row, { Status: status });
-  logActivity(Session.getActiveUser().getEmail() || 'reviewer', 'prospect_' + status, 'prospect', prospectId, '');
+  updateRow_('Prospects', p._row, { Status: status });
+  logActivity_(Session.getActiveUser().getEmail() || 'reviewer', 'prospect_' + status, 'prospect', prospectId, '');
   return true;
 }
  
-function dashSetCandidateActive(candidateId, active) {
-  var c = findRow('Candidates', 'CandidateID', candidateId);
+function dashSetCandidateActive(key, candidateId, active) {
+  requireDashAccess_(key);
+  var c = findRow_('Candidates', 'CandidateID', candidateId);
   if (!c) throw new Error('Candidate not found');
-  updateRow('Candidates', c._row, { Active: active ? 'TRUE' : 'FALSE' });
-  logActivity(Session.getActiveUser().getEmail() || 'reviewer', active ? 'candidate_activated' : 'candidate_deactivated', 'candidate', candidateId, '');
+  updateRow_('Candidates', c._row, { Active: active ? 'TRUE' : 'FALSE' });
+  logActivity_(Session.getActiveUser().getEmail() || 'reviewer', active ? 'candidate_activated' : 'candidate_deactivated', 'candidate', candidateId, '');
   return true;
 }
  
-function dashSetCandidateTarget(candidateId, target) {
-  var c = findRow('Candidates', 'CandidateID', candidateId);
+function dashSetCandidateTarget(key, candidateId, target) {
+  requireDashAccess_(key);
+  var c = findRow_('Candidates', 'CandidateID', candidateId);
   if (!c) throw new Error('Candidate not found');
   var n = parseInt(target, 10);
   if (isNaN(n) || n < 0) throw new Error('Target must be a non-negative number');
-  updateRow('Candidates', c._row, { TargetApplications: n });
-  logActivity(Session.getActiveUser().getEmail() || 'reviewer', 'candidate_target_set', 'candidate', candidateId, String(n));
+  updateRow_('Candidates', c._row, { TargetApplications: n });
+  logActivity_(Session.getActiveUser().getEmail() || 'reviewer', 'candidate_target_set', 'candidate', candidateId, String(n));
   return true;
 }
  
-function dashMarkFollowUpDone(followUpId) {
-  var f = findRow('FollowUps', 'FollowUpID', followUpId);
+function dashMarkFollowUpDone(key, followUpId) {
+  requireDashAccess_(key);
+  var f = findRow_('FollowUps', 'FollowUpID', followUpId);
   if (!f) throw new Error('Follow-up not found');
-  updateRow('FollowUps', f._row, { Status: 'Done' });
-  logActivity(Session.getActiveUser().getEmail() || 'reviewer', 'followup_done', 'followup', followUpId, '');
+  updateRow_('FollowUps', f._row, { Status: 'Done' });
+  logActivity_(Session.getActiveUser().getEmail() || 'reviewer', 'followup_done', 'followup', followUpId, '');
   return true;
 }
  
-function dashDeleteCandidate(candidateId) {
-  var cand = findRow('Candidates', 'CandidateID', candidateId);
+function dashDeleteCandidate(key, candidateId) {
+  requireDashAccess_(key);
+  var cand = findRow_('Candidates', 'CandidateID', candidateId);
   if (!cand) throw new Error('Candidate not found');
  
   var removed = {};
   ['Applications', 'Jobs', 'CVVersions', 'CoverLetters', 'NHSStatements',
    'ReviewQueue', 'Prospects', 'FollowUps', 'AIOutputs'].forEach(function (tab) {
-    removed[tab] = deleteRowsWhere(tab, 'CandidateID', candidateId);
+    removed[tab] = deleteRowsWhere_(tab, 'CandidateID', candidateId);
   });
  
   if (cand.DriveFolderID) {
     try { DriveApp.getFolderById(cand.DriveFolderID).setTrashed(true); } catch (ignored) {}
   }
  
-  deleteRowsWhere('Candidates', 'CandidateID', candidateId);
+  deleteRowsWhere_('Candidates', 'CandidateID', candidateId);
  
-  logActivity(Session.getActiveUser().getEmail() || 'reviewer', 'candidate_deleted', 'candidate', candidateId,
+  logActivity_(Session.getActiveUser().getEmail() || 'reviewer', 'candidate_deleted', 'candidate', candidateId,
     cand.FullName + ' | removed: ' + JSON.stringify(removed));
   return { deleted: true, related: removed };
 }
  
-function dashClearActivityLog() {
+function dashClearActivityLog(key) {
+  requireDashAccess_(key);
+  requireDashAccess_(key);
   var sh = sheet_('ActivityLog');
   var last = sh.getLastRow();
   if (last > 1) sh.deleteRows(2, last - 1);
-  logActivity(Session.getActiveUser().getEmail() || 'reviewer', 'activity_log_cleared', 'system', '-', 'Log cleared');
+  logActivity_(Session.getActiveUser().getEmail() || 'reviewer', 'activity_log_cleared', 'system', '-', 'Log cleared');
   return true;
 }
  
-/** Queue every 'Found' prospect for a candidate in one action. Reports how many were left for manual review too. */
-function dashQueueAllFound(candidateId) {
-  var queued = 0, manualReview = 0;
-  readRows('Prospects').forEach(function (p) {
-    if (p.CandidateID !== candidateId) return;
-    if (p.Status === 'Found') {
-      updateRow('Prospects', p._row, { Status: 'Queued' });
-      queued++;
-    } else if (p.Status === 'Found - Manual Review') {
-      manualReview++;
-    }
+/**
+ * Queue a candidate's 'Found' prospects in one action: all of them, or only
+ * the `limit` most recently found. Also reports how many need manual review
+ * and how many Found ones are left, and returns the queued IDs so the
+ * dashboard can update exactly those rows.
+ */
+function dashQueueAllFound(key, candidateId, limit) {
+  requireDashAccess_(key);
+  var rows = readRows_('Prospects', ['ProspectID', 'CandidateID', 'Status', 'FoundAt']).filter(function (p) {
+    return p.CandidateID === candidateId;
   });
-  logActivity(Session.getActiveUser().getEmail() || 'reviewer', 'prospects_bulk_queued', 'candidate', candidateId, queued + ' queued, ' + manualReview + ' left for manual review');
-  return { queued: queued, manualReview: manualReview };
+  var found = rows.filter(function (p) { return p.Status === 'Found'; });
+  var manualReview = rows.filter(function (p) { return p.Status === 'Found - Manual Review'; }).length;
+  found.sort(function (a, b) { return (toEpochMs_(b.FoundAt) - toEpochMs_(a.FoundAt)) || (b._row - a._row); });
+  var n = parseInt(limit, 10);
+  var pick = n > 0 ? found.slice(0, n) : found;
+
+  setColumnForRows_('Prospects', 'Status', pick.map(function (p) { return p._row; }), 'Queued');
+  logActivity_(Session.getActiveUser().getEmail() || 'reviewer', 'prospects_bulk_queued', 'candidate', candidateId,
+    pick.length + ' queued' + (n > 0 ? ' (next ' + n + ')' : '') + ', ' + manualReview + ' left for manual review');
+  return {
+    queued: pick.length, manualReview: manualReview, remaining: found.length - pick.length,
+    ids: pick.map(function (p) { return String(p.ProspectID); })
+  };
 }
- 
-function dashRetryApplication(applicationId) {
-  var app = findRow('Applications', 'ApplicationID', applicationId);
+
+function dashRetryApplication(key, applicationId) {
+  requireDashAccess_(key);
+  var app = findRow_('Applications', 'ApplicationID', applicationId);
   if (!app) throw new Error('Application not found');
  
-  appendObject('Prospects', {
-    ProspectID: newId('PROS'), FoundAt: new Date(), CandidateID: app.CandidateID,
+  appendObject_('Prospects', {
+    ProspectID: newId_('PROS'), FoundAt: new Date(), CandidateID: app.CandidateID,
     Company: app.Company, JobTitle: app.JobTitle, JobURL: app.JobURL,
     Source: 'Retry', Status: 'Queued', Notes: 'Re-queued from failed application ' + applicationId
   });
-  updateRow('Applications', app._row, { Status: 'Retried' });
-  logActivity(Session.getActiveUser().getEmail() || 'reviewer', 'application_retried', 'application', applicationId, app.Company);
+  updateRow_('Applications', app._row, { Status: 'Retried' });
+  logActivity_(Session.getActiveUser().getEmail() || 'reviewer', 'application_retried', 'application', applicationId, app.Company);
   return { requeued: true };
 }
  
 /* ------------------------------- helpers -------------------------------- */
+
+/**
+ * Whether an Applications row still stands for a real application, for the
+ * duplicate check and the target count. Failed ones can be tried again, and
+ * Retried ones have been re-queued as a fresh prospect (dashRetryApplication).
+ */
+function countsAsApplication_(status) {
+  return status !== 'Failed' && status !== 'Retried';
+}
+
+/**
+ * 'Approved - Submitting' is the worker's queue, so only applications the
+ * worker filled go there. Extension-filled ones are submitted by the tab
+ * that is polling checkApproval ('Approved - Extension'), which would
+ * otherwise race the worker into a double submission. Rows from before
+ * FilledBy existed are recognised by the worker's snapshot marker.
+ */
+function submittedByWorker_(app, task) {
+  if (app.FilledBy) return app.FilledBy === 'worker';
+  return String(task.AIFindings || '').indexOf('unified-form-filler') > -1;
+}
+
+/** A sheet date cell as yyyy-MM-dd in the script's time zone, or '' if blank/unreadable. */
+function sheetDateIso_(v) {
+  var ms = toEpochMs_(v);
+  return ms ? Utilities.formatDate(new Date(ms), Session.getScriptTimeZone(), 'yyyy-MM-dd') : '';
+}
  
 function normaliseJobKey_(url, company, title) {
   if (url) {
@@ -940,7 +1075,7 @@ function normaliseDomain_(urlOrDomain) {
 }
  
 function notifyReviewers_(subject, body) {
-  var emails = getConfig('REPORT_EMAILS');
+  var emails = getConfig_('REPORT_EMAILS');
   if (!emails) return;
   emails.split(',').map(function (s) { return s.trim(); }).filter(Boolean).forEach(function (to) {
     try { MailApp.sendEmail(to, '[Jobverse] ' + subject, body); } catch (ignored) {}
@@ -948,7 +1083,7 @@ function notifyReviewers_(subject, body) {
 }
  
 function latestReport_() {
-  var rows = readRows('Reports');
+  var rows = readRows_('Reports');
   if (!rows.length) return null;
   var last = rows[rows.length - 1];
   try { return { period: last.Period, metrics: JSON.parse(last.MetricsJSON), summary: last.Summary }; }

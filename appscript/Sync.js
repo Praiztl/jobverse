@@ -41,8 +41,8 @@ function onReviewQueueEdit(e) {
   }
   if (!rows.length) return;
 
-  var webhookUrl = getConfig('SYNC_WEBHOOK_URL');
-  var webhookToken = getConfig('SYNC_WEBHOOK_TOKEN');
+  var webhookUrl = getConfig_('SYNC_WEBHOOK_URL');
+  var webhookToken = getConfig_('SYNC_WEBHOOK_TOKEN');
   if (!webhookUrl) return; // sync layer not configured yet - no-op, don't error out edits
 
   try {
@@ -54,7 +54,7 @@ function onReviewQueueEdit(e) {
       muteHttpExceptions: true
     });
   } catch (err) {
-    logActivity('system', 'sync_webhook_error', 'reviewqueue',
+    logActivity_('system', 'sync_webhook_error', 'reviewqueue',
       rows.map(function (r) { return r.TaskID; }).join(','), err.message);
   }
 }

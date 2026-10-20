@@ -17,14 +17,14 @@
  * source isn't set up yet.
  */
 
-function findProspectsForCandidate(candidateId) {
-  var cand = findRow('Candidates', 'CandidateID', candidateId);
+function findProspectsForCandidate_(candidateId) {
+  var cand = findRow_('Candidates', 'CandidateID', candidateId);
   if (!cand) throw new Error('Candidate not found: ' + candidateId);
 
   var what = (cand.PreferredRoles || '').split(',')[0].trim() || 'software engineer';
-  var resultsWanted = parseInt(getConfig('ADZUNA_RESULTS_PER_CANDIDATE') || '15', 10);
+  var resultsWanted = parseInt(getConfig_('ADZUNA_RESULTS_PER_CANDIDATE') || '15', 10);
 
-  var enabledSources = (getConfig('PROSPECT_SOURCES') || 'adzuna,reed,jsearch')
+  var enabledSources = (getConfig_('PROSPECT_SOURCES') || 'adzuna,reed,jsearch')
     .split(',').map(function (s) { return s.trim().toLowerCase(); });
 
   // CHANGED: search every preferred location the candidate listed, not just the first.
@@ -57,10 +57,10 @@ function findProspectsForCandidate(candidateId) {
 
   // --- unchanged from the original file below this line ---
 
-  var existingUrls = readRows('Prospects')
+  var existingUrls = readRows_('Prospects')
     .filter(function (p) { return p.CandidateID === candidateId; })
     .map(function (p) { return p.JobURL; });
-  var appliedUrls = readRows('Applications')
+  var appliedUrls = readRows_('Applications')
     .filter(function (a) { return a.CandidateID === candidateId; })
     .map(function (a) { return a.JobURL; });
   var seen = {};
@@ -79,8 +79,8 @@ function findProspectsForCandidate(candidateId) {
     seen[job.url] = true;
 
     var supportedATS = detectATSFromUrl_(job.url);
-    appendObject('Prospects', {
-      ProspectID: newId('PROS'),
+    appendObject_('Prospects', {
+      ProspectID: newId_('PROS'),
       FoundAt: new Date(),
       CandidateID: candidateId,
       Company: job.company || '',
@@ -94,22 +94,22 @@ function findProspectsForCandidate(candidateId) {
   });
 
   if (sourceErrors.length) {
-    logActivity('system', 'prospect_source_error', 'candidate', candidateId, sourceErrors.join(' | '));
+    logActivity_('system', 'prospect_source_error', 'candidate', candidateId, sourceErrors.join(' | '));
   }
-  logActivity('system', 'prospects_found', 'candidate', candidateId, added + ' new prospects from ' + enabledSources.join('/'));
+  logActivity_('system', 'prospects_found', 'candidate', candidateId, added + ' new prospects from ' + enabledSources.join('/'));
   return { found: allResults.length, added: added, errors: sourceErrors };
 }
 /** Run for every active candidate. Safe to run on a daily trigger - skips inactive/archived candidates and silently skips any source with no key set. */
 function findProspectsForAllCandidates() {
   var summary = [];
-  readRows('Candidates').forEach(function (c) {
+  readRows_('Candidates').forEach(function (c) {
     if (c.Status === 'Archived') return;
     if (String(c.Active).toUpperCase() === 'FALSE') return; // skip inactive clients
     try {
-      var r = findProspectsForCandidate(c.CandidateID);
+      var r = findProspectsForCandidate_(c.CandidateID);
       summary.push(c.CandidateID + ': +' + r.added);
     } catch (e) {
-      logActivity('system', 'prospect_search_error', 'candidate', c.CandidateID, String(e.message || e));
+      logActivity_('system', 'prospect_search_error', 'candidate', c.CandidateID, String(e.message || e));
     }
   });
   return summary.join(', ');
@@ -118,13 +118,13 @@ function findProspectsForAllCandidates() {
 /* -------------------------------- sources -------------------------------- */
 
 function sourceAdzuna_(what, where, resultsWanted) {
-  var appId = getConfig('ADZUNA_APP_ID');
-  var appKey = getConfig('ADZUNA_APP_KEY');
+  var appId = getConfig_('ADZUNA_APP_ID');
+  var appKey = getConfig_('ADZUNA_APP_KEY');
   if (!appId || !appKey) return []; // not configured - skip silently
 
   // Adzuna's API is per-country (no single global endpoint), so support a
   // comma separated list here and query each one, merging results.
-  var countries = (getConfig('ADZUNA_COUNTRY') || 'gb')
+  var countries = (getConfig_('ADZUNA_COUNTRY') || 'gb')
     .split(',').map(function (c) { return c.trim().toLowerCase(); }).filter(Boolean);
 
   var allResults = [];
@@ -138,11 +138,11 @@ function sourceAdzuna_(what, where, resultsWanted) {
     var code = res.getResponseCode();
     if (code === 404) {
       // Country not supported by Adzuna - expected for markets like Nigeria. Skip silently.
-      logActivity('system', 'adzuna_country_skipped', 'source', country, 'Country not in Adzuna coverage (404) - use JSearch for this market');
+      logActivity_('system', 'adzuna_country_skipped', 'source', country, 'Country not in Adzuna coverage (404) - use JSearch for this market');
       return;
     }
     if (code !== 200) {
-      logActivity('system', 'adzuna_country_error', 'source', country, 'HTTP ' + code);
+      logActivity_('system', 'adzuna_country_error', 'source', country, 'HTTP ' + code);
       return;
     }
     var data = JSON.parse(res.getContentText());
@@ -157,7 +157,7 @@ function sourceAdzuna_(what, where, resultsWanted) {
 }
 
 function sourceReed_(what, where, resultsWanted) {
-  var apiKey = getConfig('REED_API_KEY');
+  var apiKey = getConfig_('REED_API_KEY');
   if (!apiKey) return []; // not configured - skip silently
 
   var url = 'https://www.reed.co.uk/api/1.0/search?keywords=' + encodeURIComponent(what)
@@ -180,7 +180,7 @@ function sourceReed_(what, where, resultsWanted) {
 }
 
 function sourceJSearch_(what, where, resultsWanted) {
-  var rapidKey = getConfig('RAPIDAPI_KEY');
+  var rapidKey = getConfig_('RAPIDAPI_KEY');
   if (!rapidKey) return []; // not configured - skip silently
 
   var query = what + (where ? ' in ' + where : '');
@@ -193,7 +193,7 @@ function sourceJSearch_(what, where, resultsWanted) {
   var code = res.getResponseCode();
   if (code === 404) return []; // no jobs found for this query/location - not an error, just no coverage
   if (code !== 200) {
-    logActivity('system', 'jsearch_error', 'source', 'HTTP ' + code,
+    logActivity_('system', 'jsearch_error', 'source', 'HTTP ' + code,
       res.getContentText().slice(0, 400));
     throw new Error('HTTP ' + code);
   }

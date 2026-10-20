@@ -67,8 +67,8 @@ function createJobverseForm() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   form.setDestination(FormApp.DestinationType.SPREADSHEET, ss.getId());
 
-  setConfig('FORM_ID', form.getId());
-  logActivity('system', 'form_created', 'form', form.getId(), form.getEditUrl());
+  setConfig_('FORM_ID', form.getId());
+  logActivity_('system', 'form_created', 'form', form.getId(), form.getEditUrl());
 
   var msg = 'Form created. Edit: ' + form.getEditUrl() + ' | Live: ' + form.getPublishedUrl() +
     ' | Form ID saved to Config > FORM_ID. ' +
@@ -76,7 +76,7 @@ function createJobverseForm() {
     '"PLEASE UPLOAD YOUR CV" (required) and "UPLOAD CERTIFICATES (if applicable)" (optional), ' +
     'max 5 files, 10MB each. Then run installFormTrigger().';
   Logger.log(msg);
-  logActivity('system', 'form_created_details', 'form', form.getId(), msg);
+  logActivity_('system', 'form_created_details', 'form', form.getId(), msg);
   try {
     SpreadsheetApp.getActiveSpreadsheet().toast(
       'Form created - check Execution log or ActivityLog tab for the edit URL and next steps.',

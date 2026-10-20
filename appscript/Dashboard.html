@@ -86,6 +86,8 @@
   <div id="toast"></div>
  
 <script>
+// Passed back on every server call - each dash* function re-checks it (see doGet in Api.gs)
+const DASH_KEY = <?!= JSON.stringify(dashKey) ?>;
 let D = null, view = 'reviews';
 const F = {}; // per-view filter state
 
@@ -136,7 +138,7 @@ function load(background){
         `<h1>Connection error</h1><div class="card"><p style="color:var(--red);font-weight:600">${esc(e.message)}</p>
          <p class="mut" style="margin-top:8px">The backend threw an error. Check Apps Script's Executions panel (clock icon) for the full stack trace.</p></div>`;
     })
-    .dashData();
+    .dashData(DASH_KEY);
 }
 load(); setInterval(() => load(true), 45000);
 
@@ -163,7 +165,7 @@ function chip(s){
 }
 function rail(status){
   const stages = ['In Progress','Awaiting Review','Approved - Submitting','Submitted'];
-  const idx = stages.indexOf(status);
+  const idx = stages.indexOf(status === 'Approved - Extension' ? 'Approved - Submitting' : status);
   return '<div class="rail">' + stages.map((s,i) =>
     `<i class="${idx >= i ? 'done':''}" title="${s}"></i>`).join('') + '</div>';
 }
@@ -179,17 +181,25 @@ function render(){
   if(view === 'reviews'){
     // Newest first. The sheet is oldest-first, so reversing it first keeps undated rows newest-first too.
     const reviews = D.reviews.slice().reverse().sort((a, b) => (b.createdMs || 0) - (a.createdMs || 0));
+    const pg = paginate(reviews, 'revPage', F.revSize || 10);
     m.innerHTML = '<h1>Review queue</h1>' + (reviews.length ? '' :
       '<p class="mut">Nothing waiting. New CVs, cover letters, NHS statements and paused submissions appear here.</p>') +
-      reviews.map(t => `
+      pg.rows.map(t => `
         <div class="card">
           <b>${esc(t.summary)}</b> <span class="mut">${esc(t.type)} · ${esc(t.cand)} · score ${esc(t.score||'-')}</span>
-          ${renderFindings(t)}
-          <div style="margin-top:10px;display:flex;gap:8px">
+          <div style="margin-top:6px"><button class="btn tiny" style="background:#fff;color:var(--pine);border:1px solid var(--line)"
+            onclick="toggleFindings('${t.id}')">${OPEN_FINDINGS.has(t.id) ? 'Hide details' : 'Show details'}</button></div>
+          ${OPEN_FINDINGS.has(t.id) ? (FINDINGS[t.id] == null
+            ? '<div class="findings">Loading…</div>' : renderFindings(FINDINGS[t.id])) : ''}
+          <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
             <button class="btn approve" onclick="decide('${t.id}','approve')">Approve</button>
             <button class="btn reject" onclick="decide('${t.id}','revise')">Send back</button>
+            <span class="mut">${t.type === 'Submission'
+              ? 'Send back = not submitted (you can Retry it from Applications)'
+              : 'Send back = a new version is written from your notes and returns here'}</span>
           </div>
-        </div>`).join('');
+        </div>`).join('') +
+      (reviews.length ? `<div class="card">${pagerHtml(pg, 'revPage', 'revSize', [10, 25, 50])}</div>` : '');
   }
  
   if(view === 'candidates'){
@@ -227,7 +237,7 @@ function render(){
         <td class="mut">${esc(a.cand)}</td><td>${esc(a.ats)}</td>
         <td>${rail(a.status)}</td><td>${chip(a.status)}</td>
         <td>${a.shot ? `<a href="${esc(a.shot)}">screenshot</a>` : '<span class="mut">-</span>'}</td>
-        <td>${(a.status==='Failed'||a.status==='Error')?`<button class="btn primary tiny" onclick="retryApp('${a.id}')">Retry</button>`:''}</td></tr>`).join('')
+        <td>${(a.status==='Failed'||a.status==='Error'||a.status==='Rejected')?`<button class="btn primary tiny" onclick="retryApp('${a.id}')">Retry</button>`:''}</td></tr>`).join('')
         : '<tr><td colspan="7" class="mut">No applications match.</td></tr>') +
       '</table></div>';
   }
@@ -267,20 +277,18 @@ function render(){
       return (a.found - b.found) * dir;
     });
 
-    // Pagination. Page is clamped so a filter or a refresh can't strand you on an empty page.
-    const size = F.prosSize || 25;
-    const total = rows.length;
-    const pages = Math.max(1, Math.ceil(total / size));
-    F.prosPage = Math.min(Math.max(1, F.prosPage || 1), pages);
-    const start = (F.prosPage - 1) * size;
-    const pageRows = rows.slice(start, start + size);
+    const pg = paginate(rows, 'prosPage', F.prosSize || 25);
+    const pageRows = pg.rows, total = pg.total;
     m.innerHTML = `<h1>Prospects</h1>
       <div class="card">
         <label>Find jobs for candidate</label>
         <select id="pCand" onchange="setFindJobsCandidate(this.value)">${D.candidates.map(c => `<option value="${esc(c.id)}" ${c.id===F.pCand?'selected':''}>${esc(c.name)} (${esc(c.id)})</option>`).join('')}</select>
-        <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
+        <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           <button class="btn primary" onclick="findJobs()">Find jobs</button>
-          <button class="btn approve" onclick="queueAll()">Queue all found</button>
+          <span class="mut" style="margin-left:6px">Queue newest found:</span>
+          ${[5, 10, 20].map(n => `<button class="btn approve" onclick="queueAll(${n})">${n}</button>`).join('')}
+          <button class="btn approve" onclick="queueAll(0)">All</button>
+          <span class="mut">${(() => { const n = D.prospects.filter(p => p.cand === F.pCand && p.status === 'Found').length; return n + ' found ready to queue'; })()}</span>
           <span class="mut" id="pMsg"></span>
         </div>
       </div>
@@ -302,25 +310,15 @@ function render(){
            <button class="btn reject tiny" onclick="prospectAction('${p.id}','Skipped')">Skip</button>`}</td>
         </tr>`).join('') :
       '<tr><td colspan="8" class="mut">No prospects match. Use "Find jobs" above, or add rows manually in the Prospects tab of the sheet.</td></tr>') +
-      '</table>' + (total ? `
-        <div class="pager">
-          <span class="mut">Showing ${start + 1}-${start + pageRows.length} of ${total}</span>
-          <div class="pg">
-            <button class="btn tiny" ${F.prosPage <= 1 ? 'disabled' : ''} onclick="setFilter('prosPage', F.prosPage - 1)">&lsaquo; Prev</button>
-            <span class="mut">Page ${F.prosPage} of ${pages}</span>
-            <button class="btn tiny" ${F.prosPage >= pages ? 'disabled' : ''} onclick="setFilter('prosPage', F.prosPage + 1)">Next &rsaquo;</button>
-            <select onchange="setFilter('prosSize', Number(this.value))">
-              ${[25, 50, 100].map(n => `<option value="${n}" ${n===size?'selected':''}>${n} per page</option>`).join('')}
-            </select>
-          </div>
-        </div>` : '') + '</div>';
+      '</table>' + (total ? pagerHtml(pg, 'prosPage', 'prosSize', [25, 50, 100]) : '') + '</div>';
   }
  
   if(view === 'followups'){
-    const today = new Date().toISOString().slice(0,10);
+    const n = new Date(), pad = x => String(x).padStart(2, '0');
+    const today = `${n.getFullYear()}-${pad(n.getMonth() + 1)}-${pad(n.getDate())}`; // local date, like the server's due dates
     m.innerHTML = '<h1>Follow-ups</h1><div class="card"><table><tr><th>Type</th><th>Candidate</th><th>Company / role</th><th>Due</th><th>Status</th><th>Action</th></tr>' +
       (D.followUps.length ? D.followUps.map(f => {
-        const dueDate = (f.due||'').slice(0,10);
+        const dueDate = f.due || ''; // yyyy-MM-dd from dashData
         const overdue = f.status === 'Pending' && dueDate && dueDate <= today;
         return `<tr>
           <td>${esc(f.type)}</td><td class="mut">${esc(f.cand)}</td>
@@ -329,7 +327,7 @@ function render(){
           <td>${chip(f.status)}</td>
           <td>${f.status==='Pending'?`<button class="btn approve tiny" onclick="markFollowUpDone('${f.id}')">Mark done</button>`:'<span class="mut">-</span>'}</td>
         </tr>`;
-      }).join('') : '<tr><td colspan="6" class="mut">Nothing tracked yet. Every submitted application gets a follow-up here (NHS applications also get a Trac claim/verify one).</td></tr>') +
+      }).join('') : '<tr><td colspan="6" class="mut">Nothing tracked yet. Every submitted application gets a follow-up here.</td></tr>') +
       '</table></div>';
   }
  
@@ -384,9 +382,45 @@ function render(){
 function stat(v,l){ return `<div class="stat"><b>${esc(v)}</b><span>${esc(l)}</span></div>`; }
 function pretty(j){ try { return JSON.stringify(JSON.parse(j), null, 2); } catch(e){ return j || ''; } }
  
-function renderFindings(t){
+/** One page of `rows`. The page is clamped so a filter, decision or refresh can't strand you on an empty page. */
+function paginate(rows, pageKey, size){
+  const pages = Math.max(1, Math.ceil(rows.length / size));
+  F[pageKey] = Math.min(Math.max(1, F[pageKey] || 1), pages);
+  const start = (F[pageKey] - 1) * size;
+  return { rows: rows.slice(start, start + size), start, page: F[pageKey], pages, size, total: rows.length };
+}
+
+function pagerHtml(pg, pageKey, sizeKey, sizes){
+  return `
+    <div class="pager">
+      <span class="mut">Showing ${pg.start + 1}-${pg.start + pg.rows.length} of ${pg.total}</span>
+      <div class="pg">
+        <button class="btn tiny" ${pg.page <= 1 ? 'disabled' : ''} onclick="setFilter('${pageKey}', ${pg.page - 1})">&lsaquo; Prev</button>
+        <span class="mut">Page ${pg.page} of ${pg.pages}</span>
+        <button class="btn tiny" ${pg.page >= pg.pages ? 'disabled' : ''} onclick="setFilter('${pageKey}', ${pg.page + 1})">Next &rsaquo;</button>
+        <select onchange="setFilter('${sizeKey}', Number(this.value))">
+          ${sizes.map(n => `<option value="${n}" ${n===pg.size?'selected':''}>${n} per page</option>`).join('')}
+        </select>
+      </div>
+    </div>`;
+}
+
+// Review findings are fetched per card when opened (they can be 40 KB each), then kept for the session
+const FINDINGS = {}, OPEN_FINDINGS = new Set();
+function toggleFindings(id){
+  if(OPEN_FINDINGS.has(id)) { OPEN_FINDINGS.delete(id); render(); return; }
+  OPEN_FINDINGS.add(id);
+  render();
+  if(FINDINGS[id] != null) return;
+  google.script.run
+    .withSuccessHandler(r => { FINDINGS[id] = r.findings; render(); })
+    .withFailureHandler(e => { OPEN_FINDINGS.delete(id); render(); toast('Error: ' + e.message); })
+    .dashReviewFindings(DASH_KEY, id);
+}
+
+function renderFindings(findings){
   try {
-    var parsed = JSON.parse(t.findings);
+    var parsed = JSON.parse(findings);
     if(Array.isArray(parsed)){
       var rows = parsed.map(function(f){
         var isUrl = typeof f.value === 'string' && /^https?:\/\//.test(f.value);
@@ -396,12 +430,12 @@ function renderFindings(t){
       return `<div class="findings" style="font-family:'IBM Plex Sans'">${rows}</div>`;
     }
   } catch(e){ }
-  return `<div class="findings">${esc(pretty(t.findings))}</div>`;
+  return `<div class="findings">${esc(pretty(findings))}</div>`;
 }
  
 function setFilter(key, val){
   F[key] = val;
-  if(key !== 'prosPage') F.prosPage = 1; // any new filter, sort or page size starts back at page 1
+  if(!/Page$/.test(key)) { F.prosPage = 1; F.revPage = 1; } // any new filter, sort or page size starts back at page 1
   render();
 }
 
@@ -417,16 +451,36 @@ function foundDay(ts){
   return d.toLocaleDateString('en-GB', o);
 }
 
-function setFindJobsCandidate(candId) { 
+function setFindJobsCandidate(candId) {
   F.pCand = candId;
   saveFindJobsCandidate(candId);
-  // Don't re-render, just persist the selection
+  render(); // refreshes the "found ready to queue" count; the selection is restored from storage
 }
  
+// The card leaves the queue as soon as you click; the sheet is updated in the
+// background and the card comes back if that fails.
 function decide(id, d){
-  const notes = d === 'revise' ? (prompt('Notes for revision (optional)') || '') : '';
-  google.script.run.withSuccessHandler(() => { toast(d === 'approve' ? 'Approved' : 'Sent back'); load(); })
-    .withFailureHandler(e => toast('Error: ' + e.message)).dashDecide(id, d, notes);
+  const t = D.reviews.find(x => x.id === id);
+  if(!t) return;
+  let notes = '';
+  if(d === 'revise'){
+    const isSub = t.type === 'Submission';
+    notes = prompt(isSub
+      ? 'Send back this application? It will NOT be submitted and shows as Rejected under Applications (Retry re-queues it).\n\nReason (optional):'
+      : 'What should change? A new version is written from your notes plus the AI findings and comes back to this queue in a minute or two.\n\nNotes (optional):');
+    if(notes === null) return; // cancelled
+  }
+  D.reviews = D.reviews.filter(x => x !== t);
+  render();
+  google.script.run
+    .withSuccessHandler(r => {
+      if(r && r.already) toast('Already decided by someone else (' + (r.decision || 'decided') + ')');
+      else if(d === 'approve') toast(t.type === 'Submission' ? 'Approved - it is submitted shortly (by the worker, or by the extension tab that filled it)' : 'Approved');
+      else toast(r && r.revising ? 'Sent back - a revised version is being written' : 'Sent back - not submitted');
+      load(true);
+    })
+    .withFailureHandler(e => { D.reviews.push(t); render(); toast('Error: ' + e.message); })
+    .dashDecide(DASH_KEY, id, d, notes);
 }
  
 function gen(){
@@ -438,7 +492,7 @@ function gen(){
       `Done: <a href="${r.cvUrl}">CV</a> · <a href="${r.letterUrl}">Cover letter</a> (both queued for review)`;
     load(true);
   }).withFailureHandler(e => { document.getElementById('gMsg').textContent = 'Error: ' + e.message; })
-    .dashGenerate(document.getElementById('gCand').value, jd, document.getElementById('gUrl').value, document.getElementById('gTone').value);
+    .dashGenerate(DASH_KEY, document.getElementById('gCand').value, jd, document.getElementById('gUrl').value, document.getElementById('gTone').value);
 }
  
 function findJobs(){
@@ -452,92 +506,37 @@ function findJobs(){
     // but the candidate selection will be restored from localStorage
     load();
   }).withFailureHandler(e => { document.getElementById('pMsg').textContent = 'Error: ' + e.message; })
-    .dashFindProspects(candId);
+    .dashFindProspects(DASH_KEY, candId);
 }
  
-function queueAll(){
+/** Queue the `limit` most recently found prospects for the selected candidate (0 = all of them). */
+function queueAll(limit){
   const cand = F.pCand || loadFindJobsCandidate() || document.getElementById('pCand').value;
   if(!cand) { toast('Please select a candidate first'); return; }
-  
   saveFindJobsCandidate(cand);
-  
-  // Debug: check what prospects exist for this candidate
-  const prospectsForCand = D.prospects.filter(p => p.cand === cand);
-  const foundCount = prospectsForCand.filter(p => p.status === 'Found').length;
-  const foundManualCount = prospectsForCand.filter(p => p.status === 'Found - Manual Review').length;
-  
-  console.log('=== QUEUE ALL DEBUG ===');
-  console.log('Candidate ID:', cand);
-  console.log('Total prospects for candidate:', prospectsForCand.length);
-  console.log('Prospects with "Found" status:', foundCount);
-  console.log('Prospects with "Found - Manual Review" status:', foundManualCount);
-  console.log('All prospects for candidate:', prospectsForCand);
-  console.log('======================');
-  
-  if(prospectsForCand.length === 0) {
-    toast('No prospects found for this candidate. Try "Find jobs" first.');
+
+  const mine = D.prospects.filter(p => p.cand === cand);
+  const foundCount = mine.filter(p => p.status === 'Found').length;
+  const manualCount = mine.filter(p => p.status === 'Found - Manual Review').length;
+  if(!mine.length) { toast('No prospects for this candidate yet. Try "Find jobs" first.'); return; }
+  if(!foundCount) {
+    toast(manualCount ? `Nothing to queue - all ${manualCount} need manual review (no supported ATS link)` : 'No "Found" prospects to queue.');
     return;
   }
-  
-  if(foundCount === 0 && foundManualCount > 0) {
-    toast(`Cannot queue - all ${foundManualCount} prospect(s) need manual review (no supported ATS detected)`);
-    return;
-  }
-  
-  if(foundCount === 0) {
-    toast('No prospects with "Found" status to queue.');
-    return;
-  }
-  
-  document.getElementById('pMsg').textContent = 'Queuing ' + foundCount + ' prospect(s)…';
-  
+
+  const n = limit > 0 ? Math.min(limit, foundCount) : foundCount;
+  document.getElementById('pMsg').textContent = `Queuing ${n} of ${foundCount}…`;
   google.script.run
     .withSuccessHandler(r => {
-      console.log('=== QUEUE ALL RESPONSE ===');
-      console.log('Response:', r);
-      console.log('Queued:', r.queued);
-      console.log('Manual review:', r.manualReview);
-      console.log('==========================');
-      
-      if(!r) {
-        toast('No response from server');
-        document.getElementById('pMsg').textContent = '';
-        return;
-      }
-      
-      if(r.queued > 0) {
-        // Update local data: change status of queued prospects from 'Found' to 'Queued'
-        let updateCount = 0;
-        D.prospects.forEach(p => {
-          if(p.cand === cand && p.status === 'Found') {
-            p.status = 'Queued';
-            updateCount++;
-          }
-        });
-        console.log('Updated local prospects:', updateCount);
-        
-        const msg = `✓ Queued ${r.queued} prospect(s)` + (r.manualReview ? ` (${r.manualReview} still need manual review)` : '');
-        toast(msg);
-        
-        // Re-render only the prospects view without losing candidate selection
-        render();
-      } else if(r.manualReview > 0) {
-        toast(`All ${r.manualReview} prospect(s) need manual review - no supported ATS link detected`);
-      } else {
-        toast('No prospects to queue.');
-      }
-      
-      document.getElementById('pMsg').textContent = '';
+      const ids = new Set(r.ids || []);
+      D.prospects.forEach(p => { if(ids.has(p.id)) p.status = 'Queued'; });
+      render();
+      toast(r.queued
+        ? `Queued ${r.queued}` + (r.remaining ? `, ${r.remaining} still Found` : '') + (r.manualReview ? ` (${r.manualReview} need manual review)` : '')
+        : 'No prospects to queue.');
     })
-    .withFailureHandler(e => {
-      console.error('=== QUEUE ALL ERROR ===');
-      console.error('Error:', e);
-      console.error('Message:', e.message);
-      console.error('=======================');
-      document.getElementById('pMsg').textContent = '';
-      toast('Error: ' + e.message);
-    })
-    .dashQueueAllFound(cand);
+    .withFailureHandler(e => { document.getElementById('pMsg').textContent = ''; toast('Error: ' + e.message); })
+    .dashQueueAllFound(DASH_KEY, cand, limit || 0);
 }
  
 function prospectAction(id, status){
@@ -549,48 +548,48 @@ function prospectAction(id, status){
   toast(status);
   google.script.run
     .withFailureHandler(e => { p.status = before; render(); toast('Error: ' + e.message); })
-    .dashSetProspectStatus(id, status);
+    .dashSetProspectStatus(DASH_KEY, id, status);
 }
  
 function setActive(id, active){
   google.script.run.withSuccessHandler(() => { toast(active ? 'Activated' : 'Deactivated'); load(); })
-    .withFailureHandler(e => toast('Error: ' + e.message)).dashSetCandidateActive(id, active);
+    .withFailureHandler(e => toast('Error: ' + e.message)).dashSetCandidateActive(DASH_KEY, id, active);
 }
  
 function setTarget(id, val){
   google.script.run.withSuccessHandler(() => { toast('Target updated'); load(); })
-    .withFailureHandler(e => toast('Error: ' + e.message)).dashSetCandidateTarget(id, val);
+    .withFailureHandler(e => toast('Error: ' + e.message)).dashSetCandidateTarget(DASH_KEY, id, val);
 }
  
 function markFollowUpDone(id){
   google.script.run.withSuccessHandler(() => { toast('Marked done'); load(); })
-    .withFailureHandler(e => toast('Error: ' + e.message)).dashMarkFollowUpDone(id);
+    .withFailureHandler(e => toast('Error: ' + e.message)).dashMarkFollowUpDone(DASH_KEY, id);
 }
  
 function delCandidate(id, name){
   if(!confirm(`Delete ${name} (${id}) and ALL their data - applications, prospects, generated documents, follow-ups, and their Drive folder? This cannot be undone.`)) return;
   toast('Deleting…');
   google.script.run.withSuccessHandler(() => { toast('Candidate deleted'); load(); })
-    .withFailureHandler(e => toast('Error: ' + e.message)).dashDeleteCandidate(id);
+    .withFailureHandler(e => toast('Error: ' + e.message)).dashDeleteCandidate(DASH_KEY, id);
 }
  
 function clearLog(){
   if(!confirm('Clear the entire Activity Log? This cannot be undone (it only clears the log, not your candidates or applications).')) return;
   google.script.run.withSuccessHandler(() => { toast('Log cleared'); load(); })
-    .withFailureHandler(e => toast('Error: ' + e.message)).dashClearActivityLog();
+    .withFailureHandler(e => toast('Error: ' + e.message)).dashClearActivityLog(DASH_KEY);
 }
  
 function revealPassword(id){
   google.script.run.withSuccessHandler(r => {
     // prompt() keeps the password selectable for copying without putting it in the page
     prompt('Password for ' + r.email + ' on ' + r.site + ' (copy it, then close):', r.password);
-  }).withFailureHandler(e => toast('Error: ' + e.message)).dashRevealAccountPassword(id);
+  }).withFailureHandler(e => toast('Error: ' + e.message)).dashRevealAccountPassword(DASH_KEY, id);
 }
 
 function retryApp(id){
-  if(!confirm('Re-queue this failed application as a fresh prospect to try again?')) return;
+  if(!confirm('Re-queue this application as a fresh prospect to try again?')) return;
   google.script.run.withSuccessHandler(() => { toast('Re-queued'); load(); })
-    .withFailureHandler(e => toast('Error: ' + e.message)).dashRetryApplication(id);
+    .withFailureHandler(e => toast('Error: ' + e.message)).dashRetryApplication(DASH_KEY, id);
 }
  
 const HELP_HTML = `
@@ -606,9 +605,9 @@ const HELP_HTML = `
 <ol class="steps">
 <li>A candidate fills in the Google form. Within seconds they appear under <b>Candidates</b>, already profiled by the AI.</li>
 <li>Every morning the system finds new jobs for each active candidate. You can also do it now: <b>Prospects</b> tab, pick the candidate, click <b>Find jobs</b>.</li>
-<li>In <b>Prospects</b>, click <b>Queue</b> on the jobs you want, or <b>Queue all found</b> to take them all.</li>
+<li>In <b>Prospects</b>, click <b>Queue</b> on the jobs you want, or use <b>Queue newest found: 5 / 10 / 20 / All</b> to queue a batch of the most recently found ones.</li>
 <li>That's it - the background worker checks for queued jobs automatically (about every 30 seconds) and fills each one in, one after another. Nobody needs to click anything for this step.</li>
-<li>Each finished application lands in <b>Review queue</b>. Read it, then <b>Approve</b> or <b>Send back</b>.</li>
+<li>Each finished application lands in <b>Review queue</b>. Read it, then <b>Approve</b> or <b>Send back</b>. Sending back a CV, cover letter or NHS statement has a new version written from your notes, which comes back to the queue in a minute or two. Sending back a finished application means it is not submitted; it shows as Rejected under Applications, where <b>Retry</b> re-queues it.</li>
 <li>On approve, it's submitted for real (by the worker, or by the extension if you filled it manually) and a screenshot is saved. See it under <b>Applications</b>.</li>
 </ol>
 </div>
@@ -616,18 +615,18 @@ const HELP_HTML = `
 <div class="card">
 <h2>Scenario: background automation (the worker)</h2>
 <p class="mut">This is what actually does the filling described above. It runs on a machine somewhere (started with <code>npm start</code> in the <code>worker</code> folder of the Jobverse repo) and polls continuously - no one needs to be watching it. When it finds something Queued, it generates the CV/cover letter, fills the real application form in a live browser, and stops to request a human decision in the Review queue, exactly like everything else in Jobverse. It only clicks the real Submit button after someone approves that item - nothing skips the review step just because a person didn't type the URL in themselves.</p>
-<p class="mut"><b>What it can handle right now:</b> Greenhouse postings, start to finish. Workday postings: it can sign in or create an account on the candidate's behalf (reusing the same email/password they gave on intake, tracked per employer so it never re-signs-up someone who already has an account), but stops after that - actually filling in a Workday form isn't built yet, so it leaves those queued rather than guessing. Anything on Lever, Ashby, or NHS Jobs is recognised as a real application link but has no worker module yet either - those stay Queued until support is added, or can be run manually through the extension in the meantime.</p>
-<p class="mut">If it hits a CAPTCHA or a "verify your email" wall while creating a Workday account, it can't push through that - nothing can, automatically. It pauses the application and notifies reviewers the same way it always has for CAPTCHAs, so a human can finish that one step by hand.</p>
+<p class="mut"><b>What it can handle right now:</b> any application form it can reach without an account - it finds the form (including forms embedded in an iframe), uploads the CV and cover letter, answers each question from the candidate's data, and follows Next through multi-step forms. It never presses Submit while filling. Anything it can't answer is listed in the review item. Jobs behind a sign-in or sign-up page, and anything that fails, end as <b>Error</b> in Prospects (the reason is in Notes) - run those through the extension, or re-queue them.</p>
+<p class="mut">After you approve, the worker re-fills the form and submits it. If it can't see the employer's confirmation message afterwards, the application shows as <b>Submit Unconfirmed - Human Needed</b> and reviewers are emailed - check the employer's site before doing anything else, as it may well have gone through.</p>
 </div>
  
 <div class="card">
 <h2>Scenario: a single job you already have open</h2>
-<p class="mut">Use the Chrome extension directly when you want something done right now instead of waiting for the worker's next pass - or for an ATS the worker doesn't support yet (Lever, Ashby, NHS Jobs). Open the extension on the job posting, pick the candidate, and click <b>Fill this application</b> (or <b>Start NHS application</b> on NHS Jobs). Same review-then-submit flow, just for that one job, done manually.</p>
+<p class="mut">Use the Chrome extension directly when you want something done right now instead of waiting for the worker's next pass - or for a job behind a sign-in/sign-up page, which only the extension handles. Open the extension on the job posting, pick the candidate, and click <b>Apply to this job</b>. Same review-then-submit flow, just for that one job.</p>
 </div>
  
 <div class="card">
 <h2>Scenario: NHS applications</h2>
-<p class="mut">NHS Jobs is an 8-step form. Jobverse fills the factual parts (contact, right to work, CV, and an AI-written supporting statement) and walks through the steps automatically. It will <b>not</b> guess the five legal declaration sections (criminal convictions, fitness to practice, guaranteed interview scheme, equality/diversity, socio-economic background) - those must come from the candidate's own answers, entered into their row in the Candidates sheet (columns starting "NHS..."). If an answer isn't there, it pauses and asks a human to complete that section. After submission, a Trac claim/verify follow-up is logged automatically under <b>Follow-ups</b>.</p>
+<p class="mut">NHS Jobs currently goes through the extension's general driver, like any other site. The dedicated NHS flow (AI-written supporting statement, automatic Trac claim/verify follow-up) is not switched on yet, so add the Trac follow-up yourself after submitting. The five legal declaration sections (criminal convictions, fitness to practice, guaranteed interview scheme, equality/diversity, socio-economic background) must come from the candidate's own answers in their Candidates row (columns starting "NHS...") - check them carefully in the review item before approving.</p>
 </div>
  
 <div class="card">
@@ -678,9 +677,9 @@ const HELP_HTML = `
 <details class="faq"><summary>What brings an item into the Review queue?</summary>
 <p>Every time the Resume Builder or Cover Letter Builder generates a document, a second AI - the Reviewer Agent - checks it for things like claims the CV makes that aren't backed up by the candidate's actual background, and keywords from the job posting that are missing. That review lands in the queue with Status: Awaiting Human, along with its score and findings, and stays there until someone opens it and decides. There's a separate, second checkpoint too: right before an application would actually be submitted, a full snapshot of everything about to be sent is filed and also waits for a human Approve. Nothing skips either queue on its own. (If auto-decide is ever turned on for CV/CoverLetter/NHSStatement reviews specifically - a config setting, off by default - a document that clears a confidence bar gets decided automatically instead of waiting. That never applies to the final submission checkpoint, which always waits for a person.)</p></details>
 <details class="faq"><summary>Is my Chrome extension setup still needed if the worker is running?</summary>
-<p>Yes, for now. The worker only handles Greenhouse fully and Workday partially (it stops after signing in/up). Anything on Lever, Ashby, or NHS Jobs, or a Workday form past the sign-in step, still needs the extension. Keep it set up.</p></details>
-<details class="faq"><summary>The worker hit a sign-in or sign-up wall on Workday. What happens?</summary>
-<p>It reuses the candidate's ApplicationEmail/ApplicationPassword from their intake form to sign in, or to create a new account if it doesn't find one recorded yet for that employer. Every account it creates or finds gets tracked (candidate + employer domain), so it never signs up the same candidate twice on the same employer's Workday tenant. If account creation hits a CAPTCHA or a mandatory "verify your email" step, it can't get through that automatically - it records the block and notifies reviewers the same way a CAPTCHA on submission always has, so a human can finish that one step.</p></details>
+<p>Yes. The worker can't get past sign-in or sign-up pages; the extension creates and signs in to site accounts itself (see <b>Site accounts</b>). Keep it set up.</p></details>
+<details class="faq"><summary>A job needs an account on the employer's site. What happens?</summary>
+<p>In the extension: it creates an account for the candidate with their application email and a random password (one per candidate per site, saved under <b>Site accounts</b>), or signs in to the one it made before. If the site wants a CAPTCHA solved or an email verified, it asks a person to do that step and carries on. The worker doesn't handle accounts - those jobs end as Error there.</p></details>
 </div>
 `;
 </script>

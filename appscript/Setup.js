@@ -43,7 +43,7 @@ var JV = {
       'ApplicationID', 'CreatedAt', 'CandidateID', 'JobID', 'Company', 'JobTitle',
       'JobURL', 'ATS', 'Status', 'DedupeHash', 'CVVersionID', 'LetterID',
       'SubmittedAt', 'ConfirmationScreenshotURL', 'RecruiterEmail', 'Outcome',
-      'InterviewDate', 'ErrorLog'
+      'InterviewDate', 'ErrorLog', 'FilledBy'
     ],
     Prospects: [
       'ProspectID', 'FoundAt', 'CandidateID', 'Company', 'JobTitle', 'JobURL',
@@ -51,7 +51,7 @@ var JV = {
     ],
     ReviewQueue: [
       'TaskID', 'CreatedAt', 'Type', 'CandidateID', 'JobID', 'RefID', 'Summary',
-      'AIScore', 'AIFindings', 'Status', 'Reviewer', 'DecidedAt', 'Decision', 'Notes'
+      'AIScore', 'AIFindings', 'Status', 'Reviewer', 'DecidedAt', 'Decision', 'Notes', 'RevisedAs'
     ],
     ToneProfiles: ['ProfileName', 'Description', 'StyleInstructions'],
     AIOutputs: ['OutputID', 'CreatedAt', 'Agent', 'CandidateID', 'JobID', 'Model', 'OutputJSON'],
@@ -74,6 +74,8 @@ var JV = {
     ['FORM_ID', '', 'ID of the client Google Form. Then run installFormTrigger().'],
     ['ROOT_FOLDER_ID', '', 'Filled automatically by setup.'],
     ['API_TOKEN', '', 'Filled automatically. Shared secret for the Chrome extension.'],
+    ['DASHBOARD_KEY', '', 'Filled automatically. Open the console as <web app URL>?key=<this value>. Change it to revoke old links.'],
+    ['DASHBOARD_EMAILS', '', 'Comma separated Google accounts that can open the console without the key (Workspace accounts only - Google hides the email of other viewers). Blank = only the deploying account.'],
     ['ANTHROPIC_MODEL', 'claude-sonnet-4-6', 'Model used by all agents.'],
     ['DEFAULT_TONE', 'Jobverse Standard', 'Tone profile applied unless overridden.'],
     ['CV_TEMPLATE', 'Modern', 'CV layout: Modern (header band, aligned dates, skills grid) or ATS Simple (plain single column).'],
@@ -130,7 +132,7 @@ function setupJobverse() {
         var startCol = sh.getLastColumn() + 1;
         sh.getRange(1, startCol, 1, missing.length).setValues([missing]);
         sh.getRange(1, startCol, 1, missing.length).setFontWeight('bold');
-        try { logActivity('system', 'schema_migrated', 'sheet', name, 'Added: ' + missing.join(', ')); } catch (ignored) {}
+        try { logActivity_('system', 'schema_migrated', 'sheet', name, 'Added: ' + missing.join(', ')); } catch (ignored) {}
       }
     }
   });
@@ -149,28 +151,34 @@ function setupJobverse() {
   var tones = ss.getSheetByName('ToneProfiles');
   if (tones.getLastRow() < 2) JV.TONE_DEFAULTS.forEach(function (r) { tones.appendRow(r); });
 
-  if (!getConfig('ROOT_FOLDER_ID')) {
+  if (!getConfig_('ROOT_FOLDER_ID')) {
     var root = DriveApp.createFolder('Jobverse Platform');
     root.createFolder('Candidates');
     root.createFolder('Generated CVs');
     root.createFolder('Cover Letters');
     root.createFolder('Screenshots');
     root.createFolder('Reports');
-    setConfig('ROOT_FOLDER_ID', root.getId());
+    setConfig_('ROOT_FOLDER_ID', root.getId());
   }
 
-  if (!getConfig('API_TOKEN')) {
-    setConfig('API_TOKEN', Utilities.getUuid().replace(/-/g, ''));
+  if (!getConfig_('API_TOKEN')) {
+    setConfig_('API_TOKEN', Utilities.getUuid().replace(/-/g, ''));
+  }
+  if (!getConfig_('DASHBOARD_KEY')) {
+    setConfig_('DASHBOARD_KEY', Utilities.getUuid().replace(/-/g, '') + Utilities.getUuid().replace(/-/g, ''));
   }
 
   ensureTrigger_('runDailyReport', function (b) { return b.timeBased().atHour(7).everyDays(1).create(); });
   ensureTrigger_('findProspectsForAllCandidates', function (b) { return b.timeBased().atHour(6).everyDays(1).create(); });
   ensureTrigger_('sendDueFollowUpReminders', function (b) { return b.timeBased().atHour(7).nearMinute(30).everyDays(1).create(); });
+  // Fallback for sent-back documents - normally dashDecide schedules a run within seconds (Revisions.gs)
+  ensureTrigger_('processRevisionQueue', function (b) { return b.timeBased().everyMinutes(10).create(); });
 
-  logActivity('system', 'setup', 'system', '-', 'Setup completed');
+  logActivity_('system', 'setup', 'system', '-', 'Setup completed');
   var msg = 'Jobverse setup complete. Next: 1) run createJobverseForm() or paste an existing Form ID into ' +
     'Config > FORM_ID, then run installFormTrigger(). 2) Set ANTHROPIC_API_KEY in Script properties. ' +
-    '3) Deploy > New deployment > Web app, and copy the URL into the Chrome extension options.';
+    '3) Deploy > New deployment > Web app, and copy the URL into the Chrome extension options. ' +
+    '4) Open the console at <web app URL>?key=<Config > DASHBOARD_KEY>.';
   Logger.log(msg);
   try {
     SpreadsheetApp.getActiveSpreadsheet().toast(
@@ -180,7 +188,7 @@ function setupJobverse() {
 }
 
 function installFormTrigger() {
-  var formId = getConfig('FORM_ID');
+  var formId = getConfig_('FORM_ID');
   if (!formId) throw new Error('Set Config > FORM_ID first.');
   var exists = ScriptApp.getProjectTriggers().some(function (t) {
     return t.getHandlerFunction() === 'onFormSubmit';
@@ -188,7 +196,7 @@ function installFormTrigger() {
   if (!exists) {
     ScriptApp.newTrigger('onFormSubmit').forForm(FormApp.openById(formId)).onFormSubmit().create();
   }
-  logActivity('system', 'trigger_installed', 'form', formId, 'Form submit trigger active');
+  logActivity_('system', 'trigger_installed', 'form', formId, 'Form submit trigger active');
 }
 
 function ensureTrigger_(fnName, builderFn) {
@@ -200,20 +208,35 @@ function ensureTrigger_(fnName, builderFn) {
 
 /* ------------------------- shared helpers ------------------------- */
 
+/*
+ * Per-execution caches. Each google.script.run call / doPost / trigger is a
+ * fresh execution, so these never go stale across requests - they only stop
+ * the same execution re-reading the Config tab and header rows over and over
+ * (every read is a round-trip to Sheets, and they add up to seconds).
+ */
+var SHEET_CACHE_ = {}, HEADER_CACHE_ = {}, CONFIG_CACHE_ = null;
+
 function sheet_(name) {
-  return SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
+  if (!SHEET_CACHE_[name]) SHEET_CACHE_[name] = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
+  return SHEET_CACHE_[name];
 }
 
-function getConfig(key) {
-  var sh = sheet_('Config');
-  if (!sh || sh.getLastRow() < 2) return '';
-  var data = sh.getRange(2, 1, sh.getLastRow() - 1, 2).getValues();
-  for (var i = 0; i < data.length; i++) if (data[i][0] === key) return String(data[i][1]);
-  return '';
+function getConfig_(key) {
+  if (!CONFIG_CACHE_) {
+    CONFIG_CACHE_ = {};
+    var sh = sheet_('Config');
+    if (sh && sh.getLastRow() >= 2) {
+      sh.getRange(2, 1, sh.getLastRow() - 1, 2).getValues().forEach(function (r) {
+        if (r[0] !== '' && !(r[0] in CONFIG_CACHE_)) CONFIG_CACHE_[r[0]] = String(r[1]);
+      });
+    }
+  }
+  return CONFIG_CACHE_[key] || '';
 }
 
-function setConfig(key, value) {
+function setConfig_(key, value) {
   var sh = sheet_('Config');
+  CONFIG_CACHE_ = null;
   var data = sh.getRange(2, 1, Math.max(sh.getLastRow() - 1, 1), 1).getValues();
   for (var i = 0; i < data.length; i++) {
     if (data[i][0] === key) { sh.getRange(i + 2, 2).setValue(value); return; }
@@ -221,44 +244,102 @@ function setConfig(key, value) {
   sh.appendRow([key, value, '']);
 }
 
-function newId(prefix) {
+function newId_(prefix) {
   return prefix + '-' + Utilities.formatDate(new Date(), 'GMT', 'yyMMdd') + '-' +
     Math.random().toString(36).slice(2, 8).toUpperCase();
 }
 
-function logActivity(actor, action, refType, refId, detail) {
+function logActivity_(actor, action, refType, refId, detail) {
   sheet_('ActivityLog').appendRow([new Date(), actor, action, refType, refId, detail || '']);
 }
 
 function getHeaderMap_(sh) {
+  var key = sh.getSheetId();
+  if (HEADER_CACHE_[key]) return HEADER_CACHE_[key];
   var lastCol = Math.max(sh.getLastColumn(), 1);
   var headerRow = sh.getRange(1, 1, 1, lastCol).getValues()[0];
   var map = {};
   headerRow.forEach(function (h, i) { if (h) map[h] = i + 1; });
+  HEADER_CACHE_[key] = map;
   return map;
 }
 
-function readRows(name) {
-  var sh = sheet_(name);
-  if (sh.getLastRow() < 2) return [];
-  var map = getHeaderMap_(sh);
-  var lastCol = sh.getLastColumn();
-  var values = sh.getRange(2, 1, sh.getLastRow() - 1, lastCol).getValues();
-  var headerNames = Object.keys(map);
-  return values.map(function (row, i) {
-    var o = { _row: i + 2 };
-    headerNames.forEach(function (h) { o[h] = row[map[h] - 1]; });
-    return o;
-  });
+/** Drops a cached header map after columns are added to a sheet. */
+function clearHeaderCache_(sh) {
+  delete HEADER_CACHE_[sh.getSheetId()];
 }
 
-function findRow(name, idField, idValue) {
-  var rows = readRows(name);
-  for (var i = 0; i < rows.length; i++) if (String(rows[i][idField]) === String(idValue)) return rows[i];
+/**
+ * All data rows as objects keyed by header. Pass `cols` (header names) to
+ * read only those columns - much faster on tabs with big JSON columns
+ * (AIProfileJSON, AIFindings, AnalysisJSON) the caller doesn't need.
+ */
+function readRows_(name, cols) {
+  var sh = sheet_(name);
+  if (!sh || sh.getLastRow() < 2) return [];
+  var map = getHeaderMap_(sh);
+  var n = sh.getLastRow() - 1;
+  var wanted = (cols || Object.keys(map)).filter(function (h) { return map[h]; });
+  var out = [];
+  for (var i = 0; i < n; i++) out.push({ _row: i + 2 });
+
+  // Read the wanted columns as a few contiguous blocks rather than the whole sheet,
+  // never stretching a block over a big column nobody asked for
+  var avoid = HEAVY_COLS_.filter(function (h) { return map[h] && wanted.indexOf(h) === -1; })
+    .map(function (h) { return map[h]; });
+  colRuns_(wanted.map(function (h) { return map[h]; }), avoid).forEach(function (run) {
+    var values = sh.getRange(2, run[0], n, run[1] - run[0] + 1).getValues();
+    wanted.forEach(function (h) {
+      var c = map[h];
+      if (c < run[0] || c > run[1]) return;
+      for (var i = 0; i < n; i++) out[i][h] = values[i][c - run[0]];
+    });
+  });
+  return out;
+}
+
+/** Columns that can hold tens of KB per row - only read when asked for by name. */
+var HEAVY_COLS_ = ['AIFindings', 'AIProfileJSON', 'AnalysisJSON', 'OutputJSON', 'MetricsJSON', 'ErrorLog'];
+
+/**
+ * Groups column numbers into [from, to] ranges, merging small gaps (cheaper
+ * to over-read than to make another call) unless a gap holds an `avoid` column.
+ */
+function colRuns_(colNums, avoid) {
+  var sorted = colNums.slice().sort(function (a, b) { return a - b; });
+  var runs = [];
+  sorted.forEach(function (c) {
+    var last = runs[runs.length - 1];
+    var gapIsCheap = last && c - last[1] <= 8 && !(avoid || []).some(function (a) { return a > last[1] && a < c; });
+    if (gapIsCheap) last[1] = Math.max(last[1], c);
+    else runs.push([c, c]);
+  });
+  return runs;
+}
+
+/**
+ * The row whose idField equals idValue, or null. Scans only the ID column,
+ * then reads just the matching row (newest match first - IDs are unique, and
+ * recent rows are the ones usually looked up).
+ */
+function findRow_(name, idField, idValue) {
+  var sh = sheet_(name);
+  if (!sh || sh.getLastRow() < 2) return null;
+  var map = getHeaderMap_(sh);
+  if (!map[idField]) return null;
+  var ids = sh.getRange(2, map[idField], sh.getLastRow() - 1, 1).getValues();
+  var target = String(idValue);
+  for (var i = ids.length - 1; i >= 0; i--) {
+    if (String(ids[i][0]) !== target) continue;
+    var row = sh.getRange(i + 2, 1, 1, sh.getLastColumn()).getValues()[0];
+    var o = { _row: i + 2 };
+    Object.keys(map).forEach(function (h) { o[h] = row[map[h] - 1]; });
+    return o;
+  }
   return null;
 }
 
-function appendObject(name, obj) {
+function appendObject_(name, obj) {
   var sh = sheet_(name);
   var map = getHeaderMap_(sh);
   var lastCol = Math.max(sh.getLastColumn(), Object.keys(map).length);
@@ -269,7 +350,7 @@ function appendObject(name, obj) {
   sh.appendRow(row);
 }
 
-function updateRow(name, rowNumber, patch) {
+function updateRow_(name, rowNumber, patch) {
   var sh = sheet_(name);
   var map = getHeaderMap_(sh);
   Object.keys(patch).forEach(function (k) {
@@ -277,7 +358,16 @@ function updateRow(name, rowNumber, patch) {
   });
 }
 
-function deleteRowsWhere(name, idField, idValue) {
+/** Sets one column to `value` on many rows at once (e.g. bulk status changes). */
+function setColumnForRows_(name, field, rowNumbers, value) {
+  if (!rowNumbers.length) return;
+  var sh = sheet_(name);
+  var col = getHeaderMap_(sh)[field];
+  if (!col) return;
+  sh.getRangeList(rowNumbers.map(function (r) { return sh.getRange(r, col).getA1Notation(); })).setValue(value);
+}
+
+function deleteRowsWhere_(name, idField, idValue) {
   var sh = sheet_(name);
   if (sh.getLastRow() < 2) return 0;
   var map = getHeaderMap_(sh);

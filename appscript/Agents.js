@@ -10,14 +10,14 @@
 
 /* ---------------------------- Resume Analyst ---------------------------- */
 
-function runResumeAnalyst(candidateId) {
-  var cand = findRow('Candidates', 'CandidateID', candidateId);
+function runResumeAnalyst_(candidateId) {
+  var cand = findRow_('Candidates', 'CandidateID', candidateId);
   if (!cand) throw new Error('Candidate not found: ' + candidateId);
   if (!cand.CVFileID) throw new Error('No CV on file for ' + candidateId);
 
-  var cvText = extractFileText(cand.CVFileID).slice(0, 40000);
+  var cvText = extractFileText_(cand.CVFileID).slice(0, 40000);
 
-  var profile = callClaudeJSON(
+  var profile = callClaudeJSON_(
     'You are a CV analyst for a UK recruitment agency. Extract a structured profile. ' +
     'Use only information present in the CV. Never invent employers, dates, or qualifications. ' +
     'If something is absent, use an empty string or empty array.',
@@ -28,22 +28,22 @@ function runResumeAnalyst(candidateId) {
     4000
   );
 
-  updateRow('Candidates', cand._row, {
+  updateRow_('Candidates', cand._row, {
     Status: 'Profiled',
     AIProfileJSON: JSON.stringify(profile).slice(0, 45000),
     Strengths: (profile.strengths || []).join('; '),
     Weaknesses: (profile.weaknesses || []).join('; ')
   });
-  saveAIOutput('ResumeAnalyst', candidateId, '', profile);
-  logActivity('ai', 'profile_built', 'candidate', candidateId, 'Resume Analyst complete');
+  saveAIOutput_('ResumeAnalyst', candidateId, '', profile);
+  logActivity_('ai', 'profile_built', 'candidate', candidateId, 'Resume Analyst complete');
   return profile;
 }
 
 /* ----------------------------- Job Analyst ------------------------------ */
 
 /** jdText can be a pasted JD or text scraped by the extension. */
-function runJobAnalyst(candidateId, jobUrl, jdText, atsName) {
-  var analysis = callClaudeJSON(
+function runJobAnalyst_(candidateId, jobUrl, jdText, atsName) {
+  var analysis = callClaudeJSON_(
     'You are a job description analyst for a UK recruitment agency.',
     'JOB DESCRIPTION:\n' + String(jdText).slice(0, 30000) + '\n\nReturn JSON with keys: ' +
     'company, job_title, location, salary, experience_level, responsibilities (array), ' +
@@ -52,11 +52,11 @@ function runJobAnalyst(candidateId, jobUrl, jdText, atsName) {
     3000
   );
 
-  var jobId = newId('JOB');
+  var jobId = newId_('JOB');
   var suitability = '';
-  var cand = findRow('Candidates', 'CandidateID', candidateId);
+  var cand = findRow_('Candidates', 'CandidateID', candidateId);
   if (cand && cand.AIProfileJSON) {
-    var score = callClaudeJSON(
+    var score = callClaudeJSON_(
       'Score candidate suitability for a job from 0 to 100 with a one line reason. ' +
       'Base it only on the profile provided.',
       'PROFILE:\n' + cand.AIProfileJSON + '\n\nJOB ANALYSIS:\n' + JSON.stringify(analysis) +
@@ -66,7 +66,7 @@ function runJobAnalyst(candidateId, jobUrl, jdText, atsName) {
     suitability = score.score + ' (' + score.reason + ')';
   }
 
-  appendObject('Jobs', {
+  appendObject_('Jobs', {
     JobID: jobId,
     CreatedAt: new Date(),
     CandidateID: candidateId,
@@ -86,27 +86,27 @@ function runJobAnalyst(candidateId, jobUrl, jdText, atsName) {
     AnalysisJSON: JSON.stringify(analysis).slice(0, 45000),
     Status: 'Analysed'
   });
-  saveAIOutput('JobAnalyst', candidateId, jobId, analysis);
-  logActivity('ai', 'job_analysed', 'job', jobId, (analysis.company || '') + ' - ' + (analysis.job_title || ''));
+  saveAIOutput_('JobAnalyst', candidateId, jobId, analysis);
+  logActivity_('ai', 'job_analysed', 'job', jobId, (analysis.company || '') + ' - ' + (analysis.job_title || ''));
   return jobId;
 }
 
 /* ---------------------------- Resume Builder ---------------------------- */
 
-function runResumeBuilder(candidateId, jobId, toneName) {
-  var cand = findRow('Candidates', 'CandidateID', candidateId);
-  var job = findRow('Jobs', 'JobID', jobId);
+/** `revision` (optional): {notes, findings} from a sent-back review - see Revisions.gs. */
+function runResumeBuilder_(candidateId, jobId, toneName, revision) {
+  var cand = findRow_('Candidates', 'CandidateID', candidateId);
+  var job = findRow_('Jobs', 'JobID', jobId);
   if (!cand || !job) throw new Error('Candidate or job not found.');
-  if (!cand.AIProfileJSON) runResumeAnalyst(candidateId);
+  cand = ensureProfile_(cand);
 
   var tone = getTone_(toneName);
-  var cv = callClaudeJSON(
+  var cv = callClaudeJSON_(
     'You are an expert UK CV writer. Build a tailored CV strictly from the candidate ' +
     'profile. Never invent employers, dates, qualifications, or achievements. Weave in ' +
     'the ATS keywords only where the profile genuinely supports them. Style: ' + tone,
     'CANDIDATE PROFILE:\n' + cand.AIProfileJSON +
-    '\n\nCONTACT: ' + cand.FullName + ', ' + cand.Email + ', ' + cand.Phone + ', ' + cand.Location +
-    (cand.LinkedIn ? ', ' + cand.LinkedIn : '') +
+    '\n\nCONTACT: ' + [cvText_(cand.FullName)].concat(cvContact_(cand).map(function (c) { return c.text; })).join(', ') +
     '\n\nTARGET JOB ANALYSIS:\n' + job.AnalysisJSON +
     '\n\nWriting rules: headline is the target role title plus one specialism, under 10 words. ' +
     'profile_summary is 3-4 sentences, no first person pronouns. skills is 8-14 short ' +
@@ -114,7 +114,10 @@ function runResumeBuilder(candidateId, jobId, toneName) {
     'chronological; each role has 3-6 bullets that start with a strong past-tense verb ' +
     '(present tense for a current role), lead with impact, and keep any numbers from the ' +
     'profile. Format dates as "Mon YYYY - Mon YYYY" or "Mon YYYY - Present" where the ' +
-    'profile allows, otherwise copy them as given. Leave location empty if unknown.' +
+    'profile allows, otherwise copy them as given. Leave location empty if unknown. ' +
+    'Any field you have no real value for must be an empty string (or empty array) - never write ' +
+    'null, N/A, Any, Unknown, Not specified or similar placeholders.' +
+    revisionBrief_(revision) +
     '\n\nReturn JSON: {"headline": string, "profile_summary": string, ' +
     '"skills": [string], "experience": [{"employer": string, "title": string, ' +
     '"location": string, "dates": string, "bullets": [string]}], ' +
@@ -122,11 +125,12 @@ function runResumeBuilder(candidateId, jobId, toneName) {
     '"line": string}], "certifications": [string]}',
     4000
   );
+  cv = cvCleanResult_(cv);
 
-  var versionId = newId('CV');
+  var versionId = newId_('CV');
   var doc = renderCVDoc_(cand, job, cv, versionId);
 
-  appendObject('CVVersions', {
+  appendObject_('CVVersions', {
     VersionID: versionId,
     CreatedAt: new Date(),
     CandidateID: candidateId,
@@ -134,11 +138,11 @@ function runResumeBuilder(candidateId, jobId, toneName) {
     DocURL: doc.getUrl(),
     DocID: doc.getId(),
     ReviewStatus: 'Pending',
-    ToneProfile: toneName || getConfig('DEFAULT_TONE')
+    ToneProfile: toneName || getConfig_('DEFAULT_TONE')
   });
-  saveAIOutput('ResumeBuilder', candidateId, jobId, cv);
-  runReviewerAgent('CV', versionId, candidateId, jobId, JSON.stringify(cv));
-  logActivity('ai', 'cv_generated', 'cv', versionId, job.Company + ' - ' + job.JobTitle);
+  saveAIOutput_('ResumeBuilder', candidateId, jobId, cv);
+  runReviewerAgent_('CV', versionId, candidateId, jobId, JSON.stringify(cv));
+  logActivity_('ai', 'cv_generated', 'cv', versionId, job.Company + ' - ' + job.JobTitle);
   return versionId;
 }
 
@@ -164,7 +168,7 @@ function renderCVDoc_(cand, job, cv, versionId) {
 
   doc.saveAndClose();
   DriveApp.getFileById(doc.getId()).moveTo(
-    DriveApp.getFolderById(getConfig('ROOT_FOLDER_ID')).getFoldersByName('Generated CVs').next()
+    DriveApp.getFolderById(getConfig_('ROOT_FOLDER_ID')).getFoldersByName('Generated CVs').next()
   );
   return doc;
 }
@@ -181,7 +185,7 @@ function cvRenderModern_(body, cand, cv, t) {
   // Header band: name, headline and contact details on the accent colour
   var head = cvTable_(body, 1, [W]).getCell(0, 0);
   head.setBackgroundColor(t.accent).setPaddingTop(20).setPaddingBottom(18).setPaddingLeft(22).setPaddingRight(22);
-  cvLine_(head, t, [{ text: cand.FullName || '' }], { heading: H.TITLE, size: 25, bold: true, color: t.onAccent, line: 1 });
+  cvLine_(head, t, [{ text: cvText_(cand.FullName) }], { heading: H.TITLE, size: 25, bold: true, color: t.onAccent, line: 1 });
   if (cv.headline) cvLine_(head, t, [{ text: cv.headline }], { size: 12, color: t.onAccentSoft, before: 3, line: 1.1 });
   var contact = cvContact_(cand, t.onAccent);
   if (contact.length) {
@@ -266,7 +270,7 @@ function cvRenderSimple_(body, cand, cv, t) {
   body.setPageWidth(595.28).setPageHeight(841.89);
   body.setMarginTop(40).setMarginBottom(40).setMarginLeft(54).setMarginRight(54);
 
-  cvLine_(body, t, [{ text: cand.FullName || '' }], { heading: H.TITLE, size: 26, bold: true, color: t.accent, line: 1 });
+  cvLine_(body, t, [{ text: cvText_(cand.FullName) }], { heading: H.TITLE, size: 26, bold: true, color: t.accent, line: 1 });
   if (cv.headline) cvLine_(body, t, [{ text: cv.headline }], { size: 12.5, color: t.ink, after: 4, line: 1.1 });
   var contact = cvContact_(cand, t.muted);
   if (contact.length) cvLine_(body, t, cvJoin_(contact, t.accent), { size: 9.5, color: t.muted, after: 2 });
@@ -328,14 +332,59 @@ function cvRule_(body, after) {
 
 /* --------------------------- shared helpers ----------------------------- */
 
+/** Whole-field values that mean "nothing here" - from the AI, or intake answers like "Any". */
+var CV_PLACEHOLDER_ = /^(null|undefined|none|nil|n\/?a|not applicable|not specified|not provided|unknown|any|anywhere|any location|tbc|tbd|-+|\[\]|\{\})$/i;
+
+/**
+ * A field as clean display text: '' for blanks and placeholders, with stray
+ * "null"/"undefined" fragments removed ("Jan 2020 - null" -> "Jan 2020",
+ * "London, null" -> "London"). Pass prose=true for sentences and list items,
+ * where only a whole-field placeholder is dropped (a bullet may genuinely say
+ * "null pointer").
+ */
+function cvText_(v, prose) {
+  if (v === null || v === undefined) return '';
+  var s = String(v).trim();
+  if (CV_PLACEHOLDER_.test(s)) return '';
+  if (prose) return s;
+  s = s.replace(/\b(null|undefined)\b/gi, '')
+    .replace(/([,;|•])\s*(?=[,;|•])/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/^[\s,;|\-–•]+|[\s,;|\-–•]+$/g, '')
+    .trim();
+  return CV_PLACEHOLDER_.test(s) ? '' : s;
+}
+
+/** The Resume Builder's JSON with placeholders and empty entries stripped, ready to render. */
+function cvCleanResult_(cv) {
+  cv = cv || {};
+  var list = function (a) {
+    return (Array.isArray(a) ? a : []).map(function (x) { return cvText_(x, true); }).filter(Boolean);
+  };
+  return {
+    headline: cvText_(cv.headline),
+    profile_summary: cvText_(cv.profile_summary, true),
+    skills: list(cv.skills),
+    experience: (cv.experience || []).map(function (e) {
+      return { employer: cvText_(e.employer), title: cvText_(e.title), location: cvText_(e.location),
+               dates: cvText_(e.dates), bullets: list(e.bullets) };
+    }).filter(function (e) { return e.title || e.employer; }),
+    education: (cv.education || []).map(function (e) {
+      return { qualification: cvText_(e.qualification), institution: cvText_(e.institution),
+               year: cvText_(e.year), line: cvText_(e.line) };
+    }).filter(function (e) { return e.qualification || e.institution || e.line; }),
+    certifications: list(cv.certifications)
+  };
+}
+
 function cvTheme_() {
-  var accent = getConfig('CV_ACCENT_COLOR');
+  var accent = getConfig_('CV_ACCENT_COLOR');
   accent = /^#[0-9a-f]{6}$/i.test(accent) ? accent : '#1F4E79';
   var n = parseInt(accent.slice(1), 16);
   var light = (0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255 > 0.6;
   return {
-    template: (getConfig('CV_TEMPLATE') || 'Modern').trim().toLowerCase(),
-    font: getConfig('CV_FONT') || 'Lato',
+    template: (getConfig_('CV_TEMPLATE') || 'Modern').trim().toLowerCase(),
+    font: getConfig_('CV_FONT') || 'Lato',
     accent: accent,
     onAccent: light ? '#1A1A1A' : '#FFFFFF',          // text on the header band
     onAccentSoft: light ? '#404040' : cvMix_(accent, 0.72),
@@ -353,12 +402,18 @@ function cvMix_(hex, f) {
   }).join('');
 }
 
+/** Header contact runs. Blanks and placeholders ("null", "Any", "N/A"...) are left out. */
 function cvContact_(cand, color) {
   var out = [];
-  [cand.Location, cand.Phone].forEach(function (v) { if (v) out.push({ text: String(v), color: color }); });
-  if (cand.Email) out.push({ text: String(cand.Email), link: 'mailto:' + cand.Email, color: color });
-  if (cand.LinkedIn) {
-    var li = String(cand.LinkedIn).trim();
+  // Location comes from the intake's preferred-locations answer, which can be a list like "London; Any"
+  var location = cvText_(cand.Location).split(/\s*[;,\/]\s*/).filter(function (x) {
+    return x && !CV_PLACEHOLDER_.test(x);
+  }).join(', ');
+  [location, cvText_(cand.Phone)].forEach(function (v) { if (v) out.push({ text: v, color: color }); });
+  var email = cvText_(cand.Email);
+  if (email.indexOf('@') > 0) out.push({ text: email, link: 'mailto:' + email, color: color });
+  var li = cvText_(cand.LinkedIn);
+  if (li.indexOf('.') > 0) {
     out.push({
       text: li.replace(/^https?:\/\/(www\.)?/i, '').replace(/\/$/, ''),
       link: /^https?:/i.test(li) ? li : 'https://' + li,
@@ -517,13 +572,14 @@ function previewCVTemplate() {
 
 /* -------------------------- Cover Letter Builder ------------------------- */
 
-function runCoverLetterBuilder(candidateId, jobId, toneName) {
-  var cand = findRow('Candidates', 'CandidateID', candidateId);
-  var job = findRow('Jobs', 'JobID', jobId);
+function runCoverLetterBuilder_(candidateId, jobId, toneName, revision) {
+  var cand = findRow_('Candidates', 'CandidateID', candidateId);
+  var job = findRow_('Jobs', 'JobID', jobId);
   if (!cand || !job) throw new Error('Candidate or job not found.');
+  cand = ensureProfile_(cand);
 
   var tone = getTone_(toneName);
-  var letter = callClaude(
+  var letter = callClaude_(
     'You write one page UK cover letters. Evidence based: every claim must trace to the ' +
     'candidate profile. Company specific and role specific. Human sounding, no template ' +
     'phrases, no "I am writing to apply". Maximum 320 words. Style: ' + tone,
@@ -531,21 +587,22 @@ function runCoverLetterBuilder(candidateId, jobId, toneName) {
     '\n\nCANDIDATE NAME: ' + cand.FullName +
     '\n\nJOB ANALYSIS:\n' + job.AnalysisJSON +
     '\n\nWrite the letter body only, starting "Dear Hiring Manager," (or the named ' +
-    'manager if present in the analysis) and ending "Yours sincerely,\n' + cand.FullName + '".',
+    'manager if present in the analysis) and ending "Yours sincerely,\n' + cand.FullName + '".' +
+    revisionBrief_(revision),
     1500
   );
 
-  var letterId = newId('CL');
+  var letterId = newId_('CL');
   var doc = DocumentApp.create(cand.FullName + ' Cover Letter - ' + job.Company + ' - ' + letterId);
   var body = doc.getBody();
   body.setAttributes(styleAttrs_(11));
   letter.split('\n').forEach(function (line) { addPara_(body, line); });
   doc.saveAndClose();
   DriveApp.getFileById(doc.getId()).moveTo(
-    DriveApp.getFolderById(getConfig('ROOT_FOLDER_ID')).getFoldersByName('Cover Letters').next()
+    DriveApp.getFolderById(getConfig_('ROOT_FOLDER_ID')).getFoldersByName('Cover Letters').next()
   );
 
-  appendObject('CoverLetters', {
+  appendObject_('CoverLetters', {
     LetterID: letterId,
     CreatedAt: new Date(),
     CandidateID: candidateId,
@@ -553,11 +610,11 @@ function runCoverLetterBuilder(candidateId, jobId, toneName) {
     DocURL: doc.getUrl(),
     DocID: doc.getId(),
     ReviewStatus: 'Pending',
-    ToneProfile: toneName || getConfig('DEFAULT_TONE')
+    ToneProfile: toneName || getConfig_('DEFAULT_TONE')
   });
-  saveAIOutput('CoverLetterBuilder', candidateId, jobId, { letter: letter });
-  runReviewerAgent('CoverLetter', letterId, candidateId, jobId, letter);
-  logActivity('ai', 'letter_generated', 'letter', letterId, job.Company);
+  saveAIOutput_('CoverLetterBuilder', candidateId, jobId, { letter: letter });
+  runReviewerAgent_('CoverLetter', letterId, candidateId, jobId, letter);
+  logActivity_('ai', 'letter_generated', 'letter', letterId, job.Company);
   return letterId;
 }
 
@@ -577,14 +634,14 @@ function runCoverLetterBuilder(candidateId, jobId, toneName) {
  * stored answers (NHSUnspentConvictions etc. on the Candidates row), never
  * generated or guessed by AI. See README Part 2 for why.
  */
-function runNHSSupportingStatement(candidateId, jobId, toneName) {
-  var cand = findRow('Candidates', 'CandidateID', candidateId);
-  var job = findRow('Jobs', 'JobID', jobId);
+function runNHSSupportingStatement_(candidateId, jobId, toneName, revision) {
+  var cand = findRow_('Candidates', 'CandidateID', candidateId);
+  var job = findRow_('Jobs', 'JobID', jobId);
   if (!cand || !job) throw new Error('Candidate or job not found.');
-  if (!cand.AIProfileJSON) runResumeAnalyst(candidateId);
+  cand = ensureProfile_(cand);
 
   var tone = getTone_(toneName || 'NHS');
-  var statement = callClaude(
+  var statement = callClaude_(
     'You write NHS job application supporting statements. Structure the response to address ' +
     'each point in the job\'s person specification / required and preferred skills directly, ' +
     'using specific evidence from the candidate profile only - never invent employers, dates, ' +
@@ -593,28 +650,42 @@ function runNHSSupportingStatement(candidateId, jobId, toneName) {
     'CANDIDATE PROFILE:\n' + cand.AIProfileJSON +
     '\n\nJOB ANALYSIS (person specification / requirements):\n' + job.AnalysisJSON +
     '\n\nWrite the supporting statement body only, no salutation or sign-off, 500-1200 words, ' +
-    'organised under clear subheadings matching the person specification categories.',
+    'organised under clear subheadings matching the person specification categories.' +
+    revisionBrief_(revision),
     3000
   );
 
-  var statementId = newId('NHS');
+  var statementId = newId_('NHS');
   var doc = DocumentApp.create(cand.FullName + ' NHS Supporting Statement - ' + job.Company + ' - ' + statementId);
   var body = doc.getBody();
   body.setAttributes(styleAttrs_(11));
   statement.split('\n').forEach(function (line) { addPara_(body, line); });
   doc.saveAndClose();
-  var folder = DriveApp.getFolderById(getConfig('ROOT_FOLDER_ID'));
+  var folder = DriveApp.getFolderById(getConfig_('ROOT_FOLDER_ID'));
   var target = folderOrCreate_(folder, 'NHS Supporting Statements');
   DriveApp.getFileById(doc.getId()).moveTo(target);
 
-  appendObject('NHSStatements', {
+  appendObject_('NHSStatements', {
     StatementID: statementId, CreatedAt: new Date(), CandidateID: candidateId, JobID: jobId,
     DocURL: doc.getUrl(), DocID: doc.getId(), ReviewStatus: 'Pending', ToneProfile: toneName || 'NHS'
   });
-  saveAIOutput('NHSSupportingStatement', candidateId, jobId, { statement: statement });
-  runReviewerAgent('NHSStatement', statementId, candidateId, jobId, statement);
-  logActivity('ai', 'nhs_statement_generated', 'nhsstatement', statementId, job.Company);
+  saveAIOutput_('NHSSupportingStatement', candidateId, jobId, { statement: statement });
+  runReviewerAgent_('NHSStatement', statementId, candidateId, jobId, statement);
+  logActivity_('ai', 'nhs_statement_generated', 'nhsstatement', statementId, job.Company);
   return { statementId: statementId, docUrl: doc.getUrl(), text: statement };
+}
+
+/**
+ * The candidate row with an AI profile, building it first if it's missing.
+ * Returns a fresh row - the one passed in still has the empty profile, and a
+ * document written from it would have nothing true to say about the candidate.
+ */
+function ensureProfile_(cand) {
+  if (cand.AIProfileJSON) return cand;
+  runResumeAnalyst_(cand.CandidateID);
+  cand = findRow_('Candidates', 'CandidateID', cand.CandidateID);
+  if (!cand || !cand.AIProfileJSON) throw new Error('Could not build a profile for this candidate - check their CV upload.');
+  return cand;
 }
 
 function folderOrCreate_(parent, name) {
@@ -624,11 +695,11 @@ function folderOrCreate_(parent, name) {
 
 /* ---------------------------- Reviewer Agent ----------------------------- */
 
-function runReviewerAgent(type, refId, candidateId, jobId, contentText) {
-  var cand = findRow('Candidates', 'CandidateID', candidateId);
-  var job = jobId ? findRow('Jobs', 'JobID', jobId) : null;
+function runReviewerAgent_(type, refId, candidateId, jobId, contentText) {
+  var cand = findRow_('Candidates', 'CandidateID', candidateId);
+  var job = jobId ? findRow_('Jobs', 'JobID', jobId) : null;
 
-  var review = callClaudeJSON(
+  var review = callClaudeJSON_(
     'You are a strict quality reviewer for AI generated application documents. Check: ' +
     '1) generic wording, 2) claims not supported by the candidate profile (list each one), ' +
     '3) missing ATS keywords from the job analysis, 4) grammar, 5) chronology consistency. ' +
@@ -642,8 +713,8 @@ function runReviewerAgent(type, refId, candidateId, jobId, contentText) {
     2000
   );
 
-  var taskId = newId('REV');
-  appendObject('ReviewQueue', {
+  var taskId = newId_('REV');
+  appendObject_('ReviewQueue', {
     TaskID: taskId,
     CreatedAt: new Date(),
     Type: type,
@@ -658,20 +729,20 @@ function runReviewerAgent(type, refId, candidateId, jobId, contentText) {
 
   var target = type === 'CV' ? 'CVVersions' : (type === 'CoverLetter' ? 'CoverLetters' : (type === 'NHSStatement' ? 'NHSStatements' : null));
   if (target) {
-    var row = findRow(target, type === 'CV' ? 'VersionID' : (type === 'CoverLetter' ? 'LetterID' : 'StatementID'), refId);
-    if (row) updateRow(target, row._row, { ReviewScore: review.ats_score, ReviewerNotes: (review.issues || []).join('; ') });
+    var row = findRow_(target, type === 'CV' ? 'VersionID' : (type === 'CoverLetter' ? 'LetterID' : 'StatementID'), refId);
+    if (row) updateRow_(target, row._row, { ReviewScore: review.ats_score, ReviewerNotes: (review.issues || []).join('; ') });
   }
-  saveAIOutput('ReviewerAgent', candidateId, jobId, review);
+  saveAIOutput_('ReviewerAgent', candidateId, jobId, review);
   return taskId;
 }
 
 /* ------------------------ ATS Question Answering ------------------------- */
 
 /** Called by the Chrome extension for screening questions it cannot map. */
-function answerScreeningQuestion(candidateId, jobId, questionText) {
-  var cand = findRow('Candidates', 'CandidateID', candidateId);
-  var job = jobId ? findRow('Jobs', 'JobID', jobId) : null;
-  var answer = callClaude(
+function answerScreeningQuestion_(candidateId, jobId, questionText) {
+  var cand = findRow_('Candidates', 'CandidateID', candidateId);
+  var job = jobId ? findRow_('Jobs', 'JobID', jobId) : null;
+  var answer = callClaude_(
     'Answer an ATS screening question on behalf of a candidate. Use only facts from ' +
     'their profile and structured fields. If the profile does not contain the answer, ' +
     'reply exactly NEEDS_HUMAN. Be concise and truthful. British English. Style: ' + getTone_(),
@@ -686,7 +757,7 @@ function answerScreeningQuestion(candidateId, jobId, questionText) {
     '\n\nQUESTION: ' + questionText,
     800
   );
-  saveAIOutput('QuestionAnswerer', candidateId, jobId, { q: questionText, a: answer });
+  saveAIOutput_('QuestionAnswerer', candidateId, jobId, { q: questionText, a: answer });
   return answer.trim();
 }
 

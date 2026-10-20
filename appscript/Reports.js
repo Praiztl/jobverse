@@ -10,7 +10,7 @@ function runMonthlyReport() { buildReport_('Monthly', 30); }
 
 function buildReport_(period, days) {
   var since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-  var apps = readRows('Applications');
+  var apps = readRows_('Applications');
   var inWindow = apps.filter(function (a) { return new Date(a.CreatedAt) >= since; });
 
   var submitted = inWindow.filter(function (a) { return a.Status === 'Submitted'; });
@@ -26,7 +26,7 @@ function buildReport_(period, days) {
   var perCandidate = {};
   inWindow.forEach(function (a) { perCandidate[a.CandidateID] = (perCandidate[a.CandidateID] || 0) + 1; });
 
-  var reviews = readRows('ReviewQueue').filter(function (t) {
+  var reviews = readRows_('ReviewQueue').filter(function (t) {
     return t.DecidedAt && new Date(t.CreatedAt) >= since;
   });
   var avgReviewMins = reviews.length
@@ -35,7 +35,7 @@ function buildReport_(period, days) {
       }, 0) / reviews.length)
     : 0;
 
-  var prospects = readRows('Prospects').filter(function (p) { return new Date(p.FoundAt) >= since; });
+  var prospects = readRows_('Prospects').filter(function (p) { return new Date(p.FoundAt) >= since; });
   var prospectsApplied = prospects.filter(function (p) { return p.Status === 'Applied'; });
 
   var metrics = {
@@ -58,12 +58,12 @@ function buildReport_(period, days) {
     ' started, ' + failed.length + ' failed, ' + interviews.length + ' interviews, avg review ' +
     avgReviewMins + ' min.';
 
-  appendObject('Reports', {
+  appendObject_('Reports', {
     GeneratedAt: new Date(), Period: period,
     MetricsJSON: JSON.stringify(metrics), Summary: summary
   });
 
-  var emails = getConfig('REPORT_EMAILS');
+  var emails = getConfig_('REPORT_EMAILS');
   if (emails) {
     var body = summary + '\n\n' + JSON.stringify(metrics, null, 2) +
       '\n\nFull data: ' + SpreadsheetApp.getActiveSpreadsheet().getUrl();
@@ -71,6 +71,6 @@ function buildReport_(period, days) {
       if (to.trim()) try { MailApp.sendEmail(to.trim(), '[Jobverse] ' + period + ' report', body); } catch (ignored) {}
     });
   }
-  logActivity('system', 'report_generated', 'report', period, summary);
+  logActivity_('system', 'report_generated', 'report', period, summary);
   return metrics;
 }

@@ -56,10 +56,10 @@ function onFormSubmit(e) {
     });
     var loginEmail = e.response.getRespondentEmail() || '';
     var parsedCreds = parseEmailAndPassword_(answers.EmailAndPassword || '');
-    var candidateId = newId('CAND');
+    var candidateId = newId_('CAND');
 
     // File the uploads into /Jobverse Platform/Candidates/<Name CAND-id>/
-    var root = DriveApp.getFolderById(getConfig('ROOT_FOLDER_ID'));
+    var root = DriveApp.getFolderById(getConfig_('ROOT_FOLDER_ID'));
     var candidatesFolder = root.getFoldersByName('Candidates').next();
     var folder = candidatesFolder.createFolder(((answers.FullName || 'Unnamed') + ' ' + candidateId).trim());
 
@@ -74,12 +74,12 @@ function onFormSubmit(e) {
       return fid;
     });
 
-    appendObject('Candidates', {
+    appendObject_('Candidates', {
       CandidateID: candidateId,
       CreatedAt: new Date(),
       Status: 'New',
       Active: 'TRUE',
-      TargetApplications: getConfig('DEFAULT_TARGET_APPLICATIONS') || '50',
+      TargetApplications: getConfig_('DEFAULT_TARGET_APPLICATIONS') || '50',
       FullName: answers.FullName || '',
       Email: loginEmail,
       ApplicationEmail: answers.ApplicationEmail || parsedCreds.email || '',
@@ -112,24 +112,28 @@ function onFormSubmit(e) {
       DriveFolderID: folder.getId()
     });
 
-    logActivity('form', 'candidate_created', 'candidate', candidateId, answers.FullName || candidateId);
+    logActivity_('form', 'candidate_created', 'candidate', candidateId, answers.FullName || candidateId);
 
     // Kick off the Resume Analyst immediately if a CV was uploaded.
-    if (cvId) runResumeAnalyst(candidateId);
+    if (cvId) runResumeAnalyst_(candidateId);
   } catch (err) {
-    logActivity('form', 'intake_error', 'form', '-', String(err && err.stack || err));
+    logActivity_('form', 'intake_error', 'form', '-', String(err && err.stack || err));
   }
 }
 
+/**
+ * The field whose longest matching alias is the longest overall, so the most
+ * specific wording wins: "do you require visa sponsorship?" is RightToWork
+ * ('visa sponsorship'), not VisaStatus ('visa').
+ */
 function matchField_(title) {
-  var keys = Object.keys(FIELD_ALIASES);
-  for (var i = 0; i < keys.length; i++) {
-    var aliases = FIELD_ALIASES[keys[i]];
-    for (var j = 0; j < aliases.length; j++) {
-      if (title.indexOf(aliases[j]) > -1) return keys[i];
-    }
-  }
-  return null;
+  var best = null, bestLen = 0;
+  Object.keys(FIELD_ALIASES).forEach(function (key) {
+    FIELD_ALIASES[key].forEach(function (alias) {
+      if (alias.length > bestLen && title.indexOf(alias) > -1) { best = key; bestLen = alias.length; }
+    });
+  });
+  return best;
 }
 
 /**
@@ -161,7 +165,7 @@ function parseEmailAndPassword_(raw) {
  * Converts via Drive to a temporary Google Doc, reads the body, deletes the temp.
  * PDF conversion uses Drive OCR so scanned CVs also work.
  */
-function extractFileText(fileId) {
+function extractFileText_(fileId) {
   var file = DriveApp.getFileById(fileId);
   var mime = file.getMimeType();
   if (mime === MimeType.PLAIN_TEXT) return file.getBlob().getDataAsString();
@@ -181,5 +185,5 @@ function extractFileText(fileId) {
 
 /** Manual re-run helper: select a CandidateID and rebuild their AI profile. */
 function rebuildProfileForCandidate(candidateId) {
-  runResumeAnalyst(candidateId);
+  runResumeAnalyst_(candidateId);
 }
