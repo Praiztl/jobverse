@@ -92,7 +92,7 @@ var JV = {
     ['ADZUNA_RESULTS_PER_CANDIDATE', '15', 'Max results fetched PER COUNTRY per search run (so 3 countries = up to 3x this many before de-duplication).'],
     ['REED_API_KEY', '', 'Free at reed.co.uk/developers. UK-only source for the Prospect Finder.'],
     ['RAPIDAPI_KEY', '', 'Free/metered at rapidapi.com, subscribe to the JSearch API. Broader global coverage for the Prospect Finder.'],
-    ['PROSPECT_SOURCES', 'adzuna,reed,jsearch', 'Comma separated list of sources to use. A source with no key set is skipped silently.'],
+    ['PROSPECT_SOURCES', 'adzuna,reed,jsearch,nhs,workable,myjobmag', 'Comma separated sources to search: adzuna, reed, jsearch (Google for Jobs - brings in LinkedIn, Indeed, Glassdoor, Civil Service Jobs, Jobberman listings), remotive, nhs (NHS Jobs, incl. Trac-run vacancies), jobbank (Canada Job Bank, Canada-wide), workable, myjobmag (Nigeria). A source with no key set is skipped silently.'],
     ['NHS_TRAC_FOLLOWUP_DEFAULT_DAYS', '14', 'If the vacancy closing date cannot be found on the NHS Jobs page, the Trac follow-up is scheduled this many days out instead.'],
     ['FOLLOWUP_DAYS_AFTER_SUBMIT', '7', 'Every submitted application gets a follow-up (chase the employer) due this many days after submission.']
   ],

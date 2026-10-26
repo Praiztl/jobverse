@@ -666,7 +666,7 @@ const HELP_HTML = `
 <div class="card">
 <h2>FAQ</h2>
 <details class="faq"><summary>A candidate's prospects came back empty. Why?</summary>
-<p>Most likely their location isn't covered by the job sources. Adzuna covers UK, Ireland, Germany, Netherlands, US, Canada and more, but not Nigeria. For Nigerian roles, coverage is thin - manual sourcing into the Prospects tab is the fallback for now.</p></details>
+<p>Most likely their role or location isn't covered by the job sources switched on in Config <b>PROSPECT_SOURCES</b>. Jobs come from Adzuna and Reed (UK and Europe), NHS Jobs (including vacancies applied for through Trac), Workable, Canada Job Bank (Canada-wide), MyJobMag (Nigeria), Remotive (remote) and JSearch, which reads Google for Jobs and so brings in listings from LinkedIn, Indeed, Glassdoor, Civil Service Jobs, Jobberman and others - the <b>Source</b> column shows which site each job came from. The search uses the first of the candidate's preferred roles, in each of their preferred locations. Anything else can be added by hand in the Prospects tab.</p></details>
 <details class="faq"><summary>Something says "Found - Manual Review" instead of Found.</summary>
 <p>The job's link isn't a known application system (Greenhouse, Workday...). It can still be queued, singly or with the <b>5 / 10 / 20 / All</b> buttons: the extension finds its own way from the job page to the form. The worker only fills forms it can reach without an account, so these are best run through the extension.</p></details>
 <details class="faq"><summary>An application failed. Can I retry?</summary>

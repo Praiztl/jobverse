@@ -1,21 +1,42 @@
 /**
  * JOBVERSE MVP - Prospects.gs
  * Finds job openings for a candidate using legitimate third-party job search
- * APIs (never scraping LinkedIn/Indeed directly, which both actively fight
- * scraping and would put the client's accounts at risk). Three sources are
- * supported, each optional and independently configured in Config:
+ * APIs and public feeds (never scraping LinkedIn/Indeed/Glassdoor directly,
+ * which forbid it, actively fight it and would put the client's accounts at
+ * risk). Each source is optional; PROSPECT_SOURCES in Config lists the ones
+ * to use, by the key in brackets:
  *
- *   - Adzuna (developer.adzuna.com)   - free, strong UK/Western Europe coverage
- *   - Reed (reed.co.uk/developers)    - free, UK-only, strong on healthcare/NHS-adjacent roles
- *   - JSearch (via rapidapi.com)      - metered free tier, reads Google for Jobs,
- *                                       much broader geographic reach (covers
- *                                       markets like Nigeria that Adzuna/Reed don't)
+ *   - Adzuna [adzuna]      - developer.adzuna.com key, strong UK/Western Europe coverage
+ *   - Reed [reed]          - reed.co.uk/developers key, UK-only
+ *   - JSearch [jsearch]    - rapidapi.com key. Reads Google for Jobs, so it brings
+ *                            in jobs listed on LinkedIn, Indeed, Glassdoor, Civil
+ *                            Service Jobs, Jobberman... - the Source column names
+ *                            the site each one came from ("JSearch→LinkedIn")
+ *   - Remotive [remotive]  - no key, remote jobs
+ *   - NHS Jobs [nhs]       - no key, the official NHS Jobs search feed. Covers the
+ *                            NHS vacancies that are applied for through Trac
+ *   - Canada Job Bank [jobbank] - no key, the Government of Canada's search feed
+ *   - Workable [workable]  - no key, jobs.workable.com search across employers
+ *   - MyJobMag [myjobmag]  - no key, Nigeria; the latest-jobs feed filtered by role
  *
- * PROSPECT_SOURCES in Config (default "adzuna,reed,jsearch") controls which
- * are attempted. Any source with no key configured is skipped silently -
- * this is deliberate so the daily trigger never errors just because one
- * source isn't set up yet.
+ * Any source with no key configured is skipped silently - this is deliberate
+ * so the daily trigger never errors just because one source isn't set up yet.
  */
+
+/** Sources searched once per preferred location: key -> [label, fn(what, where, n)]. */
+var PROSPECT_SOURCES_ = {
+  adzuna: ['Adzuna', function (w, l, n) { return sourceAdzuna_(w, l, n); }],
+  reed: ['Reed', function (w, l, n) { return sourceReed_(w, l, n); }],
+  jsearch: ['JSearch', function (w, l, n) { return sourceJSearch_(w, l, n); }],
+  nhs: ['NHS Jobs', function (w, l, n) { return sourceNHSJobs_(w, l, n); }],
+  workable: ['Workable', function (w, l, n) { return sourceWorkable_(w, l, n); }]
+};
+/** Sources with no location search - asked once per run. */
+var PROSPECT_SOURCES_ONCE_ = {
+  jobbank: ['Canada Job Bank', function (w, l, n) { return sourceJobBank_(w, l, n); }],
+  remotive: ['Remotive', function (w, l, n) { return sourceRemotive_(w, l, n); }],
+  myjobmag: ['MyJobMag', function (w, l, n) { return sourceMyJobMag_(w, l, n); }]
+};
 
 function findProspectsForCandidate_(candidateId) {
   var cand = findRow_('Candidates', 'CandidateID', candidateId);
@@ -24,7 +45,7 @@ function findProspectsForCandidate_(candidateId) {
   var what = (cand.PreferredRoles || '').split(',')[0].trim() || 'software engineer';
   var resultsWanted = parseInt(getConfig_('ADZUNA_RESULTS_PER_CANDIDATE') || '15', 10);
 
-  var enabledSources = (getConfig_('PROSPECT_SOURCES') || 'adzuna,reed,jsearch')
+  var enabledSources = (getConfig_('PROSPECT_SOURCES') || 'adzuna,reed,jsearch,nhs,workable,myjobmag')
     .split(',').map(function (s) { return s.trim().toLowerCase(); });
 
   // CHANGED: search every preferred location the candidate listed, not just the first.
@@ -36,23 +57,14 @@ function findProspectsForCandidate_(candidateId) {
   var allResults = [];
   var sourceErrors = [];
 
-  locations.forEach(function (where) {
-    if (enabledSources.indexOf('adzuna') > -1) {
-      try { allResults = allResults.concat(sourceAdzuna_(what, where, resultsWanted)); }
-      catch (e) { sourceErrors.push('Adzuna (' + where + '): ' + e.message); }
-    }
-    if (enabledSources.indexOf('reed') > -1) {
-      try { allResults = allResults.concat(sourceReed_(what, where, resultsWanted)); }
-      catch (e) { sourceErrors.push('Reed (' + where + '): ' + e.message); }
-    }
-    if (enabledSources.indexOf('jsearch') > -1) {
-      try { allResults = allResults.concat(sourceJSearch_(what, where, resultsWanted)); }
-      catch (e) { sourceErrors.push('JSearch (' + where + '): ' + e.message); }
-    }
-    if (enabledSources.indexOf('remotive') > -1) {
-    try { allResults = allResults.concat(sourceRemotive_(what, where, resultsWanted)); }
-    catch (e) { sourceErrors.push('Remotive: ' + e.message); }
-  }
+  var run = function (src, where) {
+    try { allResults = allResults.concat(src[1](what, where, resultsWanted)); }
+    catch (e) { sourceErrors.push(src[0] + (where ? ' (' + where + ')' : '') + ': ' + e.message); }
+  };
+  enabledSources.forEach(function (key) {
+    if (PROSPECT_SOURCES_[key]) locations.forEach(function (where) { run(PROSPECT_SOURCES_[key], where); });
+    else if (PROSPECT_SOURCES_ONCE_[key]) run(PROSPECT_SOURCES_ONCE_[key], '');
+    else if (key) sourceErrors.push('Unknown source "' + key + '" in PROSPECT_SOURCES');
   });
 
   // --- unchanged from the original file below this line ---
@@ -207,10 +219,84 @@ function sourceJSearch_(what, where, resultsWanted) {
   var data = JSON.parse(res.getContentText());
   return ((data.data || []).slice(0, resultsWanted)).map(function (job) {
     return {
-      source: 'JSearch', company: job.employer_name || '',
+      // job_publisher is the site Google found the listing on: LinkedIn, Indeed, Glassdoor, Jobberman...
+      source: 'JSearch' + (job.job_publisher ? '→' + job.job_publisher : ''), company: job.employer_name || '',
       title: job.job_title || '', url: job.job_apply_link || job.job_google_link || ''
     };
   });
+}
+
+/** Child element text of an XmlService element ('' when missing). */
+function xmlText_(el, name, ns) {
+  var c = ns ? el.getChild(name, ns) : el.getChild(name);
+  return c ? c.getText().trim() : '';
+}
+
+function fetchFeed_(url) {
+  var res = UrlFetchApp.fetch(url, { muteHttpExceptions: true, headers: { Accept: 'application/xml, application/json' } });
+  if (res.getResponseCode() !== 200) throw new Error('HTTP ' + res.getResponseCode());
+  return res;
+}
+
+/** NHS Jobs' official search feed (10 per page). Many trusts' adverts here are applied for through Trac. */
+function sourceNHSJobs_(what, where, resultsWanted) {
+  var out = [];
+  for (var page = 1; page <= 3 && out.length < resultsWanted; page++) {
+    var res = fetchFeed_('https://www.jobs.nhs.uk/api/v1/search_xml?keyword=' + encodeURIComponent(what) +
+      (where ? '&location=' + encodeURIComponent(where) : '') + '&page=' + page);
+    var root = XmlService.parse(res.getContentText()).getRootElement();
+    var items = root.getChildren('vacancyDetails');
+    items.forEach(function (v) {
+      out.push({ source: 'NHS Jobs', company: xmlText_(v, 'employer'), title: xmlText_(v, 'title'),
+                 url: xmlText_(v, 'url').replace('://beta.jobs.nhs.uk/', '://www.jobs.nhs.uk/') });
+    });
+    if (items.length < 10 || page >= parseInt(xmlText_(root, 'totalPages') || '1', 10)) break;
+  }
+  return out.slice(0, resultsWanted);
+}
+
+/**
+ * Government of Canada Job Bank search feed (Atom), newest first. Canada-wide:
+ * the feed ignores any location, so it's only useful for candidates who can work anywhere in Canada.
+ */
+function sourceJobBank_(what, where, resultsWanted) {
+  var res = fetchFeed_('https://www.jobbank.gc.ca/jobsearch/feed/jobSearchRSSfeed?searchstring=' + encodeURIComponent(what));
+  var atom = XmlService.getNamespace('http://www.w3.org/2005/Atom');
+  return XmlService.parse(res.getContentText()).getRootElement().getChildren('entry', atom)
+    .slice(0, resultsWanted).map(function (e) {
+      var link = e.getChild('link', atom);
+      var employer = (xmlText_(e, 'summary', atom).match(/Employer:<\/strong>\s*([^<]+)/) || [])[1] || '';
+      return { source: 'Canada Job Bank', company: employer.trim(), title: xmlText_(e, 'title', atom),
+               url: link ? link.getAttribute('href').getValue() : '' };
+    });
+}
+
+/** jobs.workable.com - one search across every employer hiring through Workable. */
+function sourceWorkable_(what, where, resultsWanted) {
+  var res = fetchFeed_('https://jobs.workable.com/api/v1/jobs?query=' + encodeURIComponent(what) +
+    (where ? '&location=' + encodeURIComponent(where) : ''));
+  return (JSON.parse(res.getContentText()).jobs || []).slice(0, resultsWanted).map(function (j) {
+    return { source: 'Workable', company: (j.company && j.company.title) || '', title: j.title || '', url: j.url || '' };
+  });
+}
+
+/**
+ * MyJobMag (Nigeria) publishes its latest ~100 jobs as one feed with no
+ * search, so keep the ones whose title has every word of the role.
+ * Titles read "Role at Company".
+ */
+function sourceMyJobMag_(what, where, resultsWanted) {
+  var res = fetchFeed_('https://www.myjobmag.com/jobsxml.xml');
+  var words = String(what).toLowerCase().split(/[^a-z0-9]+/).filter(function (w) { return w.length > 2; });
+  var channel = XmlService.parse(res.getContentText('ISO-8859-1')).getRootElement().getChild('channel');
+  return channel.getChildren('item').map(function (it) {
+    var full = xmlText_(it, 'title'), at = full.lastIndexOf(' at ');
+    return { source: 'MyJobMag', title: at > 0 ? full.slice(0, at) : full,
+             company: at > 0 ? full.slice(at + 4) : '', url: xmlText_(it, 'link') };
+  }).filter(function (j) {
+    var t = j.title.toLowerCase();
+    return words.length && words.every(function (w) { return t.indexOf(w) > -1; });
+  }).slice(0, resultsWanted);
 }
 
 /* =====================================================================
