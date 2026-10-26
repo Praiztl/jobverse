@@ -286,9 +286,9 @@ function render(){
         <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           <button class="btn primary" onclick="findJobs()">Find jobs</button>
           <span class="mut" style="margin-left:6px">Queue newest found:</span>
-          ${[5, 10, 20].map(n => `<button class="btn approve" onclick="queueAll(${n})">${n}</button>`).join('')}
-          <button class="btn approve" onclick="queueAll(0)">All</button>
-          <span class="mut">${(() => { const n = D.prospects.filter(p => p.cand === F.pCand && p.status === 'Found').length; return n + ' found ready to queue'; })()}</span>
+          ${[5, 10, 20].map(n => `<button class="btn approve qbtn" onclick="queueAll(${n})">${n}</button>`).join('')}
+          <button class="btn approve qbtn" onclick="queueAll(0)">All</button>
+          <span class="mut">${(() => { const n = D.prospects.filter(p => p.cand === F.pCand && FOUND_STATUSES.includes(p.status)).length; return n + ' found ready to queue'; })()}</span>
           <span class="mut" id="pMsg"></span>
         </div>
       </div>
@@ -509,6 +509,9 @@ function findJobs(){
     .dashFindProspects(DASH_KEY, candId);
 }
  
+// Prospects the bulk Queue buttons take: any job found and not yet acted on
+const FOUND_STATUSES = ['Found', 'Found - Manual Review'];
+
 /** Queue the `limit` most recently found prospects for the selected candidate (0 = all of them). */
 function queueAll(limit){
   const cand = F.pCand || loadFindJobsCandidate() || document.getElementById('pCand').value;
@@ -516,26 +519,26 @@ function queueAll(limit){
   saveFindJobsCandidate(cand);
 
   const mine = D.prospects.filter(p => p.cand === cand);
-  const foundCount = mine.filter(p => p.status === 'Found').length;
-  const manualCount = mine.filter(p => p.status === 'Found - Manual Review').length;
+  const foundCount = mine.filter(p => FOUND_STATUSES.includes(p.status)).length;
   if(!mine.length) { toast('No prospects for this candidate yet. Try "Find jobs" first.'); return; }
-  if(!foundCount) {
-    toast(manualCount ? `Nothing to queue - all ${manualCount} need manual review (no supported ATS link)` : 'No "Found" prospects to queue.');
-    return;
-  }
+  if(!foundCount) { toast('No found prospects left to queue for this candidate.'); return; }
 
   const n = limit > 0 ? Math.min(limit, foundCount) : foundCount;
   document.getElementById('pMsg').textContent = `Queuing ${n} of ${foundCount}…`;
+  document.querySelectorAll('.qbtn').forEach(b => b.disabled = true); // one batch at a time
   google.script.run
     .withSuccessHandler(r => {
       const ids = new Set(r.ids || []);
-      D.prospects.forEach(p => { if(ids.has(p.id)) p.status = 'Queued'; });
+      D.prospects.forEach(p => { if(ids.has(String(p.id))) p.status = 'Queued'; });
+      // Show the queued rows: the table may be filtered to another candidate or to "Found"
+      F.prosCand = cand; if(F.prosStatus && F.prosStatus !== 'Queued') F.prosStatus = '';
       render();
       toast(r.queued
-        ? `Queued ${r.queued}` + (r.remaining ? `, ${r.remaining} still Found` : '') + (r.manualReview ? ` (${r.manualReview} need manual review)` : '')
+        ? `Queued ${r.queued}` + (r.remaining ? `, ${r.remaining} still found` : '') + ' - run the queue from the extension, or let the worker pick them up'
         : 'No prospects to queue.');
+      load(true); // a refresh that started before the queueing would otherwise show them as Found again
     })
-    .withFailureHandler(e => { document.getElementById('pMsg').textContent = ''; toast('Error: ' + e.message); })
+    .withFailureHandler(e => { document.getElementById('pMsg').textContent = ''; render(); toast('Error: ' + e.message); })
     .dashQueueAllFound(DASH_KEY, cand, limit || 0);
 }
  
@@ -665,7 +668,7 @@ const HELP_HTML = `
 <details class="faq"><summary>A candidate's prospects came back empty. Why?</summary>
 <p>Most likely their location isn't covered by the job sources. Adzuna covers UK, Ireland, Germany, Netherlands, US, Canada and more, but not Nigeria. For Nigerian roles, coverage is thin - manual sourcing into the Prospects tab is the fallback for now.</p></details>
 <details class="faq"><summary>Something says "Found - Manual Review" instead of Found.</summary>
-<p>The job's link didn't point at a supported application system. Open it, find the real apply page, and paste that URL into the Prospects tab's JobURL column if you want the extension to handle it.</p></details>
+<p>The job's link isn't a known application system (Greenhouse, Workday...). It can still be queued, singly or with the <b>5 / 10 / 20 / All</b> buttons: the extension finds its own way from the job page to the form. The worker only fills forms it can reach without an account, so these are best run through the extension.</p></details>
 <details class="faq"><summary>An application failed. Can I retry?</summary>
 <p>Yes. In Applications, failed ones have a <b>Retry</b> button that re-queues them as a fresh prospect.</p></details>
 <details class="faq"><summary>How do I remove a candidate completely?</summary>

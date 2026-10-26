@@ -126,18 +126,39 @@ function apiGetCandidatePayload_(req) {
 }
  
 function apiAnalyseJob_(req) {
-  var jobId = runJobAnalyst_(req.candidateId, req.jobUrl, req.jdText, req.ats);
+  var jobId = analysedJobId_(req.candidateId, req.jobUrl) || runJobAnalyst_(req.candidateId, req.jobUrl, req.jdText, req.ats);
   var job = findRow_('Jobs', 'JobID', jobId);
- 
-  var cvId = runResumeBuilder_(req.candidateId, jobId, req.tone);
-  var letterId = runCoverLetterBuilder_(req.candidateId, jobId, req.tone);
-  var cv = findRow_('CVVersions', 'VersionID', cvId);
-  var letter = findRow_('CoverLetters', 'LetterID', letterId);
- 
+  var cv = latestDocForJob_('CVVersions', jobId) ||
+    findRow_('CVVersions', 'VersionID', runResumeBuilder_(req.candidateId, jobId, req.tone));
+  var letter = latestDocForJob_('CoverLetters', jobId) ||
+    findRow_('CoverLetters', 'LetterID', runCoverLetterBuilder_(req.candidateId, jobId, req.tone));
+
   return {
     jobId: jobId, company: job.Company, title: job.JobTitle, suitability: job.SuitabilityScore,
     cvUrl: cv.DocURL, letterUrl: letter.DocURL
   };
+}
+
+/**
+ * The job this candidate already has analysed for this URL, if any. A job run
+ * again - its tab reloaded mid-way, a retry, the worker and the extension on
+ * the same prospect - reuses its analysis and documents instead of writing
+ * (and queueing for review) another CV and cover letter every time.
+ */
+function analysedJobId_(candidateId, jobUrl) {
+  if (!jobUrl) return '';
+  var key = normaliseJobKey_(jobUrl);
+  var jobs = readRows_('Jobs', ['JobID', 'CandidateID', 'JobURL']);
+  for (var i = jobs.length - 1; i >= 0; i--) {
+    if (jobs[i].CandidateID === candidateId && jobs[i].JobURL && normaliseJobKey_(jobs[i].JobURL) === key) return jobs[i].JobID;
+  }
+  return '';
+}
+
+/** Newest CV version / cover letter written for a job, or null. Revisions are newer rows, so they win. */
+function latestDocForJob_(sheetName, jobId) {
+  var rows = readRows_(sheetName, ['JobID', 'DocURL']).filter(function (r) { return r.JobID === jobId && r.DocURL; });
+  return rows.length ? rows[rows.length - 1] : null;
 }
 
 /*
@@ -146,7 +167,7 @@ function apiAnalyseJob_(req) {
  * analyseJob stays for the worker and older extension builds.
  */
 function apiAnalyseJobPosting_(req) {
-  var jobId = runJobAnalyst_(req.candidateId, req.jobUrl, req.jdText, req.ats);
+  var jobId = analysedJobId_(req.candidateId, req.jobUrl) || runJobAnalyst_(req.candidateId, req.jobUrl, req.jdText, req.ats);
   var job = findRow_('Jobs', 'JobID', jobId);
   // Build the candidate profile now, so the parallel CV and letter calls
   // don't both try to create it.
@@ -156,11 +177,15 @@ function apiAnalyseJobPosting_(req) {
 }
 
 function apiBuildTailoredCV_(req) {
+  var existing = latestDocForJob_('CVVersions', req.jobId);
+  if (existing) return { cvUrl: existing.DocURL };
   var cvId = runResumeBuilder_(req.candidateId, req.jobId, req.tone);
   return { cvUrl: findRow_('CVVersions', 'VersionID', cvId).DocURL };
 }
 
 function apiBuildCoverLetter_(req) {
+  var existing = latestDocForJob_('CoverLetters', req.jobId);
+  if (existing) return { letterUrl: existing.DocURL };
   var letterId = runCoverLetterBuilder_(req.candidateId, req.jobId, req.tone);
   return { letterUrl: findRow_('CoverLetters', 'LetterID', letterId).DocURL };
 }
@@ -734,17 +759,21 @@ function extractDocId_(url) {
  * application's JobID so the worker can re-fill the form before submitting.
  */
 function apiListApplicationsByStatus_(req) {
-  var cvByJob = {}, clByJob = {};
+  var cvByJob = {}, clByJob = {}, taskByApp = {};
   readRows_('CVVersions', ['JobID', 'DocURL']).forEach(function (v) { cvByJob[v.JobID] = v.DocURL; });
   readRows_('CoverLetters', ['JobID', 'DocURL']).forEach(function (l) { clByJob[l.JobID] = l.DocURL; });
- 
+  // The approved Submission review, so the extension can submit an approved application whose tab is gone
+  readRows_('ReviewQueue', ['TaskID', 'Type', 'RefID']).forEach(function (t) {
+    if (t.Type === 'Submission') taskByApp[t.RefID] = t.TaskID;
+  });
+
   return readRows_('Applications', ['ApplicationID', 'CandidateID', 'JobID', 'Company', 'JobTitle', 'JobURL', 'ATS', 'Status'])
     .filter(function (a) { return a.Status === req.status && (!req.candidateId || a.CandidateID === req.candidateId); })
     .map(function (a) {
       return {
         id: a.ApplicationID, candidateId: a.CandidateID, jobId: a.JobID, company: a.Company,
         title: a.JobTitle, url: a.JobURL, ats: a.ATS, status: a.Status,
-        cvUrl: cvByJob[a.JobID] || '', letterUrl: clByJob[a.JobID] || ''
+        cvUrl: cvByJob[a.JobID] || '', letterUrl: clByJob[a.JobID] || '', taskId: taskByApp[a.ApplicationID] || ''
       };
     });
 }
@@ -802,8 +831,31 @@ function dashData(key) {
  * with dashReviewFindings when a reviewer opens it.
  */
 function awaitingReviews_() {
-  return readRows_('ReviewQueue', ['TaskID', 'Type', 'CandidateID', 'Summary', 'AIScore', 'Status', 'CreatedAt'])
-    .filter(function (t) { return t.Status === 'Awaiting Human'; })
+  var waiting = readRows_('ReviewQueue', ['TaskID', 'Type', 'CandidateID', 'Summary', 'AIScore', 'Status', 'CreatedAt'])
+    .filter(function (t) { return t.Status === 'Awaiting Human'; });
+
+  // One card per document per job: when the same job's CV / cover letter / NHS
+  // statement was written more than once (re-runs, retries, a duplicate prospect),
+  // only the newest waits for a human and the older ones are marked Superseded.
+  // Submissions are never merged - each is a separate application.
+  var newest = {}, superseded = [];
+  waiting.forEach(function (t) {
+    if (!REVISABLE_DOCS_[t.Type]) return;
+    var key = t.Type + '|' + t.CandidateID + '|' + String(t.Summary).toLowerCase().trim();
+    var prev = newest[key];
+    if (!prev) { newest[key] = t; return; }
+    var tIsNewer = ((toEpochMs_(t.CreatedAt) - toEpochMs_(prev.CreatedAt)) || (t._row - prev._row)) > 0;
+    superseded.push(tIsNewer ? prev : t);
+    if (tIsNewer) newest[key] = t;
+  });
+  if (superseded.length) {
+    setColumnForRows_('ReviewQueue', 'Status', superseded.map(function (t) { return t._row; }), 'Superseded');
+    logActivity_('system', 'reviews_superseded', 'review', '-',
+      superseded.length + ' older duplicate review(s) superseded: ' + superseded.map(function (t) { return t.TaskID; }).join(', ').slice(0, 400));
+  }
+
+  return waiting
+    .filter(function (t) { return superseded.indexOf(t) === -1; })
     .map(function (t) {
       return { id: t.TaskID, type: t.Type, cand: t.CandidateID, summary: t.Summary,
                score: t.AIScore, created: String(t.CreatedAt), createdMs: toEpochMs_(t.CreatedAt) };
@@ -990,29 +1042,36 @@ function dashClearActivityLog(key) {
 }
  
 /**
- * Queue a candidate's 'Found' prospects in one action: all of them, or only
- * the `limit` most recently found. Also reports how many need manual review
- * and how many Found ones are left, and returns the queued IDs so the
- * dashboard can update exactly those rows.
+ * Queue a candidate's found prospects in one action: all of them, or only the
+ * `limit` most recently found. 'Found - Manual Review' ones count too - the
+ * extension's driver finds its own way from any job page to the form, so a
+ * link that isn't a known ATS is no reason to leave a job out (the single-row
+ * Queue button never did). Returns the queued IDs so the dashboard can update
+ * exactly those rows, and how many found ones are left.
  */
 function dashQueueAllFound(key, candidateId, limit) {
   requireDashAccess_(key);
-  var rows = readRows_('Prospects', ['ProspectID', 'CandidateID', 'Status', 'FoundAt']).filter(function (p) {
-    return p.CandidateID === candidateId;
-  });
-  var found = rows.filter(function (p) { return p.Status === 'Found'; });
-  var manualReview = rows.filter(function (p) { return p.Status === 'Found - Manual Review'; }).length;
-  found.sort(function (a, b) { return (toEpochMs_(b.FoundAt) - toEpochMs_(a.FoundAt)) || (b._row - a._row); });
-  var n = parseInt(limit, 10);
-  var pick = n > 0 ? found.slice(0, n) : found;
+  var lock = LockService.getScriptLock(); // a double click must not queue the next batch as well
+  lock.waitLock(20000);
+  try {
+    var found = readRows_('Prospects', ['ProspectID', 'CandidateID', 'Status', 'FoundAt']).filter(function (p) {
+      return p.CandidateID === candidateId && (p.Status === 'Found' || p.Status === 'Found - Manual Review');
+    });
+    found.sort(function (a, b) { return (toEpochMs_(b.FoundAt) - toEpochMs_(a.FoundAt)) || (b._row - a._row); });
+    var n = parseInt(limit, 10);
+    var pick = n > 0 ? found.slice(0, n) : found;
 
-  setColumnForRows_('Prospects', 'Status', pick.map(function (p) { return p._row; }), 'Queued');
-  logActivity_(Session.getActiveUser().getEmail() || 'reviewer', 'prospects_bulk_queued', 'candidate', candidateId,
-    pick.length + ' queued' + (n > 0 ? ' (next ' + n + ')' : '') + ', ' + manualReview + ' left for manual review');
-  return {
-    queued: pick.length, manualReview: manualReview, remaining: found.length - pick.length,
-    ids: pick.map(function (p) { return String(p.ProspectID); })
-  };
+    setColumnForRows_('Prospects', 'Status', pick.map(function (p) { return p._row; }), 'Queued');
+    SpreadsheetApp.flush();
+    logActivity_(Session.getActiveUser().getEmail() || 'reviewer', 'prospects_bulk_queued', 'candidate', candidateId,
+      pick.length + ' queued' + (n > 0 ? ' (newest ' + n + ')' : '') + ', ' + (found.length - pick.length) + ' still found');
+    return {
+      queued: pick.length, remaining: found.length - pick.length,
+      ids: pick.map(function (p) { return String(p.ProspectID); })
+    };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function dashRetryApplication(key, applicationId) {

@@ -57,14 +57,21 @@ function findProspectsForCandidate_(candidateId) {
 
   // --- unchanged from the original file below this line ---
 
-  var existingUrls = readRows_('Prospects')
-    .filter(function (p) { return p.CandidateID === candidateId; })
-    .map(function (p) { return p.JobURL; });
-  var appliedUrls = readRows_('Applications')
-    .filter(function (a) { return a.CandidateID === candidateId; })
-    .map(function (a) { return a.JobURL; });
+  // A job counts as seen by its link OR by company + title: the same vacancy comes back from
+  // several sources (Adzuna, Reed, JSearch...) and several searched locations under different URLs
   var seen = {};
-  existingUrls.concat(appliedUrls).forEach(function (u) { seen[u] = true; });
+  var markSeen = function (url, company, title) {
+    if (url) seen['url|' + normaliseJobKey_(url)] = true;
+    var k = prospectJobKey_(company, title);
+    if (k) seen['job|' + k] = true;
+  };
+  var isSeen = function (url, company, title) {
+    var k = prospectJobKey_(company, title);
+    return (url && seen['url|' + normaliseJobKey_(url)]) || (k && seen['job|' + k]);
+  };
+  readRows_('Prospects', ['CandidateID', 'JobURL', 'Company', 'JobTitle'])
+    .concat(readRows_('Applications', ['CandidateID', 'JobURL', 'Company', 'JobTitle']))
+    .forEach(function (r) { if (r.CandidateID === candidateId) markSeen(r.JobURL, r.Company, r.JobTitle); });
 
   var added = 0;
   var companyCache = {}; // reused across resolver calls this run
@@ -75,8 +82,8 @@ function findProspectsForCandidate_(candidateId) {
       var resolved = resolveToATS_(job.company, job.title, companyCache);
       if (resolved) { job.url = resolved.url; job.source = 'Adzuna→' + resolved.ats; }
     }
-    if (!job.url || seen[job.url]) return;
-    seen[job.url] = true;
+    if (!job.url || isSeen(job.url, job.company, job.title)) return;
+    markSeen(job.url, job.company, job.title);
 
     var supportedATS = detectATSFromUrl_(job.url);
     appendObject_('Prospects', {
@@ -360,6 +367,21 @@ function sourceRemotive_(what, where, resultsWanted) {
       };
     });
   } catch (e) { return []; }
+}
+
+/**
+ * Company + title as one comparable key ("Acme Ltd" / "Data Analyst (Remote)"
+ * and "ACME" / "Data Analyst - remote" match), or '' when either is missing -
+ * a job with no company name can only be matched by its link.
+ */
+function prospectJobKey_(company, title) {
+  var c = String(company || '').toLowerCase().replace(/&/g, 'and')
+    .replace(/\b(ltd|limited|inc|llc|plc|gmbh|corp|corporation|co|company|group|holdings|uk)\b/g, '')
+    .replace(/[^a-z0-9]+/g, '');
+  var t = String(title || '').toLowerCase()
+    .replace(/\((remote|hybrid|on-?site|contract|permanent|full[ -]?time|part[ -]?time)\)|[-–|,]\s*(remote|hybrid|on-?site)\s*$/g, '')
+    .replace(/[^a-z0-9]+/g, ' ').trim();
+  return c && t ? c + '|' + t : '';
 }
 
 function detectATSFromUrl_(url) {

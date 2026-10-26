@@ -100,30 +100,52 @@ function runResumeBuilder_(candidateId, jobId, toneName, revision) {
   if (!cand || !job) throw new Error('Candidate or job not found.');
   cand = ensureProfile_(cand);
 
+  // The original CV carries what the profile summarises away (languages, CPD, exact
+  // dates, course content) - the template has a place for each of them
+  var cvText = '';
+  try { if (cand.CVFileID) cvText = extractFileText_(cand.CVFileID).slice(0, 20000); }
+  catch (e) { logActivity_('system', 'cv_text_unavailable', 'candidate', candidateId, e.message); }
+
   var tone = getTone_(toneName);
   var cv = callClaudeJSON_(
     'You are an expert UK CV writer. Build a tailored CV strictly from the candidate ' +
-    'profile. Never invent employers, dates, qualifications, or achievements. Weave in ' +
-    'the ATS keywords only where the profile genuinely supports them. Style: ' + tone,
+    'profile and original CV. Never invent employers, dates, qualifications, languages or ' +
+    'achievements. Weave in the ATS keywords only where the candidate genuinely supports them. Style: ' + tone,
     'CANDIDATE PROFILE:\n' + cand.AIProfileJSON +
+    (cvText ? '\n\nCANDIDATE\'S ORIGINAL CV (source of facts only - not a style guide):\n' + cvText : '') +
     '\n\nCONTACT: ' + [cvText_(cand.FullName)].concat(cvContact_(cand).map(function (c) { return c.text; })).join(', ') +
     '\n\nTARGET JOB ANALYSIS:\n' + job.AnalysisJSON +
-    '\n\nWriting rules: headline is the target role title plus one specialism, under 10 words. ' +
-    'profile_summary is 3-4 sentences, no first person pronouns. skills is 8-14 short ' +
-    'items (1-3 words each), most relevant to the job first. Experience is reverse ' +
-    'chronological; each role has 3-6 bullets that start with a strong past-tense verb ' +
-    '(present tense for a current role), lead with impact, and keep any numbers from the ' +
-    'profile. Format dates as "Mon YYYY - Mon YYYY" or "Mon YYYY - Present" where the ' +
-    'profile allows, otherwise copy them as given. Leave location empty if unknown. ' +
+    '\n\nWriting rules (the agency\'s CV format):\n' +
+    '- headline: the target role title only, e.g. "Physiotherapist" - no specialism, under 6 words.\n' +
+    '- profile_summary: one paragraph of 5-7 sentences: registration/qualification and core experience ' +
+    'first, then the hands-on skills, then how they work with patients/clients and colleagues, ending on ' +
+    'professional standards and development. Mostly without pronouns; "I" is allowed once or twice.\n' +
+    '- skills: 12-16 skill phrases (2-6 words each, e.g. "Manual Therapy Techniques"), Title Case, most ' +
+    'relevant to the job first.\n' +
+    '- experience: reverse chronological. Each role has 4-8 bullets (the most recent and relevant roles ' +
+    'the most), each one full sentence of 1-2 lines written in the first person: "I" plus a past-tense ' +
+    'verb (present tense for a current role), saying what was done, with whom and to what end. Keep any ' +
+    'numbers. location is "City, Country" or "Country" when known.\n' +
+    '- dates everywhere: "MM/YYYY - MM/YYYY" or "MM/YYYY - Present"; copy them as given if the month is unknown.\n' +
+    '- education: institution, the full qualification name (e.g. "Master of Science (MSc) Sports Medicine"), ' +
+    'dates, location, and relevant_study: a comma-separated list of the most job-relevant modules or topics ' +
+    '(empty if unknown).\n' +
+    '- cpd: continuing professional development - courses, shadowing, training, conferences - as first-person ' +
+    'sentences ("I learned...", "I observed..."); empty if there is none.\n' +
+    '- certifications: registrations, licences and certificates with the date awarded (DD/MM/YYYY or MM/YYYY), ' +
+    'e.g. {"name": "HCPC: Registered Physiotherapist", "date": "01/05/2026"}.\n' +
+    '- languages: every language the candidate states, with level as given (Native, Fluent, C1, B2...).\n' +
     'Any field you have no real value for must be an empty string (or empty array) - never write ' +
     'null, N/A, Any, Unknown, Not specified or similar placeholders.' +
     revisionBrief_(revision) +
     '\n\nReturn JSON: {"headline": string, "profile_summary": string, ' +
     '"skills": [string], "experience": [{"employer": string, "title": string, ' +
     '"location": string, "dates": string, "bullets": [string]}], ' +
-    '"education": [{"qualification": string, "institution": string, "year": string, ' +
-    '"line": string}], "certifications": [string]}',
-    4000
+    '"education": [{"institution": string, "qualification": string, "dates": string, ' +
+    '"location": string, "relevant_study": string}], "cpd": [string], ' +
+    '"certifications": [{"name": string, "date": string}], ' +
+    '"languages": [{"language": string, "level": string}]}',
+    5000
   );
   cv = cvCleanResult_(cv);
 
@@ -149,13 +171,15 @@ function runResumeBuilder_(candidateId, jobId, toneName, revision) {
 /**
  * Renders a tailored CV into a new Google Doc using the template named in
  * Config CV_TEMPLATE:
- *   'Modern' (default) - A4, accent header band, right-aligned dates, skills
- *     grid and accent section rules. Uses borderless tables for alignment;
- *     these export to PDF/DOCX as plain left-to-right text, which mainstream
+ *   'Classic' (default, also used for any other value) - the agency's CV
+ *     format: black serif type on A4, centred name / role / contact header,
+ *     ruled uppercase section headings, skills joined by "||", employer and
+ *     dates on one line, dash bullets, then education, CPD, certifications,
+ *     languages and references. Borderless tables right-align the dates;
+ *     they export to PDF/DOCX as plain left-to-right text, which mainstream
  *     ATS parsers read correctly.
  *   'ATS Simple' - pure single-column paragraphs with no tables, for portals
- *     known to choke on anything but flat text.
- * Font and accent colour come from CV_FONT and CV_ACCENT_COLOR.
+ *     known to choke on anything but flat text. Uses CV_FONT and CV_ACCENT_COLOR.
  */
 function renderCVDoc_(cand, job, cv, versionId) {
   var doc = DocumentApp.create(cand.FullName + ' CV - ' + job.Company + ' - ' + versionId);
@@ -163,7 +187,7 @@ function renderCVDoc_(cand, job, cv, versionId) {
   var t = cvTheme_();
 
   if (t.template === 'ats simple') cvRenderSimple_(body, cand, cv, t);
-  else cvRenderModern_(body, cand, cv, t);
+  else cvRenderClassic_(body, cand, cv, cvClassicTheme_());
   cvTidy_(body);
 
   doc.saveAndClose();
@@ -173,94 +197,121 @@ function renderCVDoc_(cand, job, cv, versionId) {
   return doc;
 }
 
-/* --------------------------- Modern template ---------------------------- */
+/* --------------------------- Classic template --------------------------- */
 
-function cvRenderModern_(body, cand, cv, t) {
+/** The agency format is black serif on white, whatever CV_FONT / CV_ACCENT_COLOR say (those style ATS Simple). */
+function cvClassicTheme_() {
+  return { font: 'Source Serif Pro', accent: '#000000', ink: '#000000', body: '#000000', muted: '#000000' };
+}
+
+function cvRenderClassic_(body, cand, cv, t) {
   var H = DocumentApp.ParagraphHeading;
-  var RIGHT = DocumentApp.HorizontalAlignment.RIGHT;
+  var CENTER = DocumentApp.HorizontalAlignment.CENTER;
   body.setPageWidth(595.28).setPageHeight(841.89); // A4
-  body.setMarginTop(34).setMarginBottom(34).setMarginLeft(40).setMarginRight(40);
-  var W = 595.28 - 80;
+  body.setMarginTop(46).setMarginBottom(46).setMarginLeft(51).setMarginRight(51);
+  var W = 595.28 - 102;
 
-  // Header band: name, headline and contact details on the accent colour
-  var head = cvTable_(body, 1, [W]).getCell(0, 0);
-  head.setBackgroundColor(t.accent).setPaddingTop(20).setPaddingBottom(18).setPaddingLeft(22).setPaddingRight(22);
-  cvLine_(head, t, [{ text: cvText_(cand.FullName) }], { heading: H.TITLE, size: 25, bold: true, color: t.onAccent, line: 1 });
-  if (cv.headline) cvLine_(head, t, [{ text: cv.headline }], { size: 12, color: t.onAccentSoft, before: 3, line: 1.1 });
-  var contact = cvContact_(cand, t.onAccent);
-  if (contact.length) {
-    cvLine_(head, t, cvJoin_(contact, t.onAccentSoft), { size: 9.5, color: t.onAccent, before: 10, line: 1.2 });
-  }
+  // Header: name, the role title in italics, then contact details on one centred line
+  cvLine_(body, t, [{ text: cvText_(cand.FullName) }], { heading: H.TITLE, size: 21.5, bold: true, align: CENTER, line: 1 });
+  if (cv.headline) cvLine_(body, t, [{ text: cv.headline }], { size: 15.5, italic: true, align: CENTER, before: 2, line: 1 });
+  var contact = cvContact_(cand, t.ink);
+  if (contact.length) cvLine_(body, t, cvJoin_(contact, t.ink, '      '), { size: 10.5, align: CENTER, before: 8, line: 1 });
 
   if (cv.profile_summary) {
-    cvSectionModern_(body, t, 'Profile', W);
-    cvLine_(body, t, [{ text: cv.profile_summary }], { line: 1.3, before: 6 });
+    cvSectionClassic_(body, t, 'Professional Summary');
+    cvLine_(body, t, [{ text: cv.profile_summary }], { line: 1.15 });
   }
 
-  // Skills as a three-column grid with accent markers
-  var skills = (cv.skills || []).filter(Boolean);
-  if (skills.length) {
-    cvSectionModern_(body, t, 'Key Skills', W);
-    var cols = 3, grid = cvTable_(body, Math.ceil(skills.length / cols), [W / cols, W / cols, W / cols]);
-    skills.forEach(function (s, i) {
-      var c = grid.getCell(Math.floor(i / cols), i % cols);
-      c.setPaddingTop(i < cols ? 6 : 1).setPaddingBottom(1).setPaddingRight(6);
-      cvLine_(c, t, [{ text: '■  ', color: t.accent, size: 7 }, { text: s, color: t.ink }], { size: 10 });
-    });
+  if ((cv.skills || []).length) {
+    cvSectionClassic_(body, t, 'Skills');
+    cvLine_(body, t, [{ text: cv.skills.join(' || ') }], { line: 1.6 });
   }
 
-  // Experience: title/employer on the left, dates/location right-aligned
   var roles = cv.experience || [];
   if (roles.length) {
-    cvSectionModern_(body, t, 'Experience', W);
+    cvSectionClassic_(body, t, 'Professional Experience');
     roles.forEach(function (e, i) {
-      var row = cvTable_(body, 1, [W * 0.68, W * 0.32]);
-      var left = row.getCell(0, 0), right = row.getCell(0, 1);
-      left.setPaddingTop(i ? 12 : 7);
-      right.setPaddingTop(i ? 12 : 7);
-      cvLine_(left, t, [{ text: e.title || '' }], { heading: H.HEADING3, size: 11.5, bold: true, color: t.ink, line: 1.1 });
-      if (e.employer) cvLine_(left, t, [{ text: e.employer }], { size: 10.5, bold: true, color: t.accent, before: 1 });
-      if (e.dates) cvLine_(right, t, [{ text: e.dates }], { size: 9.5, bold: true, color: t.muted, align: RIGHT, before: 1.5 });
-      if (e.location) cvLine_(right, t, [{ text: e.location }], { size: 9.5, italic: true, color: t.muted, align: RIGHT, before: 2 });
-
-      (e.bullets || []).forEach(function (b, j) { cvBullet_(body, t, b, j ? 0 : 4); });
+      var when = cvDateRange_(e.dates);
+      var right = [when, e.location].filter(Boolean).join('  |  ');
+      if (e.location) {
+        // Employer and "dates | location" on one line, the job title under it
+        cvRowClassic_(body, t, W, [{ text: e.employer || e.title, bold: true }], right, i ? 10 : 0);
+        if (e.employer && e.title) cvLine_(body, t, [{ text: e.title, italic: true }], { line: 1.1 });
+      } else {
+        cvRowClassic_(body, t, W, e.employer && e.title
+          ? [{ text: e.employer + ', ', bold: true }, { text: e.title, italic: true }]
+          : [{ text: e.employer || e.title, bold: true }], right, i ? 10 : 0);
+      }
+      (e.bullets || []).forEach(function (b) { cvDash_(body, t, b); });
     });
   }
 
-  // Education: one table, qualification + institution left, year right
   var edu = cv.education || [];
   if (edu.length) {
-    cvSectionModern_(body, t, 'Education', W);
-    var et = cvTable_(body, edu.length, [W * 0.78, W * 0.22]);
+    cvSectionClassic_(body, t, 'Education');
     edu.forEach(function (e, i) {
-      var left = et.getCell(i, 0), right = et.getCell(i, 1);
-      left.setPaddingTop(i ? 8 : 6);
-      right.setPaddingTop(i ? 8 : 6);
-      if (e.qualification || e.institution) {
-        cvLine_(left, t, [{ text: e.qualification || e.institution }], { size: 11, bold: true, color: t.ink });
-        if (e.qualification && e.institution) cvLine_(left, t, [{ text: e.institution }], { size: 10, color: t.accent, before: 1 });
-      } else {
-        cvLine_(left, t, [{ text: e.line || '' }], {});
-      }
-      if (e.year) cvLine_(right, t, [{ text: String(e.year) }], { size: 9.5, bold: true, color: t.muted, align: RIGHT, before: 1.5 });
+      var left = e.institution && e.qualification
+        ? [{ text: e.institution + ', ', bold: true }, { text: e.qualification, italic: true }]
+        : [{ text: e.institution || e.qualification || e.line, bold: !!(e.institution || e.qualification) }];
+      var right = [cvDateRange_(e.dates), e.location].filter(Boolean).join('  |  ');
+      cvRowClassic_(body, t, W, left, right, i ? 10 : 0);
+      if (e.relevant_study) cvLine_(body, t, [{ text: 'Relevant study: ' + e.relevant_study.replace(/\.?$/, '.') }], { line: 1.1 });
     });
+  }
+
+  if ((cv.cpd || []).length) {
+    cvSectionClassic_(body, t, 'Continuing Professional Development');
+    cvLine_(body, t, [{ text: cv.cpd.join('  •  ') }], { line: 1.6 });
   }
 
   if ((cv.certifications || []).length) {
-    cvSectionModern_(body, t, 'Certifications', W);
-    cv.certifications.forEach(function (c, j) { cvBullet_(body, t, c, j ? 0 : 6); });
+    cvSectionClassic_(body, t, 'Certifications');
+    cv.certifications.forEach(function (c, i) {
+      cvRowClassic_(body, t, W, [{ text: c.name, bold: true }], c.date, i ? 4 : 0);
+    });
   }
+
+  if ((cv.languages || []).length) {
+    cvSectionClassic_(body, t, 'Languages');
+    cv.languages.forEach(function (l) {
+      cvLine_(body, t, [{ text: l.language + (l.level ? ': ' + l.level : '') }], { line: 1.1 });
+    });
+  }
+
+  cvSectionClassic_(body, t, 'References');
+  cvLine_(body, t, [{ text: 'Available upon request', bold: true }], {});
 }
 
-/** Uppercase accent heading over a thin full-width accent bar. */
-function cvSectionModern_(body, t, title, W) {
+/** Bold uppercase heading with a thin full-width rule under it. */
+function cvSectionClassic_(body, t, title) {
   cvLine_(body, t, [{ text: title.toUpperCase() }],
-    { heading: DocumentApp.ParagraphHeading.HEADING2, size: 10.5, bold: true, color: t.accent, before: 16, after: 3, line: 1 });
-  var bar = cvTable_(body, 1, [W]).getCell(0, 0);
-  bar.setBackgroundColor(t.accent);
-  var a = {};
-  a[DocumentApp.Attribute.FONT_SIZE] = 1;
-  bar.getChild(0).asParagraph().setAttributes(a).setLineSpacing(1).setSpacingBefore(0).setSpacingAfter(0);
+    { heading: DocumentApp.ParagraphHeading.HEADING2, size: 11.5, bold: true, before: 16, line: 1 });
+  cvRule_(body, 6);
+}
+
+/** One line with `leftRuns` on the left and `rightText` flush right (a borderless two-column table). */
+function cvRowClassic_(body, t, W, leftRuns, rightText, before) {
+  if (!rightText) return cvLine_(body, t, leftRuns, { before: before, line: 1.1 });
+  // Wide enough for the dates/location to stay on one line (~5.3pt per character at 10.5pt)
+  var rightW = Math.min(W * 0.6, Math.max(W * 0.25, rightText.length * 5.3 + 12));
+  var row = cvTable_(body, 1, [W - rightW, rightW]);
+  var left = row.getCell(0, 0), right = row.getCell(0, 1);
+  left.setPaddingTop(before || 0);
+  right.setPaddingTop(before || 0);
+  cvLine_(left, t, leftRuns, { line: 1.1 });
+  cvLine_(right, t, [{ text: rightText }], { align: DocumentApp.HorizontalAlignment.RIGHT, line: 1.1 });
+}
+
+/** "- " bullet with the wrapped lines hanging under the text, as in the template. */
+function cvDash_(body, t, text) {
+  var p = cvLine_(body, t, [{ text: '-  ' + text }], { line: 1.1, after: 1 });
+  p.setIndentFirstLine(6).setIndentStart(15);
+  return p;
+}
+
+/** "09/2025 - 04/2026" -> "09/2025 – 04/2026": the template's en dash between dates. */
+function cvDateRange_(dates) {
+  return String(dates || '').replace(/\s+(-|–|—|to)\s+/i, ' – ');
 }
 
 /* ------------------------- ATS Simple template -------------------------- */
@@ -303,16 +354,25 @@ function cvRenderSimple_(body, cand, cv, t) {
         cvLine_(body, t, [{ text: e.qualification || e.institution }], { size: 11, bold: true, color: t.ink, before: i ? 6 : 2 });
         var meta = [];
         if (e.qualification && e.institution) meta.push({ text: e.institution, color: t.accent, bold: true });
-        if (e.year) meta.push({ text: String(e.year), italic: true });
+        if (e.dates) meta.push({ text: cvDateRange_(e.dates), italic: true });
         if (meta.length) cvLine_(body, t, cvJoin_(meta, t.accent, '  |  '), { size: 10, color: t.muted });
+        if (e.relevant_study) cvLine_(body, t, [{ text: 'Relevant study: ' + e.relevant_study }], { size: 10 });
       } else if (e.line) {
         cvLine_(body, t, [{ text: e.line }], { before: i ? 4 : 2 });
       }
     });
   }
+  if ((cv.cpd || []).length) {
+    cvSectionSimple_(body, t, 'Continuing Professional Development');
+    cv.cpd.forEach(function (c) { cvBullet_(body, t, c, 0); });
+  }
   if ((cv.certifications || []).length) {
     cvSectionSimple_(body, t, 'Certifications');
-    cv.certifications.forEach(function (c) { cvBullet_(body, t, c, 0); });
+    cv.certifications.forEach(function (c) { cvBullet_(body, t, c.name + (c.date ? ' (' + c.date + ')' : ''), 0); });
+  }
+  if ((cv.languages || []).length) {
+    cvSectionSimple_(body, t, 'Languages');
+    cvLine_(body, t, [{ text: cv.languages.map(function (l) { return l.language + (l.level ? ': ' + l.level : ''); }).join(', ') }], {});
   }
 }
 
@@ -371,9 +431,17 @@ function cvCleanResult_(cv) {
     }).filter(function (e) { return e.title || e.employer; }),
     education: (cv.education || []).map(function (e) {
       return { qualification: cvText_(e.qualification), institution: cvText_(e.institution),
-               year: cvText_(e.year), line: cvText_(e.line) };
+               dates: cvText_(e.dates || e.year), location: cvText_(e.location),
+               relevant_study: cvText_(e.relevant_study, true), line: cvText_(e.line) };
     }).filter(function (e) { return e.qualification || e.institution || e.line; }),
-    certifications: list(cv.certifications)
+    cpd: list(cv.cpd),
+    // Plain strings (older prompt, revisions) are names without a date
+    certifications: (Array.isArray(cv.certifications) ? cv.certifications : []).map(function (c) {
+      return c && typeof c === 'object' ? { name: cvText_(c.name, true), date: cvText_(c.date) } : { name: cvText_(c, true), date: '' };
+    }).filter(function (c) { return c.name; }),
+    languages: (Array.isArray(cv.languages) ? cv.languages : []).map(function (l) {
+      return l && typeof l === 'object' ? { language: cvText_(l.language), level: cvText_(l.level) } : { language: cvText_(l), level: '' };
+    }).filter(function (l) { return l.language; })
   };
 }
 
@@ -383,7 +451,7 @@ function cvTheme_() {
   var n = parseInt(accent.slice(1), 16);
   var light = (0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255 > 0.6;
   return {
-    template: (getConfig_('CV_TEMPLATE') || 'Modern').trim().toLowerCase(),
+    template: (getConfig_('CV_TEMPLATE') || 'Classic').trim().toLowerCase(),
     font: getConfig_('CV_FONT') || 'Lato',
     accent: accent,
     onAccent: light ? '#1A1A1A' : '#FFFFFF',          // text on the header band
@@ -402,16 +470,16 @@ function cvMix_(hex, f) {
   }).join('');
 }
 
-/** Header contact runs. Blanks and placeholders ("null", "Any", "N/A"...) are left out. */
+/** Header contact runs: email, phone, location, LinkedIn. Blanks and placeholders ("null", "Any", "N/A"...) are left out. */
 function cvContact_(cand, color) {
   var out = [];
+  var email = cvText_(cand.Email);
+  if (email.indexOf('@') > 0) out.push({ text: email, link: 'mailto:' + email, color: color });
   // Location comes from the intake's preferred-locations answer, which can be a list like "London; Any"
   var location = cvText_(cand.Location).split(/\s*[;,\/]\s*/).filter(function (x) {
     return x && !CV_PLACEHOLDER_.test(x);
   }).join(', ');
-  [location, cvText_(cand.Phone)].forEach(function (v) { if (v) out.push({ text: v, color: color }); });
-  var email = cvText_(cand.Email);
-  if (email.indexOf('@') > 0) out.push({ text: email, link: 'mailto:' + email, color: color });
+  [cvText_(cand.Phone), location].forEach(function (v) { if (v) out.push({ text: v, color: color }); });
   var li = cvText_(cand.LinkedIn);
   if (li.indexOf('.') > 0) {
     out.push({
@@ -542,29 +610,34 @@ function previewCVTemplate() {
     FullName: 'Amara Okafor', Email: 'amara.okafor@example.com', Phone: '07700 900123',
     Location: 'Manchester, UK', LinkedIn: 'linkedin.com/in/amara-okafor'
   };
-  var cv = {
-    headline: 'Senior Staff Nurse - Acute Medicine',
-    profile_summary: 'Band 6 staff nurse with eight years of acute medical experience across busy NHS wards. ' +
-      'Leads shifts of up to 12 staff, mentors student nurses and drives measurable improvements in patient safety. ' +
-      'Calm under pressure, with a strong record of audit-led change and multidisciplinary collaboration.',
-    skills: ['Acute patient care', 'Shift leadership', 'Clinical audit', 'IV therapy', 'Mentoring',
-      'Discharge planning', 'Sepsis management', 'EPR systems', 'Safeguarding'],
+  var cv = cvCleanResult_({
+    headline: 'Staff Nurse',
+    profile_summary: 'NMC registered Band 6 staff nurse with eight years of acute medical experience across busy NHS wards. ' +
+      'Experienced in shift leadership, sepsis management, IV therapy and discharge planning. ' +
+      'Coordinates care with doctors, therapists and families to keep patients safe and well informed. ' +
+      'I keep accurate records, follow infection prevention procedures and mentor student nurses.',
+    skills: ['Acute Patient Care', 'Shift Leadership', 'Clinical Audit', 'IV Therapy', 'Mentoring Student Nurses',
+      'Discharge Planning', 'Sepsis Management', 'EPR Systems', 'Safeguarding Adults'],
     experience: [
       { title: 'Senior Staff Nurse (Band 6)', employer: 'Manchester University NHS Foundation Trust',
-        location: 'Manchester', dates: 'Mar 2021 - Present', bullets: [
-          'Lead nurse in charge on a 28-bed acute medical unit, coordinating 10-12 staff per shift.',
-          'Introduced a falls-risk huddle that cut inpatient falls by 22% over 12 months.',
-          'Mentor 15+ student nurses a year, with a 100% placement pass rate.'] },
-      { title: 'Staff Nurse (Band 5)', employer: 'Salford Royal Hospital', location: 'Salford',
-        dates: 'Sep 2017 - Feb 2021', bullets: [
-          'Delivered holistic care to up to 8 patients per shift on a respiratory ward.',
-          'Completed IV and venepuncture competencies within the first six months.'] }
+        location: 'Manchester, United Kingdom', dates: '03/2021 - Present', bullets: [
+          'I lead the nursing shift on a 28-bed acute medical unit, coordinating 10-12 staff to keep care safe and on time.',
+          'I introduced a falls-risk huddle that cut inpatient falls by 22% over 12 months.',
+          'I mentor more than 15 student nurses a year, all of whom have passed their placements.'] },
+      { title: 'Staff Nurse (Band 5)', employer: 'Salford Royal Hospital', location: '',
+        dates: '09/2017 - 02/2021', bullets: [
+          'I delivered holistic care to up to 8 patients per shift on a respiratory ward.',
+          'I completed IV and venepuncture competencies within my first six months.'] }
     ],
     education: [
-      { qualification: 'BSc (Hons) Adult Nursing, 2:1', institution: 'University of Manchester', year: '2017' }
+      { institution: 'University of Manchester', qualification: 'Bachelor of Science (BSc) Adult Nursing', dates: '09/2014 - 07/2017',
+        location: 'United Kingdom', relevant_study: 'Acute care, pharmacology, patient assessment and evidence-based practice' }
     ],
-    certifications: ['NMC Registered Nurse (PIN on request)', 'Immediate Life Support (ILS), 2025']
-  };
+    cpd: ['I completed Immediate Life Support training and now act as a resuscitation link nurse.',
+      'I attended a regional sepsis study day on early recognition and escalation.'],
+    certifications: [{ name: 'NMC: Registered Nurse', date: '09/2017' }, { name: 'Immediate Life Support (ILS)', date: '03/2025' }],
+    languages: [{ language: 'English', level: 'Native' }, { language: 'Yoruba', level: 'Fluent' }]
+  });
   var doc = renderCVDoc_(cand, { Company: 'Template Preview' }, cv, 'PREVIEW');
   Logger.log(doc.getUrl());
   return doc.getUrl();
