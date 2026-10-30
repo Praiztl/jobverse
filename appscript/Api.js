@@ -759,6 +759,7 @@ function extractDocId_(url) {
  * application's JobID so the worker can re-fill the form before submitting.
  */
 function apiListApplicationsByStatus_(req) {
+  noteAgentSeen_(req.status);
   var cvByJob = {}, clByJob = {}, taskByApp = {};
   readRows_('CVVersions', ['JobID', 'DocURL']).forEach(function (v) { cvByJob[v.JobID] = v.DocURL; });
   readRows_('CoverLetters', ['JobID', 'DocURL']).forEach(function (l) { clByJob[l.JobID] = l.DocURL; });
@@ -782,15 +783,20 @@ function apiListApplicationsByStatus_(req) {
  
 function dashData(key) {
   requireDashAccess_(key);
-  requireDashAccess_(key);
   // Only the columns the dashboard shows - Candidates.AIProfileJSON and
   // ReviewQueue.AIFindings alone can be tens of KB per row.
   var apps = readRows_('Applications', ['ApplicationID', 'CandidateID', 'Company', 'JobTitle', 'ATS', 'Status',
-    'JobURL', 'SubmittedAt', 'ConfirmationScreenshotURL', 'Outcome']);
+    'JobURL', 'CreatedAt', 'SubmittedAt', 'ConfirmationScreenshotURL', 'Outcome', 'FilledBy', 'ErrorLog']);
   var countByCand = {};
   apps.forEach(function (a) {
     if (countsAsApplication_(a.Status)) countByCand[a.CandidateID] = (countByCand[a.CandidateID] || 0) + 1;
   });
+  // When each application's submission was approved, so the dashboard can tell "submitting" from "stuck"
+  var approvedAt = {};
+  readRows_('ReviewQueue', ['Type', 'RefID', 'DecidedAt']).forEach(function (t) {
+    if (t.Type === 'Submission' && t.DecidedAt) approvedAt[t.RefID] = toEpochMs_(t.DecidedAt);
+  });
+  var props = PropertiesService.getScriptProperties();
   return {
     candidates: readRows_('Candidates', ['CandidateID', 'FullName', 'Email', 'Status', 'Active',
       'TargetApplications', 'PreferredRoles', 'Location', 'CreatedAt']).map(function (c) {
@@ -801,10 +807,19 @@ function dashData(key) {
                roles: c.PreferredRoles, location: c.Location, created: String(c.CreatedAt) };
     }),
     applications: apps.map(function (a) {
+      var errors = String(a.ErrorLog || '').trim().split('\n');
       return { id: a.ApplicationID, cand: a.CandidateID, company: a.Company, title: a.JobTitle,
                ats: a.ATS, status: a.Status, url: a.JobURL, submitted: String(a.SubmittedAt || ''),
-               shot: a.ConfirmationScreenshotURL, outcome: a.Outcome };
+               shot: a.ConfirmationScreenshotURL, outcome: a.Outcome, filledBy: a.FilledBy || '',
+               createdMs: toEpochMs_(a.CreatedAt), submittedMs: toEpochMs_(a.SubmittedAt),
+               approvedMs: approvedAt[a.ApplicationID] || 0,
+               lastError: errors[errors.length - 1].slice(0, 300) };
     }),
+    // Last time the worker / extension asked for approved applications to submit (0 = never)
+    agents: {
+      worker: Number(props.getProperty(AGENT_SEEN_PREFIX_ + 'worker') || 0),
+      extension: Number(props.getProperty(AGENT_SEEN_PREFIX_ + 'extension') || 0)
+    },
     reviews: awaitingReviews_(),
     prospects: readRows_('Prospects', ['ProspectID', 'CandidateID', 'Company', 'JobTitle', 'JobURL', 'Status',
       'Source', 'FoundAt']).map(function (p) {
@@ -813,9 +828,11 @@ function dashData(key) {
     }),
     log: recentActivity_(60),
     followUps: readRows_('FollowUps').map(function (f) {
-      return { id: f.FollowUpID, cand: f.CandidateID, type: f.Type, company: f.Company,
-               title: f.JobTitle, due: sheetDateIso_(f.DueDate), status: f.Status, notes: f.Notes };
+      return { id: f.FollowUpID, cand: f.CandidateID, app: f.ApplicationID, type: f.Type, company: f.Company,
+               title: f.JobTitle, due: sheetDateIso_(f.DueDate), status: f.Status, notes: f.Notes,
+               outcome: f.Outcome || '' };
     }),
+    followUpDays: parseInt(getConfig_('FOLLOWUP_DAYS_AFTER_SUBMIT') || '7', 10),
     // Passwords are deliberately not included - see dashRevealAccountPassword
     accounts: readRows_('PlatformAccounts').map(function (a) {
       return { id: a.AccountID, cand: a.CandidateID, site: a.ATSDomain, email: a.Email || '',
@@ -854,10 +871,18 @@ function awaitingReviews_() {
       superseded.length + ' older duplicate review(s) superseded: ' + superseded.map(function (t) { return t.TaskID; }).join(', ').slice(0, 400));
   }
 
+  // The document each CV / cover letter / statement card is about, so it can be opened from the card
+  var docUrl = {};
+  Object.keys(REVISABLE_DOCS_).forEach(function (type) {
+    var d = REVISABLE_DOCS_[type];
+    readRows_(d.sheet, [d.idField, 'DocURL']).forEach(function (r) { docUrl[type + '|' + r[d.idField]] = r.DocURL; });
+  });
+
   return waiting
     .filter(function (t) { return superseded.indexOf(t) === -1; })
     .map(function (t) {
-      return { id: t.TaskID, type: t.Type, cand: t.CandidateID, summary: t.Summary,
+      return { id: t.TaskID, type: t.Type, cand: t.CandidateID, summary: t.Summary, refId: t.RefID,
+               docUrl: docUrl[t.Type + '|' + t.RefID] || '',
                score: t.AIScore, created: String(t.CreatedAt), createdMs: toEpochMs_(t.CreatedAt) };
     });
 }
@@ -1033,7 +1058,6 @@ function dashDeleteCandidate(key, candidateId) {
  
 function dashClearActivityLog(key) {
   requireDashAccess_(key);
-  requireDashAccess_(key);
   var sh = sheet_('ActivityLog');
   var last = sh.getLastRow();
   if (last > 1) sh.deleteRows(2, last - 1);
@@ -1087,6 +1111,92 @@ function dashRetryApplication(key, applicationId) {
   updateRow_('Applications', app._row, { Status: 'Retried' });
   logActivity_(Session.getActiveUser().getEmail() || 'reviewer', 'application_retried', 'application', applicationId, app.Company);
   return { requeued: true };
+}
+
+/**
+ * A person checked the employer's site and the application did go through -
+ * for ones stuck at "Approved - ..." or flagged "Submit Unconfirmed". Recorded
+ * like any other submission, follow-up included.
+ */
+function dashMarkApplicationSubmitted(key, applicationId) {
+  requireDashAccess_(key);
+  var app = findRow_('Applications', 'ApplicationID', applicationId);
+  if (!app) throw new Error('Application not found');
+  if (app.Status === 'Submitted') return { already: true };
+  var submittedAt = new Date();
+  updateRow_('Applications', app._row, { Status: 'Submitted', SubmittedAt: submittedAt });
+  app.SubmittedAt = submittedAt;
+  logActivity_(Session.getActiveUser().getEmail() || 'reviewer', 'application_marked_submitted', 'application', applicationId,
+    app.Company + ' (was ' + app.Status + ')');
+  try { createSubmissionFollowUp_(app); }
+  catch (e) { logActivity_('system', 'followup_error', 'application', applicationId, e.message); }
+  return { submitted: true };
+}
+
+/** What a follow-up can end with. Interview / Offer / Rejected are also recorded on the application (Outcome). */
+var FOLLOWUP_OUTCOMES_ = ['Interview', 'Offer', 'Rejected', 'No reply', 'Done', 'Not needed'];
+
+/**
+ * Closes a follow-up with what actually happened, instead of a bare "done".
+ * An interview sets the application's InterviewDate to today when it has none,
+ * which is what the reports count interviews by.
+ */
+function dashResolveFollowUp(key, followUpId, outcome, note) {
+  requireDashAccess_(key);
+  if (FOLLOWUP_OUTCOMES_.indexOf(outcome) === -1) throw new Error('Unknown follow-up outcome: ' + outcome);
+  ensureColumns_('FollowUps', ['Outcome', 'ClosedAt']);
+  var f = findRow_('FollowUps', 'FollowUpID', followUpId);
+  if (!f) throw new Error('Follow-up not found');
+  var who = Session.getActiveUser().getEmail() || 'reviewer';
+  var line = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd') + ' ' + outcome + (note ? ': ' + note : '');
+  updateRow_('FollowUps', f._row, {
+    Status: 'Done', Outcome: outcome, ClosedAt: new Date(),
+    Notes: (f.Notes ? f.Notes + '\n' : '') + line
+  });
+  if (f.ApplicationID && /^(Interview|Offer|Rejected)$/.test(outcome)) {
+    var app = findRow_('Applications', 'ApplicationID', f.ApplicationID);
+    if (app) {
+      var patch = { Outcome: outcome };
+      if (outcome === 'Interview' && !app.InterviewDate) patch.InterviewDate = new Date();
+      updateRow_('Applications', app._row, patch);
+    }
+  }
+  logActivity_(who, 'followup_' + outcome.toLowerCase().replace(/\s+/g, '_'), 'followup', followUpId, note || '');
+  return { closed: true };
+}
+
+/** "No reply yet": pushes the follow-up `days` days on from today (or from its due date, if that's later). */
+function dashSnoozeFollowUp(key, followUpId, days) {
+  requireDashAccess_(key);
+  var n = parseInt(days, 10);
+  if (!(n > 0 && n <= 60)) throw new Error('Snooze must be between 1 and 60 days');
+  var f = findRow_('FollowUps', 'FollowUpID', followUpId);
+  if (!f) throw new Error('Follow-up not found');
+  var from = Math.max(Date.now(), toEpochMs_(f.DueDate));
+  var due = new Date(from + n * 24 * 60 * 60 * 1000);
+  updateRow_('FollowUps', f._row, {
+    DueDate: due,
+    Notes: (f.Notes ? f.Notes + '\n' : '') + Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd') +
+      ' No reply yet - checking again in ' + n + ' days'
+  });
+  logActivity_(Session.getActiveUser().getEmail() || 'reviewer', 'followup_snoozed', 'followup', followUpId, n + ' days');
+  return { due: sheetDateIso_(due) };
+}
+
+/*
+ * Heartbeats: the worker asks for 'Approved - Submitting' applications every
+ * cycle, the extension for 'Approved - Extension' ones every two minutes. The
+ * dashboard shows how long ago each was last seen, so an approval that is
+ * "stuck submitting" because nothing is running says so.
+ */
+var AGENT_SEEN_PREFIX_ = 'AGENT_SEEN_';
+
+function noteAgentSeen_(status) {
+  var agent = status === 'Approved - Submitting' ? 'worker' : status === 'Approved - Extension' ? 'extension' : '';
+  if (!agent) return;
+  var props = PropertiesService.getScriptProperties();
+  var last = Number(props.getProperty(AGENT_SEEN_PREFIX_ + agent) || 0);
+  if (Date.now() - last > 60000) props.setProperty(AGENT_SEEN_PREFIX_ + agent, String(Date.now())); // spares the property quota
 }
  
 /* ------------------------------- helpers -------------------------------- */

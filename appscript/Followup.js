@@ -93,7 +93,8 @@ function sendDueFollowUpReminders() {
     var body = 'Follow-ups due or overdue:\n\n' + due.map(function (f) {
       return '- ' + f.Type + ': ' + f.Company + ' - ' + f.JobTitle + ' (candidate ' + f.CandidateID +
         ', due ' + Utilities.formatDate(new Date(f.DueDate), 'GMT', 'yyyy-MM-dd') + ')';
-    }).join('\n') + '\n\nOpen the dashboard\'s Follow-ups tab to mark these done.';
+    }).join('\n') + '\n\nCheck the candidate\'s inbox for a reply from each employer, then record what happened ' +
+      '(interview, offer, rejected, no reply) in the dashboard\'s Follow-ups tab. "No reply yet" pushes it back a week.';
     emails.split(',').map(function (s) { return s.trim(); }).filter(Boolean).forEach(function (to) {
       try { MailApp.sendEmail(to, '[Jobverse] ' + due.length + ' follow-up(s) due', body); } catch (ignored) {}
     });

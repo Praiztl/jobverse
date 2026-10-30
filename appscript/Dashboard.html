@@ -6,382 +6,727 @@
   <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
   <style>
     :root{
-      --ink:#0E1B14; --pine:#173229; --moss:#2C5644; --paper:#F3F4EF; --card:#FFFFFF;
-      --line:#DDE1D6; --amber:#D99000; --red:#B3402A; --green:#2E7D4F; --mut:#5E6A61;
+      --ink:#0E1B14; --pine:#173229; --moss:#2C5644; --mint:#8FD6A9; --paper:#F3F4EF; --card:#FFFFFF; --soft:#F7F8F4;
+      --line:#DDE1D6; --amber:#B07400; --amber-bg:#FFF3D6; --red:#B3402A; --red-bg:#FBE4DE;
+      --green:#2E7D4F; --green-bg:#E2F2E7; --blue:#3D4A9E; --blue-bg:#E7E9F5; --mut:#5E6A61;
     }
     *{box-sizing:border-box;margin:0}
-    body{font-family:'IBM Plex Sans',sans-serif;background:var(--paper);color:var(--ink);display:flex;min-height:100vh}
-    nav{width:210px;background:var(--pine);color:#E8EDE5;padding:22px 0;flex-shrink:0;display:flex;flex-direction:column}
-    .logo{font-family:'Archivo';font-weight:800;font-size:19px;padding:0 20px 18px;letter-spacing:.5px}
-    .logo span{color:#8FD6A9}
-    nav button{all:unset;cursor:pointer;padding:11px 20px;font-size:14px;font-weight:500;color:#B9C6BC;border-left:3px solid transparent}
+    body{font-family:'IBM Plex Sans',sans-serif;background:var(--paper);color:var(--ink);display:flex;min-height:100vh;font-size:14px}
+    a{color:var(--moss)}
+
+    /* ---- navigation ---- */
+    nav{width:224px;background:var(--pine);color:#E8EDE5;padding:20px 0 14px;flex-shrink:0;display:flex;flex-direction:column;position:sticky;top:0;height:100vh;overflow-y:auto}
+    .logo{font-family:'Archivo';font-weight:800;font-size:19px;padding:0 20px 14px;letter-spacing:.5px}
+    .logo span{color:var(--mint)}
+    .navsec{font-size:10.5px;font-weight:600;letter-spacing:.8px;text-transform:uppercase;color:#7F9488;padding:14px 20px 4px}
+    nav button{all:unset;cursor:pointer;padding:8px 20px;font-size:14px;font-weight:500;color:#B9C6BC;border-left:3px solid transparent;display:flex;align-items:center;justify-content:space-between;gap:8px}
     nav button:hover{color:#fff}
-    nav button.on{color:#fff;background:rgba(255,255,255,.06);border-left-color:#8FD6A9}
-    nav button:focus-visible{outline:2px solid #8FD6A9;outline-offset:-2px}
-    .count{background:#8FD6A9;color:var(--pine);border-radius:9px;font-size:11px;font-weight:700;padding:1px 7px;margin-left:8px}
-    main{flex:1;padding:26px 30px;max-width:1200px}
-    h1{font-family:'Archivo';font-weight:700;font-size:22px;margin-bottom:16px}
-    h2{font-family:'Archivo';font-weight:700;font-size:16px;margin:18px 0 8px}
+    nav button.on{color:#fff;background:rgba(255,255,255,.07);border-left-color:var(--mint)}
+    nav button:focus-visible{outline:2px solid var(--mint);outline-offset:-2px}
+    .count{background:var(--mint);color:var(--pine);border-radius:9px;font-size:11px;font-weight:700;padding:1px 7px;min-width:20px;text-align:center}
+    .count.warn{background:#F2B8A8;color:#5A1A0C}
+    .count:empty,.count[data-n="0"]{display:none}
+
+    /* ---- page ---- */
+    main{flex:1;padding:24px 30px 60px;max-width:1240px;min-width:0}
+    .top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:16px;flex-wrap:wrap}
+    h1{font-family:'Archivo';font-weight:700;font-size:22px}
+    .sub{color:var(--mut);font-size:13px;margin-top:3px;max-width:720px;line-height:1.45}
+    .sync{display:flex;align-items:center;gap:8px;color:var(--mut);font-size:12px;white-space:nowrap}
+    h2{font-family:'Archivo';font-weight:700;font-size:16px;margin:4px 0 10px}
+    h3{font-family:'Archivo';font-weight:700;font-size:15px}
     .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin-bottom:12px}
+    .card.flush{padding:0;overflow:hidden}
+    .note{background:var(--blue-bg);border:1px solid #CDD2EC;color:#2A356F;border-radius:10px;padding:12px 16px;margin-bottom:12px;font-size:13px;line-height:1.5}
+    .note.warn{background:var(--amber-bg);border-color:#F0D9A0;color:#5C3E00}
+    .note.bad{background:var(--red-bg);border-color:#F0C4B8;color:#6B2010}
+    .note b{font-weight:600}
+
     table{width:100%;border-collapse:collapse;font-size:13.5px}
-    th{text-align:left;color:var(--mut);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.4px;padding:8px 10px;border-bottom:1px solid var(--line)}
-    td{padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+    th{text-align:left;color:var(--mut);font-weight:600;font-size:11.5px;text-transform:uppercase;letter-spacing:.4px;padding:10px 12px;border-bottom:1px solid var(--line);background:var(--soft)}
+    td{padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}
     tr:last-child td{border-bottom:none}
-    .chip{display:inline-block;font-size:11.5px;font-weight:600;border-radius:20px;padding:2px 10px}
-    .c-sub{background:#E2F2E7;color:var(--green)} .c-prog{background:#FFF3D6;color:var(--amber)}
-    .c-fail{background:#FBE4DE;color:var(--red)} .c-wait{background:#E7E9F5;color:#3D4A9E}
-    .c-cap{background:#FBE4DE;color:var(--red);border:1px dashed var(--red)}
-    .rail{display:flex;gap:4px;margin-top:5px}
-    .rail i{width:22px;height:5px;border-radius:3px;background:var(--line)}
-    .rail i.done{background:var(--moss)}
-    .btn{font-family:inherit;font-size:13px;font-weight:600;border:none;border-radius:7px;padding:7px 14px;cursor:pointer}
-    .approve{background:var(--moss);color:#fff} .reject{background:#fff;color:var(--red);border:1px solid var(--red)}
+    .tablewrap{overflow-x:auto}
+    td.nowrap,.nowrap{white-space:nowrap}
+
+    .chip{display:inline-block;font-size:11.5px;font-weight:600;border-radius:20px;padding:2px 10px;white-space:nowrap;background:#EEF0EA;color:#46524A}
+    .c-sub{background:var(--green-bg);color:var(--green)} .c-prog{background:var(--amber-bg);color:var(--amber)}
+    .c-fail{background:var(--red-bg);color:var(--red)} .c-wait{background:var(--blue-bg);color:var(--blue)}
+    .c-cap{background:var(--red-bg);color:var(--red);border:1px dashed var(--red)}
+    .c-mut{background:#EEF0EA;color:var(--mut)}
+
+    .btn{font-family:inherit;font-size:13px;font-weight:600;border:1px solid transparent;border-radius:7px;padding:7px 14px;cursor:pointer;white-space:nowrap;line-height:1.2}
+    .btn:disabled{opacity:.5;cursor:default}
+    .approve{background:var(--moss);color:#fff} .reject{background:#fff;color:var(--red);border-color:var(--red)}
     .primary{background:var(--pine);color:#fff}
-    .danger{background:#fff;color:var(--red);border:1px solid var(--red)}
+    .ghost{background:#fff;color:var(--pine);border-color:var(--line)}
+    .ghost:hover{border-color:var(--moss)}
+    .danger{background:#fff;color:var(--red);border-color:var(--red)}
+    .linkbtn{all:unset;cursor:pointer;color:var(--moss);font-weight:600;font-size:12.5px}
+    .linkbtn:hover{text-decoration:underline}
     .tiny{padding:4px 10px;font-size:12px}
-    .btn:focus-visible{outline:2px solid var(--amber)}
-    .findings{font-family:'IBM Plex Mono';font-size:11.5px;background:#F7F8F4;border:1px solid var(--line);border-radius:6px;padding:8px;white-space:pre-wrap;max-height:150px;overflow:auto;margin-top:8px}
-    input,textarea,select{font-family:inherit;font-size:13.5px;border:1px solid var(--line);border-radius:7px;padding:8px;width:100%;background:#fff}
+    .btn:focus-visible,.linkbtn:focus-visible{outline:2px solid var(--amber);outline-offset:1px}
+    .acts{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+
+    input,textarea,select{font-family:inherit;font-size:13.5px;border:1px solid var(--line);border-radius:7px;padding:8px;width:100%;background:#fff;color:var(--ink)}
+    input:focus,textarea:focus,select:focus{outline:2px solid var(--mint);outline-offset:0;border-color:var(--moss)}
     textarea{min-height:130px;resize:vertical}
     label{font-size:12px;font-weight:600;color:var(--mut);display:block;margin:10px 0 4px}
-    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:14px}
-    .stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
-    .stat b{font-family:'Archivo';font-size:24px;display:block}
-    .stat span{font-size:12px;color:var(--mut)}
-    .mut{color:var(--mut);font-size:12.5px}
-    .tog{display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;cursor:pointer}
+    .tog{display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;cursor:pointer;margin:0;color:var(--ink)}
     .tog input{width:auto}
-    .filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:end}
-    .filters > div{flex:1;min-width:130px}
-    .pager{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px}
+
+    .toolbar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:flex-end}
+    .toolbar > div{min-width:150px}
+    .toolbar .grow{flex:1;min-width:200px}
+    .toolbar label{margin-top:0}
+    .tabs{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:12px}
+    .tabs button{all:unset;cursor:pointer;font-size:13px;font-weight:600;color:var(--mut);padding:6px 12px;border-radius:20px;border:1px solid var(--line);background:#fff}
+    .tabs button.on{background:var(--pine);color:#fff;border-color:var(--pine)}
+    .tabs button:focus-visible{outline:2px solid var(--amber)}
+    .tabs .n{font-weight:500;opacity:.75;margin-left:4px}
+
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-bottom:14px}
+    .stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;text-align:left;font-family:inherit;color:inherit}
+    button.stat{cursor:pointer}
+    button.stat:hover{border-color:var(--moss)}
+    .stat b{font-family:'Archivo';font-size:26px;display:block;line-height:1.1}
+    .stat span{font-size:12.5px;color:var(--mut)}
+    .stat.hot b{color:var(--red)}
+    .mut{color:var(--mut);font-size:12.5px}
+    .small{font-size:12px}
+    .err{color:var(--red);font-size:12px;margin-top:3px}
+
+    .bar{height:6px;background:var(--line);border-radius:3px;margin-top:5px;overflow:hidden;width:120px}
+    .bar i{display:block;height:100%;background:var(--moss)}
+    .rail{display:flex;gap:3px;margin-top:6px}
+    .rail i{width:18px;height:4px;border-radius:2px;background:var(--line)}
+    .rail i.done{background:var(--moss)}
+
+    /* ---- review queue ---- */
+    .rgroup{background:var(--card);border:1px solid var(--line);border-radius:10px;margin-bottom:12px;overflow:hidden}
+    .rhead{padding:14px 18px;display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap}
+    .rhead h3{margin-bottom:3px}
+    .ritem{border-top:1px solid var(--line);padding:12px 18px}
+    .ritem .row{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+    .ritem .what{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+    .ritem .kind{font-weight:600;min-width:110px}
+    .score{font-family:'IBM Plex Mono';font-size:12px;border-radius:6px;padding:1px 7px;background:var(--soft);border:1px solid var(--line)}
+    .score.lo{color:var(--red);border-color:#F0C4B8;background:var(--red-bg)}
+    .score.hi{color:var(--green);border-color:#BFE0CB;background:var(--green-bg)}
+    .ritem.sub{background:#FBFCF9}
+    .findings{font-family:'IBM Plex Mono';font-size:11.5px;background:var(--soft);border:1px solid var(--line);border-radius:6px;padding:8px 10px;white-space:pre-wrap;max-height:260px;overflow:auto;margin-top:10px}
+    .findings.kv{font-family:'IBM Plex Sans';white-space:normal}
+    .findings.kv div{padding:3px 0;border-bottom:1px solid var(--line)}
+    .findings.kv div:last-child{border-bottom:none}
+    .flist{margin:4px 0 6px 18px;padding:0}
+    .flist li{margin:2px 0}
+
+    .pager{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:12px 14px;border-top:1px solid var(--line)}
     .pager .pg{display:flex;align-items:center;gap:6px}
     .pager select{width:auto;padding:4px 6px}
-    .pager .btn{background:#fff;color:var(--pine);border:1px solid var(--line)}
-    .pager .btn:disabled{opacity:.45;cursor:default}
+    .empty{padding:28px 18px;text-align:center;color:var(--mut)}
+    .empty b{display:block;color:var(--ink);font-size:15px;margin-bottom:4px}
+
+    .agents{display:flex;gap:10px;flex-wrap:wrap}
+    .agent{display:flex;align-items:center;gap:8px;font-size:13px;background:var(--card);border:1px solid var(--line);border-radius:20px;padding:5px 12px}
+    .dot{width:8px;height:8px;border-radius:50%;background:var(--line);flex-shrink:0}
+    .dot.ok{background:var(--green)} .dot.bad{background:var(--red)} .dot.idle{background:#B9C0B4}
+
     .faq{border-bottom:1px solid var(--line);padding:10px 0}
     .faq summary{font-weight:600;cursor:pointer;font-size:14px}
     .faq p, .faq li{font-size:13.5px;color:#33413A;line-height:1.55;margin-top:6px}
     .steps{counter-reset:step;list-style:none;padding:0}
     .steps li{position:relative;padding:8px 0 8px 34px;font-size:13.5px;line-height:1.5;border-bottom:1px solid var(--line)}
     .steps li:before{counter-increment:step;content:counter(step);position:absolute;left:0;top:8px;width:22px;height:22px;background:var(--moss);color:#fff;border-radius:50%;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center}
-    #toast{position:fixed;bottom:18px;right:18px;background:var(--ink);color:#fff;padding:10px 16px;border-radius:8px;font-size:13px;display:none}
-    @media (max-width:760px){nav{width:64px}.logo{font-size:12px;padding:0 8px 14px}nav button{padding:11px 10px;font-size:11px}main{padding:16px}}
+    .card p.mut{line-height:1.55;margin-bottom:6px}
+
+    #toast{position:fixed;bottom:18px;right:18px;background:var(--ink);color:#fff;padding:10px 16px;border-radius:8px;font-size:13px;display:none;max-width:420px;z-index:30;box-shadow:0 6px 20px rgba(0,0,0,.2)}
+    #toast.bad{background:var(--red)}
+
+    /* ---- dialog ---- */
+    #dlg{position:fixed;inset:0;background:rgba(14,27,20,.45);display:none;align-items:center;justify-content:center;z-index:40;padding:16px}
+    #dlg.on{display:flex}
+    #dlg .box{background:#fff;border-radius:12px;max-width:480px;width:100%;padding:20px 22px;box-shadow:0 20px 50px rgba(0,0,0,.25)}
+    #dlg h3{margin-bottom:8px}
+    #dlg .body{font-size:13.5px;color:#33413A;line-height:1.5}
+    #dlg textarea{min-height:90px;margin-top:6px}
+    #dlg .acts{justify-content:flex-end;margin-top:16px}
+
+    @media (max-width:820px){
+      body{flex-direction:column}
+      nav{width:auto;height:auto;position:sticky;top:0;z-index:20;flex-direction:row;align-items:center;padding:8px 6px;overflow-x:auto;gap:2px}
+      .logo{font-size:14px;padding:0 10px 0 6px}
+      .navsec{display:none}
+      nav button{padding:7px 10px;font-size:13px;border-left:none;border-bottom:3px solid transparent;flex-shrink:0}
+      nav button.on{border-bottom-color:var(--mint)}
+      main{padding:16px}
+      .toolbar > div{min-width:0;flex:1 1 140px}
+    }
   </style>
 </head>
 <body>
-  <nav>
+  <nav aria-label="Sections">
     <div class="logo">JOB<span>VERSE</span></div>
-    <button data-v="reviews" class="on">Review queue <span class="count" id="revCount">0</span></button>
+    <button data-v="home" class="on">Overview</button>
+    <div class="navsec">Needs you</div>
+    <button data-v="reviews">Review queue <span class="count" id="nReviews"></span></button>
+    <button data-v="applications">Applications <span class="count warn" id="nApps"></span></button>
+    <button data-v="followups">Follow-ups <span class="count warn" id="nFollow"></span></button>
+    <div class="navsec">Pipeline</div>
+    <button data-v="prospects">Find &amp; queue jobs</button>
+    <button data-v="generate">Generate documents</button>
+    <div class="navsec">Setup</div>
     <button data-v="candidates">Candidates</button>
-    <button data-v="applications">Applications</button>
-    <button data-v="generate">Generate</button>
-    <button data-v="prospects">Prospects</button>
-    <button data-v="followups">Follow-ups</button>
     <button data-v="accounts">Site accounts</button>
+    <div class="navsec">Insight</div>
     <button data-v="report">Reports</button>
     <button data-v="log">Activity</button>
     <button data-v="help">Help &amp; guide</button>
   </nav>
   <main id="main"><h1>Loading…</h1></main>
-  <div id="toast"></div>
- 
+  <div id="toast" role="status" aria-live="polite"></div>
+  <div id="dlg" role="dialog" aria-modal="true" aria-labelledby="dlgTitle"><div class="box">
+    <h3 id="dlgTitle"></h3><div class="body" id="dlgBody"></div>
+    <div id="dlgInputWrap"><label id="dlgLabel" for="dlgInput"></label><textarea id="dlgInput"></textarea></div>
+    <div class="acts"><button class="btn ghost" id="dlgCancel">Cancel</button><button class="btn primary" id="dlgOk">OK</button></div>
+  </div></div>
+
 <script>
 // Passed back on every server call - each dash* function re-checks it (see doGet in Api.gs)
 const DASH_KEY = <?!= JSON.stringify(dashKey) ?>;
-let D = null, view = 'reviews';
+let D = null, view = 'home', loadedAt = 0;
 const F = {}; // per-view filter state
 
-// Persist the selected candidate for finding jobs across page refreshes
-function saveFindJobsCandidate(candId) {
-  localStorage.setItem('jobverse_findJobs_candidate', candId);
+/* ------------------------------- storage -------------------------------- */
+
+// Per-browser conveniences only; the page works without them
+function store(k, v){ try { if(v === undefined) return localStorage.getItem(k); if(v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch(e){ return null; } }
+function loadFindJobsCandidate(){ return store('jobverse_findJobs_candidate'); }
+function saveFindJobsCandidate(id){ store('jobverse_findJobs_candidate', id); }
+
+/* -------------------------------- server -------------------------------- */
+
+/** google.script.run as a promise; every dash* function takes the dashboard key first. */
+function rpc(fn, ...args){
+  return new Promise((resolve, reject) =>
+    google.script.run.withSuccessHandler(resolve).withFailureHandler(reject)[fn](DASH_KEY, ...args));
 }
 
-function loadFindJobsCandidate() {
-  return localStorage.getItem('jobverse_findJobs_candidate');
-}
-
-function clearFindJobsCandidate() {
-  localStorage.removeItem('jobverse_findJobs_candidate');
-}
-
-// Test function - call from browser console: testQueueAllData()
-function testQueueAllData() {
-  console.log('=== TEST QUEUE ALL DATA ===');
-  console.log('Current view:', view);
-  console.log('F.pCand:', F.pCand);
-  console.log('localStorage candidate:', loadFindJobsCandidate());
-  console.log('All candidates:', D.candidates.map(c => ({ id: c.id, name: c.name })));
-  console.log('All prospects count:', D.prospects.length);
-  
-  const prospectsForCand = D.prospects.filter(p => p.cand === (F.pCand || loadFindJobsCandidate()));
-  console.log('Prospects for selected candidate:', prospectsForCand.length);
-  console.log('Breakdown:');
-  console.log('  - Status "Found":', prospectsForCand.filter(p => p.status === 'Found').length);
-  console.log('  - Status "Found - Manual Review":', prospectsForCand.filter(p => p.status === 'Found - Manual Review').length);
-  console.log('  - Other statuses:', prospectsForCand.map(p => p.status).filter((s, i, a) => a.indexOf(s) === i && s !== 'Found' && s !== 'Found - Manual Review'));
-  console.log('Sample prospects:', prospectsForCand.slice(0, 3).map(p => ({ id: p.id, company: p.company, status: p.status })));
-  console.log('============================');
-}
- 
 // background = the periodic refresh (or a refresh after an action): the data is
 // updated, but the page is only redrawn if that won't wipe something being typed.
 function load(background){
-  google.script.run
-    .withSuccessHandler(d => {
-      D = d;
-      if(background && userIsEditing()) { document.getElementById('revCount').textContent = D.reviews.length; return; }
+  rpc('dashData')
+    .then(d => {
+      D = d; loadedAt = Date.now();
+      updateBadges();
+      if(background && userIsEditing()) return;
       render();
     })
-    .withFailureHandler(e => {
+    .catch(e => {
       if(background) { console.warn('Background refresh failed:', e.message); return; }
       document.getElementById('main').innerHTML =
         `<h1>Connection error</h1><div class="card"><p style="color:var(--red);font-weight:600">${esc(e.message)}</p>
-         <p class="mut" style="margin-top:8px">The backend threw an error. Check Apps Script's Executions panel (clock icon) for the full stack trace.</p></div>`;
-    })
-    .dashData(DASH_KEY);
+         <p class="mut" style="margin-top:8px">The backend threw an error. Check Apps Script's Executions panel (clock icon) for the full stack trace.</p>
+         <p style="margin-top:12px"><button class="btn primary" onclick="load()">Try again</button></p></div>`;
+    });
 }
 load(); setInterval(() => load(true), 45000);
+setInterval(() => { const s = document.getElementById('syncAge'); if(s) s.textContent = ago(loadedAt); }, 15000);
 
-/** True while redrawing would lose the user's input: the Generate form, or any focused field. */
+/** True while redrawing would lose the user's input: the Generate form, an open dialog, or any focused field. */
 function userIsEditing(){
-  if(view === 'generate') return true; // its form holds typed text and nothing on it needs live data
+  if(view === 'generate' || DLG.open) return true;
   const a = document.activeElement;
   return !!a && document.getElementById('main').contains(a) && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName);
 }
- 
-document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
-  view = b.dataset.v;
-  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x === b));
+
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => go(b.dataset.v));
+function go(v, filters){
+  view = v;
+  Object.assign(F, filters || {});
+  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x.dataset.v === v));
   render();
-});
- 
-function esc(s){ return String(s ?? '').replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c])); }
+  window.scrollTo(0, 0);
+}
+
+/* ------------------------------- helpers -------------------------------- */
+
+function esc(s){ return String(s ?? '').replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'}[c])); }
+function uniq(arr){ return [...new Set(arr.filter(Boolean))]; }
+function opts(arr, sel, allLabel){ return [`<option value="">${allLabel || 'All'}</option>`].concat(arr.map(v => `<option value="${esc(v)}" ${v===sel?'selected':''}>${esc(v)}</option>`)).join(''); }
+function candOpts(sel, allLabel){
+  return (allLabel ? [`<option value="">${allLabel}</option>`] : []).concat(
+    D.candidates.map(c => `<option value="${esc(c.id)}" ${c.id===sel?'selected':''}>${esc(c.name || c.id)}</option>`)).join('');
+}
+function candName(id){ const c = D && D.candidates.find(x => x.id === id); return c ? (c.name || id) : (id || '-'); }
+function matches(q, ...fields){ q = String(q || '').trim().toLowerCase(); return !q || fields.some(f => String(f || '').toLowerCase().includes(q)); }
+
+function toast(m, bad){
+  const t = document.getElementById('toast');
+  t.textContent = m; t.className = bad ? 'bad' : ''; t.style.display = 'block';
+  clearTimeout(toast.timer); toast.timer = setTimeout(() => t.style.display = 'none', bad ? 6000 : 3200);
+}
+function fail(e){ toast('Error: ' + (e && e.message || e), true); }
+
+const MIN = 60000, HOUR = 60 * MIN, DAY = 24 * HOUR;
+function ago(ms){
+  if(!ms) return 'never';
+  const d = Date.now() - ms;
+  if(d < MIN) return 'just now';
+  if(d < HOUR) return Math.round(d / MIN) + ' min ago';
+  if(d < DAY) return Math.round(d / HOUR) + ' h ago';
+  return Math.round(d / DAY) + ' d ago';
+}
+function shortDate(ts){
+  if(!ts) return '-';
+  const d = new Date(ts), now = new Date();
+  const days = Math.round((new Date(now.toDateString()) - new Date(d.toDateString())) / DAY);
+  if(days === 0) return 'Today';
+  if(days === 1) return 'Yesterday';
+  const o = { day: 'numeric', month: 'short' };
+  if(d.getFullYear() !== now.getFullYear()) o.year = 'numeric';
+  return d.toLocaleDateString('en-GB', o);
+}
+const foundDay = shortDate;
+function todayIso(){ const n = new Date(), p = x => String(x).padStart(2, '0'); return `${n.getFullYear()}-${p(n.getMonth() + 1)}-${p(n.getDate())}`; }
+/** Whole days from today to a yyyy-MM-dd date (negative = overdue). */
+function daysUntil(iso){ if(!iso) return null; return Math.round((new Date(iso + 'T00:00:00') - new Date(todayIso() + 'T00:00:00')) / DAY); }
+
+/* ------------------------- application statuses ------------------------- */
+
+const STUCK_AFTER_MS = 20 * MIN;       // an approved application not submitted by then needs a look
+const WORKER_QUIET_MS = 5 * MIN;       // the worker checks in every ~30 s while it runs
+const EXTENSION_QUIET_MS = 10 * MIN;   // the extension checks in every 2 min while Chrome is open
+
+const APP_STATUS = {
+  'In Progress':           { label: 'Filling the form', cls: 'c-prog', group: 'flight' },
+  'Awaiting Review':       { label: 'Waiting for review', cls: 'c-wait', group: 'flight' },
+  'Approved - Submitting': { label: 'Approved - worker submitting', cls: 'c-prog', group: 'flight' },
+  'Approved - Extension':  { label: 'Approved - extension submitting', cls: 'c-prog', group: 'flight' },
+  'Submitted':             { label: 'Submitted', cls: 'c-sub', group: 'done' },
+  'Rejected':              { label: 'Sent back (not submitted)', cls: 'c-mut', group: 'closed' },
+  'Failed':                { label: 'Failed', cls: 'c-fail', group: 'attention' },
+  'Error':                 { label: 'Failed', cls: 'c-fail', group: 'attention' },
+  'Retried':               { label: 'Re-queued', cls: 'c-mut', group: 'closed' }
+};
+
+function appInfo(a){
+  let s = APP_STATUS[a.status];
+  if(!s && /Human Needed$/.test(a.status || '')) {
+    const why = a.status.replace(/\s*-\s*Human Needed$/, '');
+    s = { label: why === 'Submit Unconfirmed' ? 'Submitted? Check the employer site' : 'Needs a person: ' + (why === 'HumanHelp' ? 'help on the page' : why),
+          cls: 'c-cap', group: 'attention', unconfirmed: why === 'Submit Unconfirmed' };
+  }
+  s = Object.assign({ label: a.status || 'Unknown', cls: 'c-prog', group: 'flight' }, s);
+  s.approved = /^Approved - /.test(a.status || '');
+  if(s.approved){
+    const since = a.approvedMs || a.createdMs;
+    s.stuck = !!since && Date.now() - since > STUCK_AFTER_MS;
+    if(s.stuck){ s.group = 'attention'; s.label = 'Approved ' + ago(since) + ' - not submitted yet'; s.cls = 'c-fail'; }
+  }
+  return s;
+}
+function appChip(a){ const s = appInfo(a); return `<span class="chip ${s.cls}" title="${esc(a.status)}">${esc(s.label)}</span>`; }
+function rail(status){
+  const stages = ['In Progress','Awaiting Review','Approved','Submitted'];
+  const idx = /^Approved/.test(status) ? 2 : stages.indexOf(status);
+  return '<div class="rail">' + stages.map((s,i) => `<i class="${idx >= i ? 'done':''}" title="${s}"></i>`).join('') + '</div>';
+}
 function chip(s){
   s = String(s || '');
-  const cls = s.includes('Submitted') ? 'c-sub' : s.includes('CAPTCHA') ? 'c-cap'
-    : (s.includes('Failed') || s.includes('Rejected') || s.includes('Error')) ? 'c-fail'
-    : s.includes('Review') ? 'c-wait' : 'c-prog';
+  const cls = /Submitted|Created|Done|Interview|Offer/.test(s) ? 'c-sub' : s.includes('CAPTCHA') ? 'c-cap'
+    : /Failed|Rejected|Error|Blocked/.test(s) ? 'c-fail'
+    : /Review|Queued|Pending/.test(s) ? 'c-wait' : /Skipped|Retried|Superseded/.test(s) ? 'c-mut' : 'c-prog';
   return `<span class="chip ${cls}">${esc(s)}</span>`;
 }
-function rail(status){
-  const stages = ['In Progress','Awaiting Review','Approved - Submitting','Submitted'];
-  const idx = stages.indexOf(status === 'Approved - Extension' ? 'Approved - Submitting' : status);
-  return '<div class="rail">' + stages.map((s,i) =>
-    `<i class="${idx >= i ? 'done':''}" title="${s}"></i>`).join('') + '</div>';
+function agentState(which){
+  const seen = D.agents ? D.agents[which] : 0;
+  const quiet = which === 'worker' ? WORKER_QUIET_MS : EXTENSION_QUIET_MS;
+  return { seen, ok: !!seen && Date.now() - seen < quiet };
 }
-function toast(m){ const t = document.getElementById('toast'); t.textContent = m; t.style.display='block'; setTimeout(()=>t.style.display='none', 2600); }
-function uniq(arr){ return [...new Set(arr.filter(Boolean))]; }
-function opts(arr, sel){ return ['<option value="">All</option>'].concat(arr.map(v => `<option ${v===sel?'selected':''}>${esc(v)}</option>`)).join(''); }
- 
+
+/** Why an approved application hasn't gone yet, in words someone can act on. */
+function stuckReason(a){
+  if(a.status === 'Approved - Submitting'){
+    const w = agentState('worker');
+    return w.ok ? 'The worker is running but hasn\'t submitted this yet - it may have hit a problem on the form.'
+      : 'Waiting for the background worker, which ' + (w.seen ? 'last checked in ' + ago(w.seen) : 'has never checked in') + '. Start it (npm start in the worker folder).';
+  }
+  const x = agentState('extension');
+  return x.ok ? 'The Chrome extension is running but hasn\'t confirmed this - Submit may have been clicked without a confirmation being seen.'
+    : 'Waiting for the Chrome extension, which ' + (x.seen ? 'last checked in ' + ago(x.seen) : 'has never checked in') + '. Open Chrome with the extension signed in.';
+}
+
+/* ------------------------------ derived data ---------------------------- */
+
+const DOC_LABEL = { CV: 'CV', CoverLetter: 'Cover letter', NHSStatement: 'NHS statement', Submission: 'Final application' };
+const DOC_ORDER = { CV: 1, CoverLetter: 2, NHSStatement: 3, Submission: 9 };
+
+/**
+ * One group per job: a job's CV, cover letter and final submission are three
+ * separate review rows with the same "Company - Role" summary, which used to
+ * show as the same job three times.
+ */
+function reviewGroups(){
+  const groups = new Map();
+  D.reviews.forEach(t => {
+    const key = t.cand + '|' + String(t.summary || '').toLowerCase().trim();
+    if(!groups.has(key)) groups.set(key, { key, cand: t.cand, summary: t.summary, items: [], oldest: Infinity, newest: 0 });
+    const g = groups.get(key);
+    g.items.push(t);
+    g.oldest = Math.min(g.oldest, t.createdMs || Infinity);
+    g.newest = Math.max(g.newest, t.createdMs || 0);
+  });
+  return [...groups.values()].map(g => {
+    g.items.sort((a, b) => (DOC_ORDER[a.type] || 5) - (DOC_ORDER[b.type] || 5));
+    g.hasSubmission = g.items.some(t => t.type === 'Submission');
+    return g;
+  });
+}
+function attentionApps(){ return D.applications.filter(a => appInfo(a).group === 'attention'); }
+function followUpsDue(){ return D.followUps.filter(f => f.status === 'Pending' && f.due && f.due <= todayIso()); }
+
+function updateBadges(){
+  if(!D) return;
+  const set = (id, n) => { const el = document.getElementById(id); el.textContent = n || ''; el.dataset.n = n; };
+  set('nReviews', reviewGroups().length);
+  set('nApps', attentionApps().length);
+  set('nFollow', followUpsDue().length);
+}
+
+/* -------------------------------- pages --------------------------------- */
+
+function header(title, sub, right){
+  return `<div class="top"><div><h1>${title}</h1>${sub ? `<p class="sub">${sub}</p>` : ''}</div>
+    <div class="sync">${right || ''}<span>Updated <span id="syncAge">${ago(loadedAt)}</span></span>
+    <button class="btn ghost tiny" onclick="load()" title="Reload data from the sheet">Refresh</button></div></div>`;
+}
+function emptyState(title, text){ return `<div class="empty"><b>${title}</b>${text || ''}</div>`; }
+function tabsHtml(key, tabs, cur){
+  return '<div class="tabs" role="tablist">' + tabs.map(t =>
+    `<button role="tab" aria-selected="${t.v===cur}" class="${t.v===cur?'on':''}" onclick="setFilter('${key}','${t.v}')">${t.label}${t.n != null ? `<span class="n">${t.n}</span>` : ''}</button>`).join('') + '</div>';
+}
+
+const PAGES = {};
+
 function render(){
   if(!D) return;
-  document.getElementById('revCount').textContent = D.reviews.length;
-  const m = document.getElementById('main');
- 
-  if(view === 'reviews'){
-    // Newest first. The sheet is oldest-first, so reversing it first keeps undated rows newest-first too.
-    const reviews = D.reviews.slice().reverse().sort((a, b) => (b.createdMs || 0) - (a.createdMs || 0));
-    const pg = paginate(reviews, 'revPage', F.revSize || 10);
-    m.innerHTML = '<h1>Review queue</h1>' + (reviews.length ? '' :
-      '<p class="mut">Nothing waiting. New CVs, cover letters, NHS statements and paused submissions appear here.</p>') +
-      pg.rows.map(t => `
-        <div class="card">
-          <b>${esc(t.summary)}</b> <span class="mut">${esc(t.type)} · ${esc(t.cand)} · score ${esc(t.score||'-')}</span>
-          <div style="margin-top:6px"><button class="btn tiny" style="background:#fff;color:var(--pine);border:1px solid var(--line)"
-            onclick="toggleFindings('${t.id}')">${OPEN_FINDINGS.has(t.id) ? 'Hide details' : 'Show details'}</button></div>
-          ${OPEN_FINDINGS.has(t.id) ? (FINDINGS[t.id] == null
-            ? '<div class="findings">Loading…</div>' : renderFindings(FINDINGS[t.id])) : ''}
-          <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
-            <button class="btn approve" onclick="decide('${t.id}','approve')">Approve</button>
-            <button class="btn reject" onclick="decide('${t.id}','revise')">Send back</button>
-            <span class="mut">${t.type === 'Submission'
-              ? 'Send back = not submitted (you can Retry it from Applications)'
-              : 'Send back = a new version is written from your notes and returns here'}</span>
-          </div>
-        </div>`).join('') +
-      (reviews.length ? `<div class="card">${pagerHtml(pg, 'revPage', 'revSize', [10, 25, 50])}</div>` : '');
-  }
- 
-  if(view === 'candidates'){
-    m.innerHTML = '<h1>Candidates</h1><div class="card"><table><tr><th>Name</th><th>Target roles</th><th>Progress</th><th>Target</th><th>Active</th><th></th></tr>' +
-      D.candidates.map(c => {
-        const pct = c.target > 0 ? Math.min(100, Math.round(100 * c.applied / c.target)) : 0;
-        return `<tr>
-          <td><b>${esc(c.name)}</b><br><span class="mut">${esc(c.id)} · ${esc(c.status)}</span></td>
-          <td>${esc(c.roles)}</td>
-          <td>${c.applied}${c.target>0?' / '+c.target:''}
-            ${c.target>0?`<div class="rail" style="margin-top:4px"><i class="done" style="width:${pct}%;max-width:100%"></i></div>`:''}
-          </td>
-          <td><input type="number" min="0" value="${c.target}" style="width:70px;padding:4px" onchange="setTarget('${c.id}', this.value)"></td>
-          <td><label class="tog"><input type="checkbox" ${c.active?'checked':''} onchange="setActive('${c.id}', this.checked)"> <span>${c.active?'Active':'Inactive'}</span></label></td>
-          <td><button class="btn danger tiny" onclick="delCandidate('${c.id}','${esc(c.name).replace(/'/g,"")}')">Delete</button></td>
-        </tr>`;
-      }).join('') +
-      '</table></div>';
-  }
- 
-  if(view === 'applications'){
-    const cands = uniq(D.applications.map(a => a.cand));
-    const statuses = uniq(D.applications.map(a => a.status));
-    let rows = D.applications.slice().reverse();
-    if(F.appCand) rows = rows.filter(a => a.cand === F.appCand);
-    if(F.appStatus) rows = rows.filter(a => a.status === F.appStatus);
-    m.innerHTML = '<h1>Applications</h1>' +
-      `<div class="filters">
-        <div><label>Candidate</label><select onchange="setFilter('appCand',this.value)">${opts(cands, F.appCand)}</select></div>
-        <div><label>Status</label><select onchange="setFilter('appStatus',this.value)">${opts(statuses, F.appStatus)}</select></div>
-       </div>` +
-      '<div class="card"><table><tr><th>Company / role</th><th>Candidate</th><th>ATS</th><th>Pipeline</th><th>Status</th><th>Proof</th><th></th></tr>' +
-      (rows.length ? rows.map(a => `<tr>
-        <td><b>${esc(a.company)}</b><br><span class="mut">${esc(a.title)}</span></td>
-        <td class="mut">${esc(a.cand)}</td><td>${esc(a.ats)}</td>
-        <td>${rail(a.status)}</td><td>${chip(a.status)}</td>
-        <td>${a.shot ? `<a href="${esc(a.shot)}">screenshot</a>` : '<span class="mut">-</span>'}</td>
-        <td>${(a.status==='Failed'||a.status==='Error'||a.status==='Rejected')?`<button class="btn primary tiny" onclick="retryApp('${a.id}')">Retry</button>`:''}</td></tr>`).join('')
-        : '<tr><td colspan="7" class="mut">No applications match.</td></tr>') +
-      '</table></div>';
-  }
- 
-  if(view === 'generate'){
-    m.innerHTML = `<h1>Generate CV + cover letter</h1>
-      <div class="card">
-        <label>Candidate</label>
-        <select id="gCand">${D.candidates.map(c => `<option value="${esc(c.id)}">${esc(c.name)} (${esc(c.id)})</option>`).join('')}</select>
-        <label>Job URL (optional)</label><input id="gUrl" placeholder="https://...">
-        <label>Paste the job description</label><textarea id="gJD"></textarea>
-        <label>Tone profile</label>
-        <select id="gTone"><option>Jobverse Standard</option><option>NHS</option><option>Corporate</option><option>Technical</option><option>Executive</option><option>Graduate</option></select>
-        <div style="margin-top:12px"><button class="btn primary" onclick="gen()">Generate documents</button> <span class="mut" id="gMsg"></span></div>
-      </div>`;
-  }
- 
-  if(view === 'prospects'){
-    // Restore the persisted candidate selection from localStorage
-    const persistedCand = loadFindJobsCandidate();
-    if(persistedCand && D.candidates.some(c => c.id === persistedCand)) {
-      F.pCand = persistedCand;
-    } else if(D.candidates.length && !D.candidates.some(c => c.id === F.pCand)) {
-      F.pCand = D.candidates[0].id;
-    }
-    const cands = uniq(D.prospects.map(p => p.cand));
-    const statuses = uniq(D.prospects.map(p => p.status));
-    let rows = D.prospects;
-    if(F.prosCand) rows = rows.filter(p => p.cand === F.prosCand);
-    if(F.prosStatus) rows = rows.filter(p => p.status === F.prosStatus);
-
-    // Sort by the day the job was found. Rows with no FoundAt always go last.
-    const sort = F.prosSort || 'newest';
-    const dir = sort === 'oldest' ? 1 : -1;
-    rows = rows.slice().sort((a, b) => {
-      if(!a.found !== !b.found) return a.found ? -1 : 1;
-      return (a.found - b.found) * dir;
-    });
-
-    const pg = paginate(rows, 'prosPage', F.prosSize || 25);
-    const pageRows = pg.rows, total = pg.total;
-    m.innerHTML = `<h1>Prospects</h1>
-      <div class="card">
-        <label>Find jobs for candidate</label>
-        <select id="pCand" onchange="setFindJobsCandidate(this.value)">${D.candidates.map(c => `<option value="${esc(c.id)}" ${c.id===F.pCand?'selected':''}>${esc(c.name)} (${esc(c.id)})</option>`).join('')}</select>
-        <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          <button class="btn primary" onclick="findJobs()">Find jobs</button>
-          <span class="mut" style="margin-left:6px">Queue newest found:</span>
-          ${[5, 10, 20].map(n => `<button class="btn approve qbtn" onclick="queueAll(${n})">${n}</button>`).join('')}
-          <button class="btn approve qbtn" onclick="queueAll(0)">All</button>
-          <span class="mut">${(() => { const n = D.prospects.filter(p => p.cand === F.pCand && FOUND_STATUSES.includes(p.status)).length; return n + ' found ready to queue'; })()}</span>
-          <span class="mut" id="pMsg"></span>
-        </div>
-      </div>
-      <div class="filters">
-        <div><label>Candidate</label><select onchange="setFilter('prosCand',this.value)">${opts(cands, F.prosCand)}</select></div>
-        <div><label>Status</label><select onchange="setFilter('prosStatus',this.value)">${opts(statuses, F.prosStatus)}</select></div>
-        <div><label>Date found</label><select onchange="setFilter('prosSort',this.value)">
-          <option value="newest" ${sort==='newest'?'selected':''}>Newest first</option>
-          <option value="oldest" ${sort==='oldest'?'selected':''}>Oldest first</option>
-        </select></div>
-      </div>
-      <div class="card"><table><tr><th>Found</th><th>Candidate</th><th>Company</th><th>Role</th><th>Source</th><th>Status</th><th>Link</th><th>Action</th></tr>` +
-      (pageRows.length ? pageRows.map(p => `<tr>
-        <td class="mut" style="white-space:nowrap" title="${esc(p.found ? new Date(p.found).toLocaleString('en-GB') : 'No date recorded')}">${esc(foundDay(p.found))}</td>
-        <td class="mut">${esc(p.cand)}</td><td><b>${esc(p.company)}</b></td><td>${esc(p.title)}</td><td class="mut">${esc(p.source||'')}</td>
-        <td>${chip(p.status)}</td><td>${p.url?`<a href="${esc(p.url)}">open</a>`:''}</td>
-        <td>${p.status === 'Queued' ? '<span class="mut">queued</span>' :
-          `<button class="btn approve tiny" onclick="prospectAction('${p.id}','Queued')">Queue</button>
-           <button class="btn reject tiny" onclick="prospectAction('${p.id}','Skipped')">Skip</button>`}</td>
-        </tr>`).join('') :
-      '<tr><td colspan="8" class="mut">No prospects match. Use "Find jobs" above, or add rows manually in the Prospects tab of the sheet.</td></tr>') +
-      '</table>' + (total ? pagerHtml(pg, 'prosPage', 'prosSize', [25, 50, 100]) : '') + '</div>';
-  }
- 
-  if(view === 'followups'){
-    const n = new Date(), pad = x => String(x).padStart(2, '0');
-    const today = `${n.getFullYear()}-${pad(n.getMonth() + 1)}-${pad(n.getDate())}`; // local date, like the server's due dates
-    m.innerHTML = '<h1>Follow-ups</h1><div class="card"><table><tr><th>Type</th><th>Candidate</th><th>Company / role</th><th>Due</th><th>Status</th><th>Action</th></tr>' +
-      (D.followUps.length ? D.followUps.map(f => {
-        const dueDate = f.due || ''; // yyyy-MM-dd from dashData
-        const overdue = f.status === 'Pending' && dueDate && dueDate <= today;
-        return `<tr>
-          <td>${esc(f.type)}</td><td class="mut">${esc(f.cand)}</td>
-          <td><b>${esc(f.company)}</b><br><span class="mut">${esc(f.title)}</span></td>
-          <td>${overdue ? `<span class="chip c-fail">${esc(dueDate)} - due</span>` : esc(dueDate)}</td>
-          <td>${chip(f.status)}</td>
-          <td>${f.status==='Pending'?`<button class="btn approve tiny" onclick="markFollowUpDone('${f.id}')">Mark done</button>`:'<span class="mut">-</span>'}</td>
-        </tr>`;
-      }).join('') : '<tr><td colspan="6" class="mut">Nothing tracked yet. Every submitted application gets a follow-up here.</td></tr>') +
-      '</table></div>';
-  }
- 
-  if(view === 'accounts'){
-    const accts = (D.accounts || []).slice().reverse();
-    m.innerHTML = '<h1>Site accounts</h1><p class="mut">Accounts the extension created or signs in to for candidates on job sites that require one - one per candidate per site, reused on later applications there. Passwords are random per account and only shown on request, to authorised reviewers.</p>' +
-      '<div class="card"><table><tr><th>Candidate</th><th>Site</th><th>Login email</th><th>Status</th><th>Notes</th><th></th></tr>' +
-      (accts.length ? accts.map(a => `<tr>
-        <td class="mut">${esc(a.cand)}</td><td><b>${esc(a.site)}</b></td><td>${esc(a.email)}</td>
-        <td>${chip(a.status)}</td><td class="mut">${esc(a.notes||'')}</td>
-        <td><button class="btn tiny" onclick="revealPassword('${esc(a.id)}')">Show password</button></td>
-      </tr>`).join('') : '<tr><td colspan="6" class="mut">No site accounts yet. They appear here when the extension meets a sign-up or sign-in page.</td></tr>') +
-      '</table></div>';
-  }
-
-  if(view === 'report'){
-    const r = D.report;
-    m.innerHTML = '<h1>Latest report</h1>' + (!r ? '<p class="mut">No report yet. Run runDailyReport() in Apps Script or wait for the 07:00 trigger.</p>' :
-      `<p class="mut" style="margin-bottom:12px">${esc(r.period)} · ${esc(r.summary)}</p>
-       <div class="grid">
-         ${stat(r.metrics.applications_submitted,'Submitted')}
-         ${stat(r.metrics.applications_started,'Started')}
-         ${stat(r.metrics.success_rate_pct+'%','Success rate')}
-         ${stat(r.metrics.interviews,'Interviews')}
-         ${stat(r.metrics.interview_rate_pct+'%','Interview rate')}
-         ${stat(r.metrics.offers,'Offers')}
-         ${stat(r.metrics.avg_review_minutes+'m','Avg review time')}
-         ${stat(r.metrics.prospects_found,'Prospects found')}
-       </div>`);
-  }
- 
-  if(view === 'log'){
-    const actors = uniq(D.log.map(l => l.actor));
-    const actions = uniq(D.log.map(l => l.action));
-    let rows = D.log;
-    if(F.logActor) rows = rows.filter(l => l.actor === F.logActor);
-    if(F.logAction) rows = rows.filter(l => l.action === F.logAction);
-    m.innerHTML = '<h1>Activity</h1>' +
-      `<div class="filters">
-        <div><label>Actor</label><select onchange="setFilter('logActor',this.value)">${opts(actors, F.logActor)}</select></div>
-        <div><label>Action</label><select onchange="setFilter('logAction',this.value)">${opts(actions, F.logAction)}</select></div>
-        <div style="flex:0"><label>&nbsp;</label><button class="btn danger" onclick="clearLog()">Clear log</button></div>
-       </div>` +
-      '<div class="card"><table><tr><th>Time</th><th>Actor</th><th>Action</th><th>Detail</th></tr>' +
-      rows.map(l => `<tr><td class="mut">${esc(l.t).slice(0,24)}</td><td>${esc(l.actor)}</td><td><b>${esc(l.action)}</b></td><td class="mut">${esc(l.detail)}</td></tr>`).join('') +
-      '</table></div>';
-  }
- 
-  if(view === 'help'){ m.innerHTML = HELP_HTML; }
+  updateBadges();
+  document.getElementById('main').innerHTML = (PAGES[view] || PAGES.home)();
 }
- 
-function stat(v,l){ return `<div class="stat"><b>${esc(v)}</b><span>${esc(l)}</span></div>`; }
-function pretty(j){ try { return JSON.stringify(JSON.parse(j), null, 2); } catch(e){ return j || ''; } }
- 
+
+PAGES.home = () => {
+  const groups = reviewGroups(), att = attentionApps(), due = followUpsDue();
+  const queued = D.prospects.filter(p => p.status === 'Queued').length;
+  const weekAgo = Date.now() - 7 * DAY;
+  const subWeek = D.applications.filter(a => a.status === 'Submitted' && a.submittedMs > weekAgo).length;
+  const inFlight = D.applications.filter(a => appInfo(a).group === 'flight').length;
+  const w = agentState('worker'), x = agentState('extension');
+  const agent = (name, s, hint) => `<div class="agent"><span class="dot ${s.ok ? 'ok' : s.seen ? 'bad' : 'idle'}"></span>
+    <b>${name}</b><span class="mut">${s.ok ? 'running - checked in ' + ago(s.seen) : s.seen ? 'not seen since ' + ago(s.seen) : 'never seen'}</span>
+    ${!s.ok ? `<span class="mut">· ${hint}</span>` : ''}</div>`;
+  const stat = (n, label, to, hot) => `<button class="stat ${hot && n ? 'hot' : ''}" onclick="go(${to})"><b>${n}</b><span>${label}</span></button>`;
+
+  const todo = [];
+  groups.slice(0, 3).forEach(g => todo.push({ text: `Review <b>${esc(g.summary)}</b> for ${esc(candName(g.cand))}`, meta: g.items.map(t => DOC_LABEL[t.type] || t.type).join(', '), to: `'reviews'` }));
+  att.slice(0, 3).forEach(a => todo.push({ text: `<b>${esc(a.company)}</b> - ${esc(a.title)} (${esc(candName(a.cand))})`, meta: appInfo(a).label, to: `'applications',{appTab:'attention'}` }));
+  due.slice(0, 3).forEach(f => todo.push({ text: `Check for a reply from <b>${esc(f.company)}</b> (${esc(candName(f.cand))})`, meta: 'Follow-up due ' + esc(f.due), to: `'followups'` }));
+
+  return header('Overview', 'What needs a person right now, and whether the automation is running.') +
+    `<div class="grid">
+      ${stat(groups.length, 'jobs waiting for review', "'reviews'", true)}
+      ${stat(att.length, 'applications need attention', "'applications',{appTab:'attention'}", true)}
+      ${stat(due.length, 'follow-ups due', "'followups',{fuTab:'due'}", true)}
+      ${stat(inFlight, 'applications in progress', "'applications',{appTab:'flight'}")}
+      ${stat(queued, 'jobs queued to apply', "'prospects',{prosStatus:'Queued'}")}
+      ${stat(subWeek, 'submitted in the last 7 days', "'applications',{appTab:'done'}")}
+    </div>
+    <div class="card"><h2>Automation</h2><div class="agents">
+      ${agent('Background worker', w, 'start it with npm start in the worker folder')}
+      ${agent('Chrome extension', x, 'open Chrome with the extension connected')}
+    </div><p class="mut" style="margin-top:10px">Approved applications are submitted by whichever one filled them. If the one it needs isn't running, the application waits under Applications &rsaquo; Needs attention.</p></div>
+    <div class="card flush"><div style="padding:14px 18px 4px"><h2>To do</h2></div>` +
+    (todo.length ? '<table>' + todo.map(t => `<tr><td>${t.text}<div class="mut">${t.meta}</div></td>
+        <td style="text-align:right;width:1%"><button class="btn ghost tiny" onclick="go(${t.to})">Open</button></td></tr>`).join('') + '</table>'
+      : emptyState('All caught up', 'Nothing needs a person right now.')) + '</div>';
+};
+
+PAGES.reviews = () => {
+  let groups = reviewGroups().sort((a, b) => (a.oldest || 0) - (b.oldest || 0)); // oldest first: it has waited longest
+  const cands = uniq(groups.map(g => g.cand));
+  if(F.revCand) groups = groups.filter(g => g.cand === F.revCand);
+  if(F.revQ) groups = groups.filter(g => matches(F.revQ, g.summary, candName(g.cand)));
+  const pg = paginate(groups, 'revPage', F.revSize || 10);
+  return header('Review queue', 'One card per job. Check the CV and cover letter, then approve the final application - approving that one is what submits it to the employer.') +
+    `<div class="toolbar">
+      <div><label>Candidate</label><select onchange="setFilter('revCand',this.value)"><option value="">All candidates</option>${cands.map(c => `<option value="${esc(c)}" ${c===F.revCand?'selected':''}>${esc(candName(c))}</option>`).join('')}</select></div>
+      <div class="grow"><label>Search</label><input type="search" placeholder="Company or role" value="${esc(F.revQ || '')}" oninput="setSearch('revQ',this)"></div>
+    </div>` +
+    (pg.total ? pg.rows.map(reviewGroupHtml).join('') + `<div class="card flush">${pagerHtml(pg, 'revPage', 'revSize', [10, 25, 50])}</div>`
+      : `<div class="card">${emptyState(D.reviews.length ? 'No jobs match' : 'Nothing waiting', D.reviews.length ? 'Try clearing the filters.' : 'New CVs, cover letters, NHS statements and finished applications appear here.')}</div>`);
+};
+
+function reviewGroupHtml(g){
+  const docs = g.items.filter(t => t.type !== 'Submission');
+  return `<div class="rgroup">
+    <div class="rhead"><div><h3>${esc(g.summary)}</h3>
+      <div class="mut">${esc(candName(g.cand))} · ${g.items.length} item${g.items.length > 1 ? 's' : ''} to check${g.oldest !== Infinity ? ' · first added ' + esc(ago(g.oldest)) : ''}</div></div>
+      ${g.items.length > 1 ? `<button class="btn approve" onclick="approveGroup('${encodeURIComponent(g.key).replace(/'/g, '%27')}')">Approve all ${g.items.length}${g.hasSubmission ? ' &amp; submit' : ''}</button>` : ''}
+    </div>
+    ${g.items.map(t => reviewItemHtml(t, docs.length)).join('')}
+  </div>`;
+}
+
+function reviewItemHtml(t, docCount){
+  const isSub = t.type === 'Submission';
+  const n = parseFloat(t.score);
+  const score = isNaN(n) ? '' : `<span class="score ${n < 60 ? 'lo' : n >= 80 ? 'hi' : ''}" title="Reviewer Agent ATS score">score ${esc(t.score)}</span>`;
+  const open = OPEN_FINDINGS.has(t.id);
+  return `<div class="ritem ${isSub ? 'sub' : ''}">
+    <div class="row">
+      <div class="what"><span class="kind">${esc(DOC_LABEL[t.type] || t.type)}</span>${score}
+        ${t.docUrl ? `<a href="${esc(t.docUrl)}" class="small">Open document</a>` : ''}
+        <button class="linkbtn" onclick="toggleFindings('${t.id}')" aria-expanded="${open}">${open ? 'Hide' : isSub ? 'What will be sent' : 'Reviewer findings'}</button>
+        <span class="mut">${esc(ago(t.createdMs))}</span>
+      </div>
+      <div class="acts">
+        <button class="btn approve tiny" onclick="decide('${t.id}','approve')">${isSub ? 'Approve &amp; submit' : 'Approve'}</button>
+        <button class="btn reject tiny" onclick="decide('${t.id}','revise')">${isSub ? "Don't submit" : 'Send back'}</button>
+      </div>
+    </div>
+    ${isSub && docCount ? `<div class="mut" style="margin-top:4px">Check the ${docCount > 1 ? 'documents' : 'document'} above first - they are what gets attached.</div>` : ''}
+    ${open ? (FINDINGS[t.id] == null ? '<div class="findings">Loading…</div>' : renderFindings(FINDINGS[t.id])) : ''}
+  </div>`;
+}
+
+PAGES.applications = () => {
+  const all = D.applications.slice().sort((a, b) => (b.createdMs || 0) - (a.createdMs || 0));
+  const tab = F.appTab || 'all';
+  const count = g => all.filter(a => appInfo(a).group === g).length;
+  let rows = tab === 'all' ? all : all.filter(a => appInfo(a).group === tab);
+  if(F.appCand) rows = rows.filter(a => a.cand === F.appCand);
+  if(F.appQ) rows = rows.filter(a => matches(F.appQ, a.company, a.title, a.ats, candName(a.cand)));
+  const pg = paginate(rows, 'appPage', F.appSize || 25);
+  const stuck = all.filter(a => appInfo(a).stuck);
+  return header('Applications', 'Every application the worker or extension has started, from filling the form to the employer\'s confirmation.') +
+    (stuck.length ? `<div class="note bad"><b>${stuck.length} approved application${stuck.length > 1 ? 's have' : ' has'} not been submitted.</b> ${esc(stuckReason(stuck[0]))}
+      If you submitted one by hand or can see it on the employer's site, use <b>Mark submitted</b>; otherwise <b>Retry</b> runs it again from the start.</div>` : '') +
+    tabsHtml('appTab', [
+      { v: 'all', label: 'All', n: all.length }, { v: 'attention', label: 'Needs attention', n: count('attention') },
+      { v: 'flight', label: 'In progress', n: count('flight') }, { v: 'done', label: 'Submitted', n: count('done') },
+      { v: 'closed', label: 'Closed', n: count('closed') }], tab) +
+    `<div class="toolbar">
+      <div><label>Candidate</label><select onchange="setFilter('appCand',this.value)">${candOpts(F.appCand, 'All candidates')}</select></div>
+      <div class="grow"><label>Search</label><input type="search" placeholder="Company, role or ATS" value="${esc(F.appQ || '')}" oninput="setSearch('appQ',this)"></div>
+    </div>
+    <div class="card flush"><div class="tablewrap"><table><tr><th>Company / role</th><th>Candidate</th><th>Status</th><th>Started</th><th>Proof</th><th></th></tr>` +
+    (pg.rows.length ? pg.rows.map(appRowHtml).join('')
+      : `<tr><td colspan="6">${emptyState('No applications here', tab === 'attention' ? 'Nothing is stuck or failed.' : 'Try another tab or clear the filters.')}</td></tr>`) +
+    '</table></div>' + (pg.total ? pagerHtml(pg, 'appPage', 'appSize', [25, 50, 100]) : '') + '</div>';
+};
+
+function appRowHtml(a){
+  const s = appInfo(a);
+  const canRetry = a.status === 'Rejected' || s.group === 'attention';
+  const canMark = s.stuck || s.unconfirmed || (s.approved && !s.stuck);
+  const hint = s.stuck ? stuckReason(a) : s.unconfirmed ? 'Submit was clicked but no confirmation was seen. Check the employer\'s site or the candidate\'s inbox.'
+    : (a.status === 'Failed' || a.status === 'Error') && a.lastError ? a.lastError : '';
+  return `<tr>
+    <td><b>${esc(a.company)}</b>${a.url ? ` <a href="${esc(a.url)}" class="small">posting</a>` : ''}<br><span class="mut">${esc(a.title)}${a.ats ? ' · ' + esc(a.ats) : ''}</span></td>
+    <td class="mut">${esc(candName(a.cand))}</td>
+    <td>${appChip(a)}${rail(a.status)}${hint ? `<div class="${s.group === 'attention' ? 'err' : 'mut'}" style="max-width:360px">${esc(hint)}</div>` : ''}
+      ${a.outcome ? `<div style="margin-top:4px">${chip(a.outcome)}</div>` : ''}</td>
+    <td class="mut nowrap" title="${a.createdMs ? esc(new Date(a.createdMs).toLocaleString('en-GB')) : ''}">${esc(shortDate(a.createdMs))}${a.submittedMs ? `<br>sent ${esc(shortDate(a.submittedMs))}` : ''}</td>
+    <td>${a.shot ? `<a href="${esc(a.shot)}">screenshot</a>` : '<span class="mut">-</span>'}</td>
+    <td><div class="acts" style="justify-content:flex-end">
+      ${canMark ? `<button class="btn approve tiny" onclick="markSubmitted('${a.id}')">Mark submitted</button>` : ''}
+      ${canRetry ? `<button class="btn ghost tiny" onclick="retryApp('${a.id}')">Retry</button>` : ''}
+    </div></td></tr>`;
+}
+
+PAGES.followups = () => {
+  const tab = F.fuTab || 'due', today = todayIso();
+  const open = D.followUps.filter(f => f.status === 'Pending');
+  const lists = {
+    due: open.filter(f => f.due && f.due <= today),
+    upcoming: open.filter(f => !f.due || f.due > today),
+    closed: D.followUps.filter(f => f.status !== 'Pending')
+  };
+  let rows = lists[tab] || lists.due;
+  if(F.fuCand) rows = rows.filter(f => f.cand === F.fuCand);
+  rows = rows.slice().sort((a, b) => tab === 'closed' ? String(b.due).localeCompare(String(a.due)) : String(a.due).localeCompare(String(b.due)));
+  const pg = paginate(rows, 'fuPage', 25);
+  return header('Follow-ups', 'Reminders for your team, not for the client.') +
+    `<div class="note"><b>What these are:</b> ${esc(String(D.followUpDays || 7))} days after an application is submitted, Jobverse reminds you to check whether the employer has replied.
+      Look in the candidate's application inbox, then record what happened - <b>Interview</b>, <b>Offer</b> or <b>Rejected</b> is also saved on the application and counted in Reports.
+      No reply yet? <b>Check again in 7 days</b> moves it back so it stops nagging. NHS Trac reminders are for claiming and verifying the application on Trac after the vacancy closes.</div>` +
+    tabsHtml('fuTab', [{ v: 'due', label: 'Due now', n: lists.due.length }, { v: 'upcoming', label: 'Upcoming', n: lists.upcoming.length }, { v: 'closed', label: 'Closed', n: lists.closed.length }], tab) +
+    `<div class="toolbar"><div><label>Candidate</label><select onchange="setFilter('fuCand',this.value)">${candOpts(F.fuCand, 'All candidates')}</select></div></div>
+    <div class="card flush"><div class="tablewrap"><table><tr><th>Due</th><th>Company / role</th><th>Candidate</th><th>What to do</th><th>${tab === 'closed' ? 'Result' : ''}</th></tr>` +
+    (pg.rows.length ? pg.rows.map(f => {
+      const d = daysUntil(f.due);
+      const when = f.status !== 'Pending' ? esc(f.due) : d == null ? '-' : d < 0 ? `<span class="chip c-fail">${-d} day${d < -1 ? 's' : ''} overdue</span>`
+        : d === 0 ? '<span class="chip c-prog">Today</span>' : `in ${d} day${d > 1 ? 's' : ''}`;
+      const lastNote = String(f.notes || '').trim().split('\n').pop();
+      const isTrac = /Trac/i.test(f.type);
+      return `<tr>
+        <td class="nowrap">${when}<div class="mut">${esc(f.due)}</div></td>
+        <td><b>${esc(f.company)}</b><br><span class="mut">${esc(f.title)}</span></td>
+        <td class="mut">${esc(candName(f.cand))}</td>
+        <td><span class="small"><b>${esc(isTrac ? 'Claim / verify on NHS Trac' : 'Check for a reply')}</b></span><div class="mut" style="max-width:340px">${esc(lastNote)}</div></td>
+        <td>${f.status === 'Pending' ? `<div class="acts" style="justify-content:flex-end">
+            ${isTrac ? `<button class="btn approve tiny" onclick="resolveFollowUp('${f.id}','Done')">Done</button>` : `
+            <select style="width:auto;padding:4px 6px;font-size:12.5px" aria-label="Record what happened" onchange="if(this.value){resolveFollowUp('${f.id}',this.value);this.value=''}">
+              <option value="">Record reply…</option><option>Interview</option><option>Offer</option><option>Rejected</option><option value="No reply">No reply - stop chasing</option><option value="Not needed">Not needed</option>
+            </select>
+            <button class="btn ghost tiny" onclick="snoozeFollowUp('${f.id}')">Check again in 7 days</button>`}
+          </div>` : chip(f.outcome || f.status)}</td>
+      </tr>`;
+    }).join('') : `<tr><td colspan="5">${emptyState(tab === 'due' ? 'Nothing due' : 'Nothing here', tab === 'due' ? 'Every submitted application gets a follow-up here a week later.' : '')}</td></tr>`) +
+    '</table></div>' + (pg.total ? pagerHtml(pg, 'fuPage', null, null) : '') + '</div>';
+};
+
+PAGES.prospects = () => {
+  // The candidate picked here drives Find jobs, the Queue buttons and the table
+  const persisted = loadFindJobsCandidate();
+  if(F.pCand === undefined) F.pCand = persisted && D.candidates.some(c => c.id === persisted) ? persisted : (D.candidates[0] ? D.candidates[0].id : '');
+  let rows = D.prospects;
+  if(F.pCand) rows = rows.filter(p => p.cand === F.pCand);
+  const statuses = uniq(rows.map(p => p.status)).sort();
+  if(F.prosStatus) rows = rows.filter(p => p.status === F.prosStatus);
+  if(F.prosQ) rows = rows.filter(p => matches(F.prosQ, p.company, p.title, p.source));
+  const dir = (F.prosSort || 'newest') === 'oldest' ? 1 : -1;
+  rows = rows.slice().sort((a, b) => (!a.found !== !b.found) ? (a.found ? -1 : 1) : (a.found - b.found) * dir); // undated last
+  const pg = paginate(rows, 'prosPage', F.prosSize || 25);
+  const ready = F.pCand ? D.prospects.filter(p => p.cand === F.pCand && FOUND_STATUSES.includes(p.status)).length : 0;
+  const one = !!F.pCand;
+  return header('Find &amp; queue jobs', 'Search the job boards for a candidate, then queue the jobs to apply to. Queued jobs are picked up by the worker (or the extension\'s Run queue).') +
+    `<div class="card">
+      <div class="toolbar" style="margin-bottom:0">
+        <div class="grow"><label for="pCand">Candidate</label><select id="pCand" onchange="setFindJobsCandidate(this.value)">${candOpts(F.pCand, 'All candidates (view only)')}</select></div>
+        <div style="flex:0"><button class="btn primary" onclick="findJobs()" ${one ? '' : 'disabled title="Pick a candidate first"'}>Find new jobs</button></div>
+      </div>
+      <div class="acts" style="margin-top:12px">
+        <span class="mut">${one ? `<b style="color:var(--ink)">${ready}</b> found and ready to queue. Queue the newest:` : 'Pick a candidate to queue jobs.'}</span>
+        ${[5, 10, 20].map(n => `<button class="btn approve tiny qbtn" onclick="queueAll(${n})" ${one && ready ? '' : 'disabled'}>${n}</button>`).join('')}
+        <button class="btn approve tiny qbtn" onclick="queueAll(0)" ${one && ready ? '' : 'disabled'}>All ${one ? ready : ''}</button>
+        <span class="mut" id="pMsg"></span>
+      </div>
+    </div>
+    <div class="toolbar">
+      <div><label>Status</label><select onchange="setFilter('prosStatus',this.value)">${opts(statuses, F.prosStatus, 'Any status')}</select></div>
+      <div><label>Sort</label><select onchange="setFilter('prosSort',this.value)">
+        <option value="newest" ${dir < 0 ? 'selected' : ''}>Newest found first</option><option value="oldest" ${dir > 0 ? 'selected' : ''}>Oldest found first</option></select></div>
+      <div class="grow"><label>Search</label><input type="search" placeholder="Company, role or source" value="${esc(F.prosQ || '')}" oninput="setSearch('prosQ',this)"></div>
+    </div>
+    <div class="card flush"><div class="tablewrap"><table><tr><th>Found</th>${one ? '' : '<th>Candidate</th>'}<th>Company / role</th><th>Source</th><th>Status</th><th></th></tr>` +
+    (pg.rows.length ? pg.rows.map(p => `<tr>
+      <td class="mut nowrap" title="${esc(p.found ? new Date(p.found).toLocaleString('en-GB') : 'No date recorded')}">${esc(foundDay(p.found))}</td>
+      ${one ? '' : `<td class="mut">${esc(candName(p.cand))}</td>`}
+      <td><b>${esc(p.company)}</b>${p.url ? ` <a href="${esc(p.url)}" class="small">open</a>` : ''}<br><span class="mut">${esc(p.title)}</span></td>
+      <td class="mut">${esc(p.source || '')}</td><td>${chip(p.status)}</td>
+      <td><div class="acts" style="justify-content:flex-end">${p.status === 'Queued' ? '<span class="mut">queued</span>' :
+        `<button class="btn approve tiny" onclick="prospectAction('${p.id}','Queued')">Queue</button>
+         ${/^Skipped/.test(p.status) ? '' : `<button class="btn ghost tiny" onclick="prospectAction('${p.id}','Skipped')">Skip</button>`}`}</div></td>
+      </tr>`).join('') :
+    `<tr><td colspan="6">${emptyState('No jobs here yet', one ? 'Use "Find new jobs" above, or add rows in the Prospects tab of the sheet.' : '')}</td></tr>`) +
+    '</table></div>' + (pg.total ? pagerHtml(pg, 'prosPage', 'prosSize', [25, 50, 100]) : '') + '</div>';
+};
+
+PAGES.generate = () => header('Generate documents', 'Write a tailored CV and cover letter for one job by hand - both go to the Review queue. For applying, queueing the job is usually easier.') +
+  `<div class="card">
+    <label for="gCand">Candidate</label><select id="gCand">${candOpts(F.pCand || loadFindJobsCandidate())}</select>
+    <label for="gUrl">Job URL (optional)</label><input id="gUrl" placeholder="https://...">
+    <label for="gJD">Job description</label><textarea id="gJD" placeholder="Paste the full job advert"></textarea>
+    <label for="gTone">Tone</label>
+    <select id="gTone"><option>Jobverse Standard</option><option>NHS</option><option>Corporate</option><option>Technical</option><option>Executive</option><option>Graduate</option></select>
+    <div class="acts" style="margin-top:14px"><button class="btn primary" id="gBtn" onclick="gen()">Generate CV + cover letter</button> <span class="mut" id="gMsg"></span></div>
+  </div>`;
+
+PAGES.candidates = () => {
+  let rows = D.candidates;
+  if(F.candQ) rows = rows.filter(c => matches(F.candQ, c.name, c.email, c.id, c.roles, c.location));
+  if(F.candActive === 'active') rows = rows.filter(c => c.active);
+  if(F.candActive === 'inactive') rows = rows.filter(c => !c.active);
+  return header('Candidates', 'New candidates arrive from the intake Google Form. Inactive candidates are skipped everywhere; nothing is deleted.') +
+    `<div class="toolbar">
+      <div><label>Show</label><select onchange="setFilter('candActive',this.value)">
+        <option value="">Everyone</option><option value="active" ${F.candActive==='active'?'selected':''}>Active</option><option value="inactive" ${F.candActive==='inactive'?'selected':''}>Inactive</option></select></div>
+      <div class="grow"><label>Search</label><input type="search" placeholder="Name, email, role or location" value="${esc(F.candQ || '')}" oninput="setSearch('candQ',this)"></div>
+    </div>
+    <div class="card flush"><div class="tablewrap"><table><tr><th>Candidate</th><th>Looking for</th><th>Applied</th><th>Target</th><th>Active</th><th></th></tr>` +
+    (rows.length ? rows.map(c => {
+      const pct = c.target > 0 ? Math.min(100, Math.round(100 * c.applied / c.target)) : 0;
+      return `<tr>
+        <td><b>${esc(c.name)}</b><br><span class="mut">${esc(c.email || '')}</span><br><span class="mut small">${esc(c.id)}${c.status ? ' · ' + esc(c.status) : ''}</span></td>
+        <td>${esc(c.roles || '-')}${c.location ? `<br><span class="mut">${esc(c.location)}</span>` : ''}</td>
+        <td class="nowrap">${c.applied}${c.target > 0 ? ' of ' + c.target : ''}${c.target > 0 ? `<div class="bar"><i style="width:${pct}%"></i></div>` : ''}</td>
+        <td><input type="number" min="0" value="${c.target}" style="width:76px;padding:5px" aria-label="Target applications for ${esc(c.name)}" title="0 = no limit" onchange="setTarget('${c.id}', this.value)"></td>
+        <td><label class="tog"><input type="checkbox" ${c.active?'checked':''} onchange="setActive('${c.id}', this.checked)"> <span>${c.active?'Active':'Inactive'}</span></label></td>
+        <td style="text-align:right"><div class="acts" style="justify-content:flex-end">
+          <button class="btn ghost tiny" onclick="go('applications',{appCand:'${c.id}',appTab:'all'})">Applications</button>
+          <button class="btn danger tiny" onclick="delCandidate('${c.id}')">Delete</button></div></td>
+      </tr>`;
+    }).join('') : `<tr><td colspan="6">${emptyState('No candidates match', '')}</td></tr>`) +
+    '</table></div></div>';
+};
+
+PAGES.accounts = () => {
+  const accts = (D.accounts || []).slice().reverse().filter(a => matches(F.accQ, a.site, a.email, candName(a.cand)));
+  return header('Site accounts', 'Accounts the extension created on job sites that need one - one per candidate per site, reused on later applications there. Passwords are random and only shown to authorised reviewers.') +
+    `<div class="toolbar"><div class="grow"><label>Search</label><input type="search" placeholder="Site, email or candidate" value="${esc(F.accQ || '')}" oninput="setSearch('accQ',this)"></div></div>
+    <div class="card flush"><div class="tablewrap"><table><tr><th>Site</th><th>Candidate</th><th>Login email</th><th>Status</th><th>Notes</th><th></th></tr>` +
+    (accts.length ? accts.map(a => `<tr>
+      <td><b>${esc(a.site)}</b></td><td class="mut">${esc(candName(a.cand))}</td><td>${esc(a.email)}</td>
+      <td>${chip(a.status)}</td><td class="mut">${esc(a.notes || '')}</td>
+      <td><button class="btn ghost tiny" onclick="revealPassword('${esc(a.id)}')">Show password</button></td>
+    </tr>`).join('') : `<tr><td colspan="6">${emptyState('No site accounts yet', 'They appear when the extension meets a sign-up or sign-in page.')}</td></tr>`) +
+    '</table></div></div>';
+};
+
+PAGES.report = () => {
+  const r = D.report;
+  const stat = (v, l) => `<div class="stat"><b>${esc(v)}</b><span>${esc(l)}</span></div>`;
+  return header('Reports', r ? esc(r.period) + ' report · ' + esc(r.summary) : '') + (!r
+    ? `<div class="card">${emptyState('No report yet', 'Run runDailyReport() in Apps Script, or wait for the 07:00 trigger.')}</div>`
+    : `<div class="grid">
+       ${stat(r.metrics.applications_submitted, 'Submitted')}
+       ${stat(r.metrics.applications_started, 'Started')}
+       ${stat(r.metrics.success_rate_pct + '%', 'Started that were submitted')}
+       ${stat(r.metrics.interviews, 'Interviews')}
+       ${stat(r.metrics.interview_rate_pct + '%', 'Interview rate')}
+       ${stat(r.metrics.offers, 'Offers')}
+       ${stat(r.metrics.avg_review_minutes + ' min', 'Average time to review')}
+       ${stat(r.metrics.prospects_found, 'Jobs found')}
+     </div>
+     <p class="mut">Interviews and offers come from what you record on Follow-ups.</p>`);
+};
+
+PAGES.log = () => {
+  const actors = uniq(D.log.map(l => l.actor)), actions = uniq(D.log.map(l => l.action));
+  let rows = D.log;
+  if(F.logActor) rows = rows.filter(l => l.actor === F.logActor);
+  if(F.logAction) rows = rows.filter(l => l.action === F.logAction);
+  return header('Activity', 'The most recent 60 events from the ActivityLog sheet.') +
+    `<div class="toolbar">
+      <div><label>Who</label><select onchange="setFilter('logActor',this.value)">${opts(actors, F.logActor, 'Anyone')}</select></div>
+      <div><label>Action</label><select onchange="setFilter('logAction',this.value)">${opts(actions, F.logAction, 'Any action')}</select></div>
+      <div class="grow"></div>
+      <div style="flex:0;min-width:0"><button class="btn danger" onclick="clearLog()">Clear log</button></div>
+    </div>
+    <div class="card flush"><div class="tablewrap"><table><tr><th>Time</th><th>Who</th><th>Action</th><th>Detail</th></tr>` +
+    (rows.length ? rows.map(l => {
+      const t = new Date(l.t);
+      return `<tr><td class="mut nowrap" title="${esc(l.t)}">${isNaN(t) ? esc(l.t).slice(0, 24) : esc(shortDate(t.getTime()) + ' ' + t.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }))}</td>
+        <td>${esc(l.actor)}</td><td><b>${esc(String(l.action).replace(/_/g, ' '))}</b></td><td class="mut">${esc(l.detail)}</td></tr>`;
+    }).join('') : `<tr><td colspan="4">${emptyState('Nothing logged', '')}</td></tr>`) +
+    '</table></div></div>';
+};
+
+PAGES.help = () => HELP_HTML;
+
+/* ------------------------------ pagination ------------------------------ */
+
 /** One page of `rows`. The page is clamped so a filter, decision or refresh can't strand you on an empty page. */
 function paginate(rows, pageKey, size){
   const pages = Math.max(1, Math.ceil(rows.length / size));
@@ -391,247 +736,339 @@ function paginate(rows, pageKey, size){
 }
 
 function pagerHtml(pg, pageKey, sizeKey, sizes){
+  if(pg.pages <= 1 && !sizeKey) return '';
   return `
     <div class="pager">
       <span class="mut">Showing ${pg.start + 1}-${pg.start + pg.rows.length} of ${pg.total}</span>
       <div class="pg">
-        <button class="btn tiny" ${pg.page <= 1 ? 'disabled' : ''} onclick="setFilter('${pageKey}', ${pg.page - 1})">&lsaquo; Prev</button>
+        <button class="btn ghost tiny" ${pg.page <= 1 ? 'disabled' : ''} onclick="setFilter('${pageKey}', ${pg.page - 1})">&lsaquo; Prev</button>
         <span class="mut">Page ${pg.page} of ${pg.pages}</span>
-        <button class="btn tiny" ${pg.page >= pg.pages ? 'disabled' : ''} onclick="setFilter('${pageKey}', ${pg.page + 1})">Next &rsaquo;</button>
-        <select onchange="setFilter('${sizeKey}', Number(this.value))">
+        <button class="btn ghost tiny" ${pg.page >= pg.pages ? 'disabled' : ''} onclick="setFilter('${pageKey}', ${pg.page + 1})">Next &rsaquo;</button>
+        ${sizeKey ? `<select onchange="setFilter('${sizeKey}', Number(this.value))" aria-label="Rows per page">
           ${sizes.map(n => `<option value="${n}" ${n===pg.size?'selected':''}>${n} per page</option>`).join('')}
-        </select>
+        </select>` : ''}
       </div>
     </div>`;
 }
 
-// Review findings are fetched per card when opened (they can be 40 KB each), then kept for the session
+function setFilter(key, val){
+  F[key] = val;
+  if(!/Page$/.test(key)) ['prosPage', 'revPage', 'appPage', 'fuPage'].forEach(k => F[k] = 1); // a new filter, sort or page size starts at page 1
+  render();
+}
+
+/** Search boxes filter as you type without losing focus or the cursor position. */
+function setSearch(key, input){
+  F[key] = input.value;
+  ['prosPage', 'revPage', 'appPage', 'fuPage'].forEach(k => F[k] = 1);
+  const pos = input.selectionStart;
+  render();
+  const again = document.querySelector(`input[oninput*="'${key}'"]`);
+  if(again){ again.focus(); try { again.setSelectionRange(pos, pos); } catch(e){} }
+}
+
+/* ------------------------------- dialog --------------------------------- */
+
+const DLG = { open: false };
+/** A small modal in place of prompt()/confirm(). Resolves to the typed text (input) / true, or null when cancelled. */
+function dialog({ title, body, input, placeholder, ok = 'OK', danger = false, value = '', readonly = false }){
+  const el = document.getElementById('dlg');
+  document.getElementById('dlgTitle').textContent = title;
+  document.getElementById('dlgBody').innerHTML = body || '';
+  const wrap = document.getElementById('dlgInputWrap'), ta = document.getElementById('dlgInput');
+  wrap.style.display = input ? '' : 'none';
+  document.getElementById('dlgLabel').textContent = input || '';
+  ta.value = value; ta.placeholder = placeholder || ''; ta.readOnly = readonly;
+  const okBtn = document.getElementById('dlgOk'), cancel = document.getElementById('dlgCancel');
+  okBtn.textContent = ok; okBtn.className = 'btn ' + (danger ? 'danger' : 'primary');
+  cancel.style.display = ok === 'Close' ? 'none' : '';
+  el.classList.add('on'); DLG.open = true;
+  setTimeout(() => (input && !readonly ? ta : okBtn).focus(), 30);
+  if(readonly) setTimeout(() => ta.select(), 40);
+  return new Promise(resolve => {
+    const close = v => { el.classList.remove('on'); DLG.open = false; okBtn.onclick = cancel.onclick = el.onclick = document.onkeydown = null; resolve(v); };
+    okBtn.onclick = () => close(input ? ta.value.trim() : true);
+    cancel.onclick = () => close(null);
+    el.onclick = e => { if(e.target === el) close(null); };
+    document.onkeydown = e => { if(e.key === 'Escape') close(null); };
+  });
+}
+
+/* ------------------------------- findings ------------------------------- */
+
+// Review findings are fetched per item when opened (they can be 40 KB each), then kept for the session
 const FINDINGS = {}, OPEN_FINDINGS = new Set();
 function toggleFindings(id){
   if(OPEN_FINDINGS.has(id)) { OPEN_FINDINGS.delete(id); render(); return; }
   OPEN_FINDINGS.add(id);
   render();
   if(FINDINGS[id] != null) return;
-  google.script.run
-    .withSuccessHandler(r => { FINDINGS[id] = r.findings; render(); })
-    .withFailureHandler(e => { OPEN_FINDINGS.delete(id); render(); toast('Error: ' + e.message); })
-    .dashReviewFindings(DASH_KEY, id);
+  rpc('dashReviewFindings', id)
+    .then(r => { FINDINGS[id] = r.findings; render(); })
+    .catch(e => { OPEN_FINDINGS.delete(id); render(); fail(e); });
 }
 
 function renderFindings(findings){
-  try {
-    var parsed = JSON.parse(findings);
-    if(Array.isArray(parsed)){
-      var rows = parsed.map(function(f){
-        var isUrl = typeof f.value === 'string' && /^https?:\/\//.test(f.value);
-        var val = isUrl ? `<a href="${esc(f.value)}">${esc(f.value)}</a>` : esc(f.value);
-        return `<div style="padding:3px 0;border-bottom:1px solid var(--line)"><b>${esc(f.label)}:</b> ${val}</div>`;
-      }).join('');
-      return `<div class="findings" style="font-family:'IBM Plex Sans'">${rows}</div>`;
-    }
-  } catch(e){ }
-  return `<div class="findings">${esc(pretty(findings))}</div>`;
-}
- 
-function setFilter(key, val){
-  F[key] = val;
-  if(!/Page$/.test(key)) { F.prosPage = 1; F.revPage = 1; } // any new filter, sort or page size starts back at page 1
-  render();
-}
-
-/** "Today", "Yesterday", or a short date like "3 Oct" (year added when it isn't this year). */
-function foundDay(ts){
-  if(!ts) return '-';
-  const d = new Date(ts), now = new Date();
-  const days = Math.round((new Date(now.toDateString()) - new Date(d.toDateString())) / 86400000);
-  if(days === 0) return 'Today';
-  if(days === 1) return 'Yesterday';
-  const o = { day: 'numeric', month: 'short' };
-  if(d.getFullYear() !== now.getFullYear()) o.year = 'numeric';
-  return d.toLocaleDateString('en-GB', o);
+  let parsed;
+  try { parsed = JSON.parse(findings); } catch(e){ return `<div class="findings">${esc(findings)}</div>`; }
+  // A submission snapshot: [{label, value}, ...]
+  if(Array.isArray(parsed)){
+    return '<div class="findings kv">' + parsed.map(f => {
+      const isUrl = typeof f.value === 'string' && /^https?:\/\//.test(f.value);
+      const needs = typeof f.value === 'string' && /^REQUIRES HUMAN/.test(f.value);
+      const val = isUrl ? `<a href="${esc(f.value)}">${esc(f.value)}</a>` : esc(typeof f.value === 'object' ? JSON.stringify(f.value) : f.value);
+      return `<div${needs ? ' style="color:var(--red)"' : ''}><b>${esc(f.label)}:</b> ${val}</div>`;
+    }).join('') + '</div>';
+  }
+  // A Reviewer Agent result for a document
+  if(parsed && (parsed.issues || parsed.unsupported_claims || parsed.missing_keywords)){
+    const list = (title, arr) => (arr && arr.length) ? `<div><b>${title}</b><ul class="flist">${arr.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>` : '';
+    return '<div class="findings kv">' +
+      `<div><b>Reviewer Agent says:</b> ${esc(parsed.verdict === 'approve' ? 'looks good to approve' : parsed.verdict === 'revise' ? 'needs changes' : parsed.verdict || '-')}
+        · ATS score ${esc(parsed.ats_score ?? '-')} · confidence ${esc(parsed.confidence ?? '-')}</div>` +
+      list('Claims not backed by the candidate\'s background', parsed.unsupported_claims) +
+      list('Keywords from the job ad that are missing', parsed.missing_keywords) +
+      list('Other issues', parsed.issues) + '</div>';
+  }
+  return `<div class="findings">${esc(JSON.stringify(parsed, null, 2))}</div>`;
 }
 
-function setFindJobsCandidate(candId) {
+/* ------------------------------- actions -------------------------------- */
+
+const FOUND_STATUSES = ['Found', 'Found - Manual Review']; // what the bulk Queue buttons take
+
+function setFindJobsCandidate(candId){
   F.pCand = candId;
-  saveFindJobsCandidate(candId);
-  render(); // refreshes the "found ready to queue" count; the selection is restored from storage
+  if(candId) saveFindJobsCandidate(candId);
+  setFilter('prosStatus', F.prosStatus || '');
 }
- 
-// The card leaves the queue as soon as you click; the sheet is updated in the
-// background and the card comes back if that fails.
-function decide(id, d){
+
+// Items leave the queue as soon as you click; the sheet is updated in the
+// background and they come back if that fails.
+async function decide(id, d){
   const t = D.reviews.find(x => x.id === id);
   if(!t) return;
   let notes = '';
   if(d === 'revise'){
     const isSub = t.type === 'Submission';
-    notes = prompt(isSub
-      ? 'Send back this application? It will NOT be submitted and shows as Rejected under Applications (Retry re-queues it).\n\nReason (optional):'
-      : 'What should change? A new version is written from your notes plus the AI findings and comes back to this queue in a minute or two.\n\nNotes (optional):');
-    if(notes === null) return; // cancelled
+    notes = await dialog(isSub
+      ? { title: "Don't submit this application?", body: `<b>${esc(t.summary)}</b> will not be sent. It shows as "Sent back" under Applications, where Retry runs it again.`,
+          input: 'Reason (optional)', ok: "Don't submit", danger: true }
+      : { title: 'Send back the ' + (DOC_LABEL[t.type] || t.type).toLowerCase() + '?', body: 'A new version is written from your notes plus the Reviewer Agent\'s findings, and comes back here in a minute or two.',
+          input: 'What should change? (optional)', placeholder: 'e.g. Lead with the NHS experience; drop the claim about team leadership', ok: 'Send back' });
+    if(notes === null) return;
+  } else if(t.type === 'Submission'){
+    const ok = await dialog({ title: 'Approve and submit?', body: `<b>${esc(t.summary)}</b> for ${esc(candName(t.cand))} will be submitted to the employer shortly, by the worker or the extension that filled it.`, ok: 'Approve & submit' });
+    if(!ok) return;
   }
-  D.reviews = D.reviews.filter(x => x !== t);
-  render();
-  google.script.run
-    .withSuccessHandler(r => {
-      if(r && r.already) toast('Already decided by someone else (' + (r.decision || 'decided') + ')');
-      else if(d === 'approve') toast(t.type === 'Submission' ? 'Approved - it is submitted shortly (by the worker, or by the extension tab that filled it)' : 'Approved');
-      else toast(r && r.revising ? 'Sent back - a revised version is being written' : 'Sent back - not submitted');
-      load(true);
-    })
-    .withFailureHandler(e => { D.reviews.push(t); render(); toast('Error: ' + e.message); })
-    .dashDecide(DASH_KEY, id, d, notes);
+  const r = await sendDecisions([t], d, notes);
+  if(r.failed) return;
+  if(r.already) toast('Already decided by someone else');
+  else if(d === 'approve') toast(t.type === 'Submission' ? 'Approved - it will be submitted shortly' : 'Approved');
+  else toast(r.revising ? 'Sent back - a revised version is being written' : 'Not submitted');
 }
- 
+
+async function approveGroup(encodedKey){
+  const key = decodeURIComponent(encodedKey);
+  const g = reviewGroups().find(x => x.key === key);
+  if(!g) return;
+  const ok = await dialog({ title: 'Approve everything for this job?', ok: g.hasSubmission ? 'Approve & submit' : 'Approve all',
+    body: `<b>${esc(g.summary)}</b> - ${g.items.map(t => esc(DOC_LABEL[t.type] || t.type)).join(', ')}.` +
+      (g.hasSubmission ? '<br><br>The application is then submitted to the employer.' : '') });
+  if(!ok) return;
+  const r = await sendDecisions(g.items, 'approve', '');
+  if(!r.failed) toast('Approved ' + g.items.length + ' item' + (g.items.length > 1 ? 's' : '') + (g.hasSubmission ? ' - submitting shortly' : ''));
+}
+
+/** Decides items one after another (documents before the submission), restoring any that fail. */
+async function sendDecisions(items, d, notes){
+  const res = { failed: 0, already: false, revising: false };
+  D.reviews = D.reviews.filter(x => !items.includes(x));
+  render();
+  for(const t of items){
+    try {
+      const r = await rpc('dashDecide', t.id, d, notes);
+      if(r && r.already) res.already = true;
+      if(r && r.revising) res.revising = true;
+    } catch(e){
+      res.failed++; D.reviews.push(t); render(); fail(e);
+    }
+  }
+  load(true);
+  return res;
+}
+
 function gen(){
   const jd = document.getElementById('gJD').value.trim();
   if(!jd){ toast('Paste a job description first'); return; }
+  const btn = document.getElementById('gBtn'); btn.disabled = true;
   document.getElementById('gMsg').textContent = 'Generating… this takes about a minute.';
-  google.script.run.withSuccessHandler(r => {
-    document.getElementById('gMsg').innerHTML =
-      `Done: <a href="${r.cvUrl}">CV</a> · <a href="${r.letterUrl}">Cover letter</a> (both queued for review)`;
-    load(true);
-  }).withFailureHandler(e => { document.getElementById('gMsg').textContent = 'Error: ' + e.message; })
-    .dashGenerate(DASH_KEY, document.getElementById('gCand').value, jd, document.getElementById('gUrl').value, document.getElementById('gTone').value);
+  rpc('dashGenerate', document.getElementById('gCand').value, jd, document.getElementById('gUrl').value, document.getElementById('gTone').value)
+    .then(r => {
+      document.getElementById('gMsg').innerHTML = `Done: <a href="${esc(r.cvUrl)}">CV</a> · <a href="${esc(r.letterUrl)}">Cover letter</a> - both are in the Review queue.`;
+      load(true);
+    })
+    .catch(e => { document.getElementById('gMsg').textContent = 'Error: ' + e.message; })
+    .finally(() => { btn.disabled = false; });
 }
- 
+
 function findJobs(){
-  const candId = F.pCand || loadFindJobsCandidate() || document.getElementById('pCand').value;
-  if(!candId) { toast('Please select a candidate first'); return; }
-  saveFindJobsCandidate(candId);
-  document.getElementById('pMsg').textContent = 'Searching…';
-  google.script.run.withSuccessHandler(r => {
-    document.getElementById('pMsg').textContent = `Found ${r.found}, added ${r.added} new.`;
-    // After finding jobs, refresh the full data to get new prospects
-    // but the candidate selection will be restored from localStorage
-    load();
-  }).withFailureHandler(e => { document.getElementById('pMsg').textContent = 'Error: ' + e.message; })
-    .dashFindProspects(DASH_KEY, candId);
+  const candId = F.pCand;
+  if(!candId) { toast('Pick a candidate first'); return; }
+  document.getElementById('pMsg').textContent = 'Searching the job boards…';
+  rpc('dashFindProspects', candId)
+    .then(r => { toast(`Found ${r.found} jobs, ${r.added} new`); load(); })
+    .catch(e => { document.getElementById('pMsg').textContent = ''; fail(e); });
 }
- 
-// Prospects the bulk Queue buttons take: any job found and not yet acted on
-const FOUND_STATUSES = ['Found', 'Found - Manual Review'];
 
 /** Queue the `limit` most recently found prospects for the selected candidate (0 = all of them). */
 function queueAll(limit){
-  const cand = F.pCand || loadFindJobsCandidate() || document.getElementById('pCand').value;
-  if(!cand) { toast('Please select a candidate first'); return; }
-  saveFindJobsCandidate(cand);
-
-  const mine = D.prospects.filter(p => p.cand === cand);
-  const foundCount = mine.filter(p => FOUND_STATUSES.includes(p.status)).length;
-  if(!mine.length) { toast('No prospects for this candidate yet. Try "Find jobs" first.'); return; }
-  if(!foundCount) { toast('No found prospects left to queue for this candidate.'); return; }
-
+  const cand = F.pCand;
+  if(!cand) { toast('Pick a candidate first'); return; }
+  const foundCount = D.prospects.filter(p => p.cand === cand && FOUND_STATUSES.includes(p.status)).length;
+  if(!foundCount) { toast('No found jobs left to queue for this candidate.'); return; }
   const n = limit > 0 ? Math.min(limit, foundCount) : foundCount;
   document.getElementById('pMsg').textContent = `Queuing ${n} of ${foundCount}…`;
   document.querySelectorAll('.qbtn').forEach(b => b.disabled = true); // one batch at a time
-  google.script.run
-    .withSuccessHandler(r => {
+  rpc('dashQueueAllFound', cand, limit || 0)
+    .then(r => {
       const ids = new Set(r.ids || []);
       D.prospects.forEach(p => { if(ids.has(String(p.id))) p.status = 'Queued'; });
-      // Show the queued rows: the table may be filtered to another candidate or to "Found"
-      F.prosCand = cand; if(F.prosStatus && F.prosStatus !== 'Queued') F.prosStatus = '';
+      if(F.prosStatus && F.prosStatus !== 'Queued') F.prosStatus = ''; // show the queued rows
       render();
-      toast(r.queued
-        ? `Queued ${r.queued}` + (r.remaining ? `, ${r.remaining} still found` : '') + ' - run the queue from the extension, or let the worker pick them up'
-        : 'No prospects to queue.');
+      toast(r.queued ? `Queued ${r.queued}` + (r.remaining ? `, ${r.remaining} still found` : '') + ' - the worker picks them up automatically' : 'Nothing to queue.');
       load(true); // a refresh that started before the queueing would otherwise show them as Found again
     })
-    .withFailureHandler(e => { document.getElementById('pMsg').textContent = ''; render(); toast('Error: ' + e.message); })
-    .dashQueueAllFound(DASH_KEY, cand, limit || 0);
+    .catch(e => { render(); fail(e); });
 }
- 
+
 function prospectAction(id, status){
   const p = D.prospects.find(x => x.id === id);
   if(!p) return;
   const before = p.status;
   p.status = status; // show it straight away; the sheet is updated in the background
   render();
-  toast(status);
-  google.script.run
-    .withFailureHandler(e => { p.status = before; render(); toast('Error: ' + e.message); })
-    .dashSetProspectStatus(DASH_KEY, id, status);
-}
- 
-function setActive(id, active){
-  google.script.run.withSuccessHandler(() => { toast(active ? 'Activated' : 'Deactivated'); load(); })
-    .withFailureHandler(e => toast('Error: ' + e.message)).dashSetCandidateActive(DASH_KEY, id, active);
-}
- 
-function setTarget(id, val){
-  google.script.run.withSuccessHandler(() => { toast('Target updated'); load(); })
-    .withFailureHandler(e => toast('Error: ' + e.message)).dashSetCandidateTarget(DASH_KEY, id, val);
-}
- 
-function markFollowUpDone(id){
-  google.script.run.withSuccessHandler(() => { toast('Marked done'); load(); })
-    .withFailureHandler(e => toast('Error: ' + e.message)).dashMarkFollowUpDone(DASH_KEY, id);
-}
- 
-function delCandidate(id, name){
-  if(!confirm(`Delete ${name} (${id}) and ALL their data - applications, prospects, generated documents, follow-ups, and their Drive folder? This cannot be undone.`)) return;
-  toast('Deleting…');
-  google.script.run.withSuccessHandler(() => { toast('Candidate deleted'); load(); })
-    .withFailureHandler(e => toast('Error: ' + e.message)).dashDeleteCandidate(DASH_KEY, id);
-}
- 
-function clearLog(){
-  if(!confirm('Clear the entire Activity Log? This cannot be undone (it only clears the log, not your candidates or applications).')) return;
-  google.script.run.withSuccessHandler(() => { toast('Log cleared'); load(); })
-    .withFailureHandler(e => toast('Error: ' + e.message)).dashClearActivityLog(DASH_KEY);
-}
- 
-function revealPassword(id){
-  google.script.run.withSuccessHandler(r => {
-    // prompt() keeps the password selectable for copying without putting it in the page
-    prompt('Password for ' + r.email + ' on ' + r.site + ' (copy it, then close):', r.password);
-  }).withFailureHandler(e => toast('Error: ' + e.message)).dashRevealAccountPassword(DASH_KEY, id);
+  toast(status === 'Queued' ? 'Queued' : 'Skipped');
+  rpc('dashSetProspectStatus', id, status).catch(e => { p.status = before; render(); fail(e); });
 }
 
-function retryApp(id){
-  if(!confirm('Re-queue this application as a fresh prospect to try again?')) return;
-  google.script.run.withSuccessHandler(() => { toast('Re-queued'); load(); })
-    .withFailureHandler(e => toast('Error: ' + e.message)).dashRetryApplication(DASH_KEY, id);
+function setActive(id, active){
+  rpc('dashSetCandidateActive', id, active).then(() => { toast(active ? 'Activated' : 'Deactivated'); load(); }).catch(fail);
 }
- 
+
+function setTarget(id, val){
+  rpc('dashSetCandidateTarget', id, val).then(() => { toast('Target updated'); load(); }).catch(fail);
+}
+
+async function resolveFollowUp(id, outcome){
+  const f = D.followUps.find(x => x.id === id);
+  if(!f) return;
+  const note = await dialog({ title: outcome === 'Done' ? 'Mark this done?' : 'Record "' + outcome + '"?',
+    body: `<b>${esc(f.company)}</b> - ${esc(f.title)} (${esc(candName(f.cand))}). This closes the follow-up` +
+      (/^(Interview|Offer|Rejected)$/.test(outcome) ? ' and saves the result on the application.' : '.'),
+    input: 'Note (optional)', placeholder: outcome === 'Interview' ? 'e.g. Phone screen on 12 Nov' : '', ok: 'Save' });
+  if(note === null) { render(); return; }
+  rpc('dashResolveFollowUp', id, outcome, note).then(() => { toast('Saved'); load(); }).catch(fail);
+}
+
+function snoozeFollowUp(id){
+  rpc('dashSnoozeFollowUp', id, 7).then(r => { toast('We\'ll remind you again on ' + r.due); load(); }).catch(fail);
+}
+
+async function markSubmitted(id){
+  const a = D.applications.find(x => x.id === id);
+  if(!a) return;
+  const ok = await dialog({ title: 'Mark as submitted?', ok: 'Mark submitted',
+    body: `Only do this if <b>${esc(a.company)}</b> has the application - you can see it on their site, the candidate got a confirmation email, or you submitted it yourself. ` +
+      'It will no longer be submitted automatically, and a follow-up is created.' });
+  if(!ok) return;
+  rpc('dashMarkApplicationSubmitted', id).then(() => { toast('Marked submitted'); load(); }).catch(fail);
+}
+
+async function retryApp(id){
+  const a = D.applications.find(x => x.id === id);
+  if(!a) return;
+  const approved = a && /^Approved|Human Needed$/.test(a.status);
+  const ok = await dialog({ title: 'Run this application again?', ok: 'Retry',
+    body: `<b>${esc(a.company)}</b> - ${esc(a.title)} goes back in the queue as a new job: fresh form fill, then the Review queue again.` +
+      (approved ? '<br><br><b>Check the employer\'s site first</b> - if it already went through, use Mark submitted instead, or the candidate applies twice.' : '') });
+  if(!ok) return;
+  rpc('dashRetryApplication', id).then(() => { toast('Re-queued'); load(); }).catch(fail);
+}
+
+async function delCandidate(id){
+  const c = D.candidates.find(x => x.id === id);
+  const ok = await dialog({ title: 'Delete ' + (c ? c.name : id) + '?', danger: true, ok: 'Delete everything',
+    body: 'This removes the candidate and <b>all</b> their data - applications, jobs found, generated documents, follow-ups and their Drive folder. It cannot be undone.<br><br>To pause them instead, untick Active.' });
+  if(!ok) return;
+  toast('Deleting…');
+  rpc('dashDeleteCandidate', id).then(() => { toast('Candidate deleted'); load(); }).catch(fail);
+}
+
+async function clearLog(){
+  const ok = await dialog({ title: 'Clear the activity log?', danger: true, ok: 'Clear log',
+    body: 'Every entry in the ActivityLog sheet is removed. Candidates, applications and everything else stay as they are.' });
+  if(!ok) return;
+  rpc('dashClearActivityLog').then(() => { toast('Log cleared'); load(); }).catch(fail);
+}
+
+function revealPassword(id){
+  rpc('dashRevealAccountPassword', id).then(r =>
+    dialog({ title: 'Password for ' + r.site, body: 'Login email: <b>' + esc(r.email) + '</b>', input: 'Password (selected - copy it)', value: r.password, readonly: true, ok: 'Close' })
+  ).catch(fail);
+}
+
 const HELP_HTML = `
-<h1>Help &amp; guide</h1>
- 
+<div class="top"><div><h1>Help &amp; guide</h1><p class="sub">How Jobverse works, and what to do when something needs you.</p></div></div>
+
 <div class="card">
 <h2>What Jobverse does, in one line</h2>
 <p class="mut">It finds jobs for your candidates, writes a tailored CV and cover letter for each, fills in the online application, and pauses so a human can approve before anything is submitted. Nothing is ever sent to an employer without someone clicking Approve.</p>
 </div>
- 
+
 <div class="card">
-<h2>The everyday workflow (hands-off path)</h2>
+<h2>The everyday workflow</h2>
 <ol class="steps">
 <li>A candidate fills in the Google form. Within seconds they appear under <b>Candidates</b>, already profiled by the AI.</li>
-<li>Every morning the system finds new jobs for each active candidate. You can also do it now: <b>Prospects</b> tab, pick the candidate, click <b>Find jobs</b>.</li>
-<li>In <b>Prospects</b>, click <b>Queue</b> on the jobs you want, or use <b>Queue newest found: 5 / 10 / 20 / All</b> to queue a batch of the most recently found ones.</li>
-<li>That's it - the background worker checks for queued jobs automatically (about every 30 seconds) and fills each one in, one after another. Nobody needs to click anything for this step.</li>
-<li>Each finished application lands in <b>Review queue</b>. Read it, then <b>Approve</b> or <b>Send back</b>. Sending back a CV, cover letter or NHS statement has a new version written from your notes, which comes back to the queue in a minute or two. Sending back a finished application means it is not submitted; it shows as Rejected under Applications, where <b>Retry</b> re-queues it.</li>
-<li>On approve, it's submitted for real (by the worker, or by the extension if you filled it manually) and a screenshot is saved. See it under <b>Applications</b>.</li>
+<li>Every morning the system finds new jobs for each active candidate. To do it now: <b>Find &amp; queue jobs</b>, pick the candidate, click <b>Find new jobs</b>.</li>
+<li>Queue the jobs you want - one at a time, or the newest 5 / 10 / 20 / All.</li>
+<li>The background worker picks up queued jobs automatically (about every 30 seconds) and fills each one in. Nobody needs to click anything for this step.</li>
+<li>Each job lands in the <b>Review queue</b> as <b>one card</b> holding its CV, cover letter and final application. Approve each, or <b>Approve all</b>. Sending a document back has a new version written from your notes. Choosing <b>Don't submit</b> on the final application means it is not sent.</li>
+<li>Once the final application is approved it's submitted for real and a screenshot is saved under <b>Applications</b>.</li>
+<li>A week later, a <b>Follow-up</b> reminds you to check for a reply. Record what happened there.</li>
 </ol>
 </div>
- 
+
 <div class="card">
-<h2>Scenario: background automation (the worker)</h2>
-<p class="mut">This is what actually does the filling described above. It runs on a machine somewhere (started with <code>npm start</code> in the <code>worker</code> folder of the Jobverse repo) and polls continuously - no one needs to be watching it. When it finds something Queued, it generates the CV/cover letter, fills the real application form in a live browser, and stops to request a human decision in the Review queue, exactly like everything else in Jobverse. It only clicks the real Submit button after someone approves that item - nothing skips the review step just because a person didn't type the URL in themselves.</p>
-<p class="mut"><b>What it can handle right now:</b> any application form it can reach without an account - it finds the form (including forms embedded in an iframe), uploads the CV and cover letter, answers each question from the candidate's data, and follows Next through multi-step forms. It never presses Submit while filling. Anything it can't answer is listed in the review item. Jobs behind a sign-in or sign-up page, and anything that fails, end as <b>Error</b> in Prospects (the reason is in Notes) - run those through the extension, or re-queue them.</p>
-<p class="mut">After you approve, the worker re-fills the form and submits it. If it can't see the employer's confirmation message afterwards, the application shows as <b>Submit Unconfirmed - Human Needed</b> and reviewers are emailed - check the employer's site before doing anything else, as it may well have gone through.</p>
+<h2>An application says "Approved - not submitted yet"</h2>
+<p class="mut">Approved applications are submitted by whichever tool filled them: the <b>background worker</b> or the <b>Chrome extension</b>. The Overview page shows whether each one is running. If the one it needs isn't running, the application waits, and after 20 minutes it moves to <b>Applications &rsaquo; Needs attention</b> with the reason.</p>
+<p class="mut">Start the worker (<code>npm start</code> in the worker folder) or open Chrome with the extension, and it carries on by itself. If you can see the application on the employer's site, or you submitted it by hand, click <b>Mark submitted</b>. <b>Retry</b> runs it again from the start - only use it once you're sure it didn't go through.</p>
+<p class="mut"><b>"Submitted? Check the employer site"</b> means Submit was clicked but no confirmation message was seen. It may well have gone through - check before doing anything else.</p>
 </div>
- 
+
 <div class="card">
-<h2>Scenario: a single job you already have open</h2>
-<p class="mut">Use the Chrome extension directly when you want something done right now instead of waiting for the worker's next pass - or for a job behind a sign-in/sign-up page, which only the extension handles. Open the extension on the job posting, pick the candidate, and click <b>Apply to this job</b>. Same review-then-submit flow, just for that one job.</p>
+<h2>Follow-ups</h2>
+<p class="mut">Follow-ups are reminders for <b>your team</b>, not for the client. Every submitted application gets one, due 7 days later (Config: FOLLOWUP_DAYS_AFTER_SUBMIT). When it's due, check the candidate's application inbox for a reply, then record <b>Interview</b>, <b>Offer</b>, <b>Rejected</b> or <b>No reply</b>. Interviews and offers are saved on the application and counted in Reports. If it's too early to tell, <b>Check again in 7 days</b> moves it back. Due follow-ups are also emailed each morning to REPORT_EMAILS.</p>
+<p class="mut">NHS Trac follow-ups remind you to claim and verify the application on Trac after the vacancy closes - mark them <b>Done</b> when that's finished.</p>
 </div>
- 
+
 <div class="card">
-<h2>Scenario: NHS applications</h2>
-<p class="mut">NHS Jobs currently goes through the extension's general driver, like any other site. The dedicated NHS flow (AI-written supporting statement, automatic Trac claim/verify follow-up) is not switched on yet, so add the Trac follow-up yourself after submitting. The five legal declaration sections (criminal convictions, fitness to practice, guaranteed interview scheme, equality/diversity, socio-economic background) must come from the candidate's own answers in their Candidates row (columns starting "NHS...") - check them carefully in the review item before approving.</p>
+<h2>The background worker</h2>
+<p class="mut">This is what does the filling. It runs on a machine somewhere (started with <code>npm start</code> in the <code>worker</code> folder of the Jobverse repo) and polls continuously. When it finds something Queued, it generates the CV/cover letter, fills the real application form in a live browser, and stops to request a human decision in the Review queue. It only clicks the real Submit button after someone approves.</p>
+<p class="mut"><b>What it can handle:</b> any application form it can reach without an account - it finds the form (including forms embedded in an iframe), uploads the CV and cover letter, answers each question from the candidate's data, and follows Next through multi-step forms. Anything it can't answer is listed in the review item. Jobs behind a sign-in or sign-up page, and anything that fails, end as <b>Error</b> in Find &amp; queue jobs (the reason is in Notes) - run those through the extension, or re-queue them.</p>
 </div>
- 
+
+<div class="card">
+<h2>The Chrome extension</h2>
+<p class="mut">Use it when you want a single job done right now, or for a job behind a sign-in/sign-up page, which only the extension handles. Open the extension on the job posting, pick the candidate, and click <b>Apply to this job</b>. Same review-then-submit flow.</p>
+<p class="mut"><b>Sharing it with your team:</b> send them the chrome-extension folder; they open <b>chrome://extensions</b>, turn on <b>Developer mode</b>, click <b>Load unpacked</b> and pick the folder, then paste the web app URL and API token (Config tab of the sheet) into the extension's <b>Connection settings</b>. It's not on the Chrome Web Store on purpose - this is a private internal tool.</p>
+</div>
+
+<div class="card">
+<h2>NHS applications</h2>
+<p class="mut">NHS Jobs currently goes through the extension's general driver, like any other site. The dedicated NHS flow (AI-written supporting statement, automatic Trac follow-up) is not switched on yet, so add the Trac follow-up yourself after submitting. The five legal declaration sections (criminal convictions, fitness to practice, guaranteed interview scheme, equality/diversity, socio-economic background) must come from the candidate's own answers in their Candidates row (columns starting "NHS...") - check them carefully in the review item before approving.</p>
+</div>
+
 <div class="card">
 <h2>Controlling volume and clients</h2>
 <ul>
@@ -640,49 +1077,34 @@ const HELP_HTML = `
 <li class="faq"><b>Daily limit:</b> Config tab in the sheet, MAX_APPS_PER_CANDIDATE_PER_DAY (default 15). Keep it under about 25 to look human and avoid CAPTCHAs.</li>
 </ul>
 </div>
- 
-<div class="card">
-<h2>Sharing the Chrome extension with your team</h2>
-<ol class="steps">
-<li>Send them the chrome-extension folder (zip it and email, or share via Drive).</li>
-<li>They open <b>chrome://extensions</b> in Chrome.</li>
-<li>Turn on <b>Developer mode</b> (toggle, top right).</li>
-<li>Click <b>Load unpacked</b> and select the chrome-extension folder.</li>
-<li>Click the Jobverse icon, open <b>Connection settings</b>, and paste the web app URL and API token (from the Config tab of the sheet). Click Save.</li>
-</ol>
-<p class="mut">It's not on the Chrome Web Store on purpose - this is a private internal tool, and the store's review is strict about automation extensions. "Load unpacked" is the normal way to run a private team extension. Each person does this once.</p>
-<p class="mut">The worker (above) handles most applications on its own now, but the extension is still how you act on a single job immediately, or on an ATS the worker doesn't support yet.</p>
-</div>
- 
+
 <div class="card">
 <h2>VPN: do we need one?</h2>
 <ul>
-<li class="faq"><b>UK / US / Canada / Ireland / Germany / Netherlands roles on Workday, Greenhouse, Lever, Ashby:</b> usually no VPN needed. These platforms serve global applicants.</li>
-<li class="faq"><b>NHS Jobs from outside the UK:</b> yes, use a UK VPN. NHS Jobs is UK-only and can block or flag non-UK traffic. The extension will remind you if it detects you're not on a UK connection.</li>
-<li class="faq"><b>General rule:</b> match your connection to the job's country when a site is country-restricted. Most private-sector ATS aren't, NHS is.</li>
+<li class="faq"><b>UK / US / Canada / Ireland / Germany / Netherlands roles on Workday, Greenhouse, Lever, Ashby:</b> usually no VPN needed.</li>
+<li class="faq"><b>NHS Jobs from outside the UK:</b> yes, use a UK VPN. NHS Jobs is UK-only and can block or flag non-UK traffic.</li>
+<li class="faq"><b>General rule:</b> match your connection to the job's country when a site is country-restricted.</li>
 </ul>
 </div>
- 
+
 <div class="card">
 <h2>FAQ</h2>
-<details class="faq"><summary>A candidate's prospects came back empty. Why?</summary>
-<p>Most likely their role or location isn't covered by the job sources switched on in Config <b>PROSPECT_SOURCES</b>. Jobs come from Adzuna and Reed (UK and Europe), NHS Jobs (including vacancies applied for through Trac), Workable, Canada Job Bank (Canada-wide), MyJobMag (Nigeria), Remotive (remote) and JSearch, which reads Google for Jobs and so brings in listings from LinkedIn, Indeed, Glassdoor, Civil Service Jobs, Jobberman and others - the <b>Source</b> column shows which site each job came from. The search uses the first of the candidate's preferred roles, in each of their preferred locations. Anything else can be added by hand in the Prospects tab.</p></details>
+<details class="faq"><summary>Why did the same job used to show up three times in the Review queue?</summary>
+<p>Each job has up to three things to check - the CV, the cover letter and the final application - and each was its own card with the same title. They're now grouped into one card per job.</p></details>
+<details class="faq"><summary>A candidate's job search came back empty. Why?</summary>
+<p>Most likely their role or location isn't covered by the job sources switched on in Config <b>PROSPECT_SOURCES</b>. Jobs come from Adzuna and Reed (UK and Europe), NHS Jobs (including Trac), Workable, Canada Job Bank, MyJobMag (Nigeria), Remotive (remote) and JSearch, which reads Google for Jobs and so brings in listings from LinkedIn, Indeed, Glassdoor, Civil Service Jobs, Jobberman and others. The search uses the first of the candidate's preferred roles, in each of their preferred locations. Anything else can be added by hand in the Prospects tab of the sheet.</p></details>
 <details class="faq"><summary>Something says "Found - Manual Review" instead of Found.</summary>
-<p>The job's link isn't a known application system (Greenhouse, Workday...). It can still be queued, singly or with the <b>5 / 10 / 20 / All</b> buttons: the extension finds its own way from the job page to the form. The worker only fills forms it can reach without an account, so these are best run through the extension.</p></details>
-<details class="faq"><summary>An application failed. Can I retry?</summary>
-<p>Yes. In Applications, failed ones have a <b>Retry</b> button that re-queues them as a fresh prospect.</p></details>
+<p>The job's link isn't a known application system (Greenhouse, Workday...). It can still be queued: the extension finds its own way from the job page to the form. The worker only fills forms it can reach without an account, so these are best run through the extension.</p></details>
 <details class="faq"><summary>How do I remove a candidate completely?</summary>
-<p>Candidates tab, <b>Delete</b> button. It removes them and everything linked to them - applications, prospects, documents, follow-ups, and their Drive folder - in one action. It asks you to confirm first and cannot be undone.</p></details>
+<p>Candidates, <b>Delete</b>. It removes them and everything linked to them - applications, prospects, documents, follow-ups, and their Drive folder. It asks you to confirm first and cannot be undone.</p></details>
 <details class="faq"><summary>The dashboard feels slow.</summary>
-<p>It runs entirely on Google's servers with the sheet as its database, so each action is a round-trip - a second or two is normal. It's the trade-off for having no server to host or pay for.</p></details>
+<p>It runs entirely on Google's servers with the sheet as its database, so each action is a round-trip - a second or two is normal. Data refreshes by itself every 45 seconds; use <b>Refresh</b> to update it now.</p></details>
 <details class="faq"><summary>Is anything ever submitted without a human?</summary>
-<p>No. Every application pauses in the Review queue and only submits after someone clicks Approve - whether it was filled by the worker or by someone using the extension directly.</p></details>
-<details class="faq"><summary>What brings an item into the Review queue?</summary>
-<p>Every time the Resume Builder or Cover Letter Builder generates a document, a second AI - the Reviewer Agent - checks it for things like claims the CV makes that aren't backed up by the candidate's actual background, and keywords from the job posting that are missing. That review lands in the queue with Status: Awaiting Human, along with its score and findings, and stays there until someone opens it and decides. There's a separate, second checkpoint too: right before an application would actually be submitted, a full snapshot of everything about to be sent is filed and also waits for a human Approve. Nothing skips either queue on its own. (If auto-decide is ever turned on for CV/CoverLetter/NHSStatement reviews specifically - a config setting, off by default - a document that clears a confidence bar gets decided automatically instead of waiting. That never applies to the final submission checkpoint, which always waits for a person.)</p></details>
-<details class="faq"><summary>Is my Chrome extension setup still needed if the worker is running?</summary>
-<p>Yes. The worker can't get past sign-in or sign-up pages; the extension creates and signs in to site accounts itself (see <b>Site accounts</b>). Keep it set up.</p></details>
+<p>No. Every application pauses in the Review queue and only submits after someone approves its final application.</p></details>
+<details class="faq"><summary>What does the Reviewer Agent check?</summary>
+<p>Every generated CV, cover letter or NHS statement is checked by a second AI for claims not backed by the candidate's background, keywords from the job ad that are missing, and general quality. Open <b>Reviewer findings</b> on the item to see them. Its score is a guide - you decide.</p></details>
 <details class="faq"><summary>A job needs an account on the employer's site. What happens?</summary>
-<p>In the extension: it creates an account for the candidate with their application email and a random password (one per candidate per site, saved under <b>Site accounts</b>), or signs in to the one it made before. If the site wants a CAPTCHA solved or an email verified, it asks a person to do that step and carries on. The worker doesn't handle accounts - those jobs end as Error there.</p></details>
+<p>In the extension: it creates an account with the candidate's application email and a random password (one per candidate per site, saved under <b>Site accounts</b>), or signs in to the one it made before. If the site wants a CAPTCHA solved or an email verified, it asks a person to do that step and carries on. The worker doesn't handle accounts - those jobs end as Error there.</p></details>
 </div>
 `;
 </script>
