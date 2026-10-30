@@ -295,14 +295,13 @@ function daysUntil(iso){ if(!iso) return null; return Math.round((new Date(iso +
 /* ------------------------- application statuses ------------------------- */
 
 const STUCK_AFTER_MS = 20 * MIN;       // an approved application not submitted by then needs a look
-const WORKER_QUIET_MS = 5 * MIN;       // the worker checks in every ~30 s while it runs
-const EXTENSION_QUIET_MS = 10 * MIN;   // the extension checks in every 2 min while Chrome is open
+const AGENT_QUIET_MS = 10 * MIN;       // the extension checks in every 2-3 min while Chrome is open
 
 const APP_STATUS = {
   'In Progress':           { label: 'Filling the form', cls: 'c-prog', group: 'flight' },
   'Awaiting Review':       { label: 'Waiting for review', cls: 'c-wait', group: 'flight' },
-  'Approved - Submitting': { label: 'Approved - worker submitting', cls: 'c-prog', group: 'flight' },
-  'Approved - Extension':  { label: 'Approved - extension submitting', cls: 'c-prog', group: 'flight' },
+  'Approved - Submitting': { label: 'Approved - submitting', cls: 'c-prog', group: 'flight' }, // from the retired worker
+  'Approved - Extension':  { label: 'Approved - submitting', cls: 'c-prog', group: 'flight' },
   'Submitted':             { label: 'Submitted', cls: 'c-sub', group: 'done' },
   'Rejected':              { label: 'Sent back (not submitted)', cls: 'c-mut', group: 'closed' },
   'Failed':                { label: 'Failed', cls: 'c-fail', group: 'attention' },
@@ -339,19 +338,14 @@ function chip(s){
     : /Review|Queued|Pending/.test(s) ? 'c-wait' : /Skipped|Retried|Superseded/.test(s) ? 'c-mut' : 'c-prog';
   return `<span class="chip ${cls}">${esc(s)}</span>`;
 }
+/** 'extension': any Chrome with the extension open; 'autorun': a Chrome with Auto-run the queue switched on. */
 function agentState(which){
   const seen = D.agents ? D.agents[which] : 0;
-  const quiet = which === 'worker' ? WORKER_QUIET_MS : EXTENSION_QUIET_MS;
-  return { seen, ok: !!seen && Date.now() - seen < quiet };
+  return { seen, ok: !!seen && Date.now() - seen < AGENT_QUIET_MS };
 }
 
 /** Why an approved application hasn't gone yet, in words someone can act on. */
 function stuckReason(a){
-  if(a.status === 'Approved - Submitting'){
-    const w = agentState('worker');
-    return w.ok ? 'The worker is running but hasn\'t submitted this yet - it may have hit a problem on the form.'
-      : 'Waiting for the background worker, which ' + (w.seen ? 'last checked in ' + ago(w.seen) : 'has never checked in') + '. Start it (npm start in the worker folder).';
-  }
   const x = agentState('extension');
   return x.ok ? 'The Chrome extension is running but hasn\'t confirmed this - Submit may have been clicked without a confirmation being seen.'
     : 'Waiting for the Chrome extension, which ' + (x.seen ? 'last checked in ' + ago(x.seen) : 'has never checked in') + '. Open Chrome with the extension signed in.';
@@ -421,9 +415,9 @@ PAGES.home = () => {
   const weekAgo = Date.now() - 7 * DAY;
   const subWeek = D.applications.filter(a => a.status === 'Submitted' && a.submittedMs > weekAgo).length;
   const inFlight = D.applications.filter(a => appInfo(a).group === 'flight').length;
-  const w = agentState('worker'), x = agentState('extension');
+  const x = agentState('extension'), run = agentState('autorun');
   const agent = (name, s, hint) => `<div class="agent"><span class="dot ${s.ok ? 'ok' : s.seen ? 'bad' : 'idle'}"></span>
-    <b>${name}</b><span class="mut">${s.ok ? 'running - checked in ' + ago(s.seen) : s.seen ? 'not seen since ' + ago(s.seen) : 'never seen'}</span>
+    <b>${name}</b><span class="mut">${s.ok ? 'on - checked in ' + ago(s.seen) : s.seen ? 'not seen since ' + ago(s.seen) : 'never seen'}</span>
     ${!s.ok ? `<span class="mut">· ${hint}</span>` : ''}</div>`;
   const stat = (n, label, to, hot) => `<button class="stat ${hot && n ? 'hot' : ''}" onclick="go(${to})"><b>${n}</b><span>${label}</span></button>`;
 
@@ -442,9 +436,10 @@ PAGES.home = () => {
       ${stat(subWeek, 'submitted in the last 7 days', "'applications',{appTab:'done'}")}
     </div>
     <div class="card"><h2>Automation</h2><div class="agents">
-      ${agent('Background worker', w, 'start it with npm start in the worker folder')}
       ${agent('Chrome extension', x, 'open Chrome with the extension connected')}
-    </div><p class="mut" style="margin-top:10px">Approved applications are submitted by whichever one filled them. If the one it needs isn't running, the application waits under Applications &rsaquo; Needs attention.</p></div>
+      ${agent('Auto-run queue', run, 'tick "Auto-run the queue" in the extension popup on the computer that should do the work')}
+    </div><p class="mut" style="margin-top:10px">Queued jobs are filled by a Chrome with <b>Auto-run the queue</b> switched on, and approved applications are submitted by any open Chrome with the extension.
+      ${queued && !run.ok ? `<br><b style="color:var(--red)">${queued} job${queued > 1 ? 's are' : ' is'} queued but no Chrome is auto-running the queue.</b>` : ''}</p></div>
     <div class="card flush"><div style="padding:14px 18px 4px"><h2>To do</h2></div>` +
     (todo.length ? '<table>' + todo.map(t => `<tr><td>${t.text}<div class="mut">${t.meta}</div></td>
         <td style="text-align:right;width:1%"><button class="btn ghost tiny" onclick="go(${t.to})">Open</button></td></tr>`).join('') + '</table>'
@@ -508,7 +503,7 @@ PAGES.applications = () => {
   if(F.appQ) rows = rows.filter(a => matches(F.appQ, a.company, a.title, a.ats, candName(a.cand)));
   const pg = paginate(rows, 'appPage', F.appSize || 25);
   const stuck = all.filter(a => appInfo(a).stuck);
-  return header('Applications', 'Every application the worker or extension has started, from filling the form to the employer\'s confirmation.') +
+  return header('Applications', 'Every application the extension has started, from filling the form to the employer\'s confirmation.') +
     (stuck.length ? `<div class="note bad"><b>${stuck.length} approved application${stuck.length > 1 ? 's have' : ' has'} not been submitted.</b> ${esc(stuckReason(stuck[0]))}
       If you submitted one by hand or can see it on the employer's site, use <b>Mark submitted</b>; otherwise <b>Retry</b> runs it again from the start.</div>` : '') +
     tabsHtml('appTab', [
@@ -600,7 +595,7 @@ PAGES.prospects = () => {
   const pg = paginate(rows, 'prosPage', F.prosSize || 25);
   const ready = F.pCand ? D.prospects.filter(p => p.cand === F.pCand && FOUND_STATUSES.includes(p.status)).length : 0;
   const one = !!F.pCand;
-  return header('Find &amp; queue jobs', 'Search the job boards for a candidate, then queue the jobs to apply to. Queued jobs are picked up by the worker (or the extension\'s Run queue).') +
+  return header('Find &amp; queue jobs', 'Search the job boards for a candidate, then queue the jobs to apply to. Queued jobs are filled automatically by a Chrome with "Auto-run the queue" switched on in the extension.') +
     `<div class="card">
       <div class="toolbar" style="margin-bottom:0">
         <div class="grow"><label for="pCand">Candidate</label><select id="pCand" onchange="setFindJobsCandidate(this.value)">${candOpts(F.pCand, 'All candidates (view only)')}</select></div>
@@ -858,7 +853,7 @@ async function decide(id, d){
           input: 'What should change? (optional)', placeholder: 'e.g. Lead with the NHS experience; drop the claim about team leadership', ok: 'Send back' });
     if(notes === null) return;
   } else if(t.type === 'Submission'){
-    const ok = await dialog({ title: 'Approve and submit?', body: `<b>${esc(t.summary)}</b> for ${esc(candName(t.cand))} will be submitted to the employer shortly, by the worker or the extension that filled it.`, ok: 'Approve & submit' });
+    const ok = await dialog({ title: 'Approve and submit?', body: `<b>${esc(t.summary)}</b> for ${esc(candName(t.cand))} will be submitted to the employer shortly by the Chrome extension.`, ok: 'Approve & submit' });
     if(!ok) return;
   }
   const r = await sendDecisions([t], d, notes);
@@ -936,7 +931,7 @@ function queueAll(limit){
       D.prospects.forEach(p => { if(ids.has(String(p.id))) p.status = 'Queued'; });
       if(F.prosStatus && F.prosStatus !== 'Queued') F.prosStatus = ''; // show the queued rows
       render();
-      toast(r.queued ? `Queued ${r.queued}` + (r.remaining ? `, ${r.remaining} still found` : '') + ' - the worker picks them up automatically' : 'Nothing to queue.');
+      toast(r.queued ? `Queued ${r.queued}` + (r.remaining ? `, ${r.remaining} still found` : '') + ' - a Chrome with Auto-run on picks them up within a few minutes' : 'Nothing to queue.');
       load(true); // a refresh that started before the queueing would otherwise show them as Found again
     })
     .catch(e => { render(); fail(e); });
@@ -1032,7 +1027,7 @@ const HELP_HTML = `
 <li>A candidate fills in the Google form. Within seconds they appear under <b>Candidates</b>, already profiled by the AI.</li>
 <li>Every morning the system finds new jobs for each active candidate. To do it now: <b>Find &amp; queue jobs</b>, pick the candidate, click <b>Find new jobs</b>.</li>
 <li>Queue the jobs you want - one at a time, or the newest 5 / 10 / 20 / All.</li>
-<li>The background worker picks up queued jobs automatically (about every 30 seconds) and fills each one in. Nobody needs to click anything for this step.</li>
+<li>A Chrome with <b>Auto-run the queue</b> switched on in the extension picks up queued jobs within a few minutes and fills each one in, one tab at a time. Nobody needs to click anything for this step - Chrome just has to be open on that computer.</li>
 <li>Each job lands in the <b>Review queue</b> as <b>one card</b> holding its CV, cover letter and final application. Approve each, or <b>Approve all</b>. Sending a document back has a new version written from your notes. Choosing <b>Don't submit</b> on the final application means it is not sent.</li>
 <li>Once the final application is approved it's submitted for real and a screenshot is saved under <b>Applications</b>.</li>
 <li>A week later, a <b>Follow-up</b> reminds you to check for a reply. Record what happened there.</li>
@@ -1041,8 +1036,8 @@ const HELP_HTML = `
 
 <div class="card">
 <h2>An application says "Approved - not submitted yet"</h2>
-<p class="mut">Approved applications are submitted by whichever tool filled them: the <b>background worker</b> or the <b>Chrome extension</b>. The Overview page shows whether each one is running. If the one it needs isn't running, the application waits, and after 20 minutes it moves to <b>Applications &rsaquo; Needs attention</b> with the reason.</p>
-<p class="mut">Start the worker (<code>npm start</code> in the worker folder) or open Chrome with the extension, and it carries on by itself. If you can see the application on the employer's site, or you submitted it by hand, click <b>Mark submitted</b>. <b>Retry</b> runs it again from the start - only use it once you're sure it didn't go through.</p>
+<p class="mut">Approved applications are submitted by the <b>Chrome extension</b>: the tab that filled the form if it's still open, otherwise any open Chrome with the extension reopens the job, fills it again and submits it within a few minutes. The Overview page shows whether an extension is running. If none is, the application waits, and after 20 minutes it moves to <b>Applications &rsaquo; Needs attention</b> with the reason.</p>
+<p class="mut">Open Chrome with the extension connected and it carries on by itself. If you can see the application on the employer's site, or you submitted it by hand, click <b>Mark submitted</b>. <b>Retry</b> runs it again from the start - only use it once you're sure it didn't go through.</p>
 <p class="mut"><b>"Submitted? Check the employer site"</b> means Submit was clicked but no confirmation message was seen. It may well have gone through - check before doing anything else.</p>
 </div>
 
@@ -1053,14 +1048,10 @@ const HELP_HTML = `
 </div>
 
 <div class="card">
-<h2>The background worker</h2>
-<p class="mut">This is what does the filling. It runs on a machine somewhere (started with <code>npm start</code> in the <code>worker</code> folder of the Jobverse repo) and polls continuously. When it finds something Queued, it generates the CV/cover letter, fills the real application form in a live browser, and stops to request a human decision in the Review queue. It only clicks the real Submit button after someone approves.</p>
-<p class="mut"><b>What it can handle:</b> any application form it can reach without an account - it finds the form (including forms embedded in an iframe), uploads the CV and cover letter, answers each question from the candidate's data, and follows Next through multi-step forms. Anything it can't answer is listed in the review item. Jobs behind a sign-in or sign-up page, and anything that fails, end as <b>Error</b> in Find &amp; queue jobs (the reason is in Notes) - run those through the extension, or re-queue them.</p>
-</div>
-
-<div class="card">
 <h2>The Chrome extension</h2>
-<p class="mut">Use it when you want a single job done right now, or for a job behind a sign-in/sign-up page, which only the extension handles. Open the extension on the job posting, pick the candidate, and click <b>Apply to this job</b>. Same review-then-submit flow.</p>
+<p class="mut">The extension does all the form filling and submitting. It finds its own way from a job ad to the application form, creates or signs in to site accounts when a site needs one, uploads the CV and cover letter, answers each question from the candidate's data, and follows Next through multi-step forms. It never presses Submit until the final application is approved.</p>
+<p class="mut"><b>Auto-run the queue:</b> tick this in the extension popup on the computer that should do the work, and keep Chrome open there. Every few minutes it takes the next queued job for any active candidate (skipping anyone inactive, at their target or at today's limit) and fills it in a background tab. Jobs that only need your approval have their tab closed; after you approve, the extension reopens the job and submits it. Jobs that need a person (a CAPTCHA, an email to verify, a question it couldn't answer) keep their tab open. Two computers can both run it - each job is only ever taken by one of them.</p>
+<p class="mut"><b>One job right now:</b> open the extension on the job posting, pick the candidate, and click <b>Apply to this job</b>. <b>Run queued prospects</b> works through one candidate's queue straight away.</p>
 <p class="mut"><b>Sharing it with your team:</b> send them the chrome-extension folder; they open <b>chrome://extensions</b>, turn on <b>Developer mode</b>, click <b>Load unpacked</b> and pick the folder, then paste the web app URL and API token (Config tab of the sheet) into the extension's <b>Connection settings</b>. It's not on the Chrome Web Store on purpose - this is a private internal tool.</p>
 </div>
 
@@ -1094,7 +1085,7 @@ const HELP_HTML = `
 <details class="faq"><summary>A candidate's job search came back empty. Why?</summary>
 <p>Most likely their role or location isn't covered by the job sources switched on in Config <b>PROSPECT_SOURCES</b>. Jobs come from Adzuna and Reed (UK and Europe), NHS Jobs (including Trac), Workable, Canada Job Bank, MyJobMag (Nigeria), Remotive (remote) and JSearch, which reads Google for Jobs and so brings in listings from LinkedIn, Indeed, Glassdoor, Civil Service Jobs, Jobberman and others. The search uses the first of the candidate's preferred roles, in each of their preferred locations. Anything else can be added by hand in the Prospects tab of the sheet.</p></details>
 <details class="faq"><summary>Something says "Found - Manual Review" instead of Found.</summary>
-<p>The job's link isn't a known application system (Greenhouse, Workday...). It can still be queued: the extension finds its own way from the job page to the form. The worker only fills forms it can reach without an account, so these are best run through the extension.</p></details>
+<p>The job's link isn't a known application system (Greenhouse, Workday...). It can still be queued: the extension finds its own way from the job page to the form.</p></details>
 <details class="faq"><summary>How do I remove a candidate completely?</summary>
 <p>Candidates, <b>Delete</b>. It removes them and everything linked to them - applications, prospects, documents, follow-ups, and their Drive folder. It asks you to confirm first and cannot be undone.</p></details>
 <details class="faq"><summary>The dashboard feels slow.</summary>
@@ -1104,7 +1095,7 @@ const HELP_HTML = `
 <details class="faq"><summary>What does the Reviewer Agent check?</summary>
 <p>Every generated CV, cover letter or NHS statement is checked by a second AI for claims not backed by the candidate's background, keywords from the job ad that are missing, and general quality. Open <b>Reviewer findings</b> on the item to see them. Its score is a guide - you decide.</p></details>
 <details class="faq"><summary>A job needs an account on the employer's site. What happens?</summary>
-<p>In the extension: it creates an account with the candidate's application email and a random password (one per candidate per site, saved under <b>Site accounts</b>), or signs in to the one it made before. If the site wants a CAPTCHA solved or an email verified, it asks a person to do that step and carries on. The worker doesn't handle accounts - those jobs end as Error there.</p></details>
+<p>The extension creates an account with the candidate's application email and a random password (one per candidate per site, saved under <b>Site accounts</b>), or signs in to the one it made before. If the site wants a CAPTCHA solved or an email verified, it asks a person to do that step and carries on.</p></details>
 </div>
 `;
 </script>

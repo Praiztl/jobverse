@@ -11,7 +11,9 @@ approves the actual submission before anything reaches a real employer.
   Real files: `AI.js`, `Agents.js`, `Api.js`, `FormBuilder.js`, `Intake.js`,
   `Reports.js`, `Setup.js`, `Dashboard.html`, `Followup.js`, `Prospects.js`,
   plus `Sync.js` and `Analytics.js`, added here.
-- `worker/` — the Playwright worker. Polls the real `Api.js` endpoints,
+- `worker/` — **retired, not run any more.** The Chrome extension's
+  "Auto-run the queue" now fills queued jobs and submits every approved
+  application. Kept for reference. It was the Playwright worker: it polled the real `Api.js` endpoints,
   fills real ATS application forms, and requests human review before ever
   clicking a real Submit button. `worker/unified-form-filler.js` fills every
   ATS generically. `worker/ats/*.js` are the older per-ATS modules and are
@@ -36,13 +38,14 @@ approves the actual submission before anything reaches a real employer.
 | `Analytics.js` (`reviewerAccuracyReport`) | Deployed and run once — `ReviewQueue` had zero Decided rows at last check, so there's nothing to measure yet |
 | Config-gated auto-decide (patch 05) | Still not applied — needs real Decided rows in `ReviewQueue` first |
 | `PlatformAccounts` tab + site sign-in/sign-up handling | Live in the **Chrome extension** (per-site random passwords in Script Properties). The worker has no sign-in/sign-up handling - jobs behind an account wall end as `Error` there; run them through the extension. |
-| `worker/worker.js` | Fills a form and requests review, then re-fills and submits for real only after a human approves. Reads the job ad itself before analysing it. Every prospect leaves `Queued` (`In Review - Worker`, `Skipped` or `Error`), so failures are never retried in a loop - re-queue from the dashboard. Only submits applications it filled itself (`FilledBy = worker`). |
+| Chrome extension auto-run | **Live** — replaces the worker. With "Auto-run the queue" ticked in the popup, the extension claims the next queued prospect (`nextQueuedProspect`, `Queued` -> `In Progress - Extension` under the script lock, stale claims re-queued after 45 min) every 3 minutes and fills it. Every approval becomes `Approved - Extension`; leftover `Approved - Submitting` rows are submitted by the extension too. |
+| `worker/worker.js` | **Retired.** Fills a form and requests review, then re-fills and submits for real only after a human approves. Reads the job ad itself before analysing it. Every prospect leaves `Queued` (`In Review - Worker`, `Skipped` or `Error`), so failures are never retried in a loop - re-queue from the dashboard. Only submits applications it filled itself (`FilledBy = worker`). |
 | `worker/unified-form-filler.js` | Generic filler for any ATS: picks the frame holding the form, fills text/select/radio/checkbox fields via `answerField`, uploads CV/cover letter, follows Next. `fillForm` never clicks Submit/Apply on a form - only `clickSubmit` does, after approval, and it reports whether a confirmation appeared. |
 | `worker/ats/greenhouse.js`, `worker/ats/workday.js` | Not loaded by the worker any more (superseded by the unified filler) |
 | NHS Jobs | Handled by the extension's generic driver like any other site. `chrome-extension/content/nhs-flow.js` (NHS supporting statement + Trac follow-up) is **not** in the extension manifest and never runs - wiring it in is still to do. |
 | `Api.js`: `exportDocumentPdf`, `listApplicationsByStatus` | Added so the worker can download real CV/cover-letter PDFs and find human-approved applications to submit |
 | `Api.js`: `apiListProspects_` returning `ats` | Fixed — previously always returned `undefined`, so the worker could never match a prospect to an ATS module regardless of what it actually was |
-| Help & guide (`Dashboard.html`) | Updated — documents the worker as the default hands-off path, extension as the fallback for one-off jobs or unsupported ATSes |
+| Help & guide (`Dashboard.html`) | Updated — documents the extension's auto-run as the hands-off path |
 | Postgres schema / `db/sync/*.js` | Still stale/unused — needs a full rework against the real tables (`Jobs`, `CVVersions`, `CoverLetters`, `NHSStatements`, `AIOutputs`, `FollowUps`) |
 | `worker/.env.example` deployment URL leak | A real `/exec` URL was briefly committed, then removed (`fix-env-example.sh`). If the Apps Script deployment behind it hasn't been rotated (new deployment, old one archived) yet, do that — the URL is still visible in git history. |
 

@@ -71,6 +71,8 @@ function doPost(e) {
       reportError: apiReportError_,
       listProspects: apiListProspects_,
       updateProspectStatus: apiUpdateProspectStatus_,
+      claimProspect: apiClaimProspect_,
+      nextQueuedProspect: apiNextQueuedProspect_,
       getCandidateCVText: apiGetCandidateCVText_,
       generateNHSStatement: apiGenerateNHSStatement_,
       createNHSFollowUp: apiCreateNHSFollowUp_,
@@ -565,6 +567,95 @@ function apiUpdateProspectStatus_(req) {
   return { updated: true };
 }
  
+/*
+ * Queue pickup for the Chrome extension, which fills queued prospects itself
+ * (the Playwright worker is retired). A prospect is claimed - Queued ->
+ * 'In Progress - Extension' under the script lock - before a tab is opened
+ * for it, so two Chromes running the queue never work on the same job.
+ */
+var CLAIMED_STATUS_ = 'In Progress - Extension';
+var CLAIM_STALE_MS_ = 45 * 60 * 1000; // longer than the extension's 20-minute application timeout
+
+/** Claims one queued prospect (manual "Run queue"). { claimed: false } if it is no longer Queued. */
+function apiClaimProspect_(req) {
+  var lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    ensureColumns_('Prospects', ['ClaimedAt', 'ClaimedBy']);
+    var p = findRow_('Prospects', 'ProspectID', req.prospectId);
+    if (!p) throw new Error('Prospect not found');
+    if (p.Status !== 'Queued') return { claimed: false, status: p.Status };
+    updateRow_('Prospects', p._row, { Status: CLAIMED_STATUS_, ClaimedAt: new Date(), ClaimedBy: req.deviceId || 'extension' });
+    return { claimed: true };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * Auto-run: claims the next queued prospect of any active candidate who can
+ * still apply today (not inactive, under target and daily cap), oldest row
+ * first. Claims left behind by a Chrome that closed mid-application go back
+ * to Queued first. Returns { prospect: null } when there is nothing to do.
+ */
+function apiNextQueuedProspect_(req) {
+  noteAgentSeen_('autorun');
+  var lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    ensureColumns_('Prospects', ['ClaimedAt', 'ClaimedBy']);
+    var prospects = readRows_('Prospects', ['ProspectID', 'CandidateID', 'Status', 'JobURL', 'Company', 'JobTitle', 'ClaimedAt']);
+
+    var stale = prospects.filter(function (p) {
+      return p.Status === CLAIMED_STATUS_ && p.ClaimedAt && Date.now() - toEpochMs_(p.ClaimedAt) > CLAIM_STALE_MS_;
+    });
+    if (stale.length) {
+      setColumnForRows_('Prospects', 'Status', stale.map(function (p) { return p._row; }), 'Queued');
+      stale.forEach(function (p) { p.Status = 'Queued'; });
+      logActivity_('system', 'prospects_reclaimed', 'prospect', '-', stale.length + ' unfinished claim(s) put back in the queue');
+    }
+
+    var queued = prospects.filter(function (p) { return p.Status === 'Queued'; });
+    if (!queued.length) return { prospect: null, remaining: 0 };
+
+    var cands = {};
+    readRows_('Candidates', ['CandidateID', 'Active', 'TargetApplications', 'Status']).forEach(function (c) { cands[c.CandidateID] = c; });
+    var apps = readRows_('Applications', ['CandidateID', 'Status', 'CreatedAt']);
+    var blocked = {};
+    var canApply = function (candId) {
+      if (!(candId in blocked)) blocked[candId] = candidateBlock_(cands[candId], apps);
+      return !blocked[candId];
+    };
+
+    var pick = null;
+    for (var i = 0; i < queued.length && !pick; i++) {
+      if (canApply(queued[i].CandidateID)) pick = queued[i];
+    }
+    if (!pick) return { prospect: null, remaining: queued.length, waiting: 'All queued jobs belong to candidates who are inactive, at their target or at today\'s cap' };
+
+    updateRow_('Prospects', pick._row, { Status: CLAIMED_STATUS_, ClaimedAt: new Date(), ClaimedBy: req.deviceId || 'extension' });
+    return {
+      prospect: { id: pick.ProspectID, candidateId: pick.CandidateID, url: pick.JobURL, company: pick.Company, title: pick.JobTitle },
+      remaining: queued.length - 1
+    };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** Why a candidate can't start another application right now ('inactive', 'targetMet', 'throttled'), or '' if they can. */
+function candidateBlock_(cand, allApps) {
+  if (!cand || cand.Status === 'Archived' || String(cand.Active).toUpperCase() === 'FALSE') return 'inactive';
+  var id = cand.CandidateID;
+  var mine = allApps.filter(function (a) { return a.CandidateID === id; });
+  var target = parseInt(cand.TargetApplications || getConfig_('DEFAULT_TARGET_APPLICATIONS') || '50', 10);
+  if (target > 0 && mine.filter(function (a) { return countsAsApplication_(a.Status); }).length >= target) return 'targetMet';
+  var limit = parseInt(getConfig_('MAX_APPS_PER_CANDIDATE_PER_DAY') || '15', 10);
+  var today = Utilities.formatDate(new Date(), 'GMT', 'yyyy-MM-dd');
+  var todayCount = mine.filter(function (a) { return Utilities.formatDate(new Date(a.CreatedAt), 'GMT', 'yyyy-MM-dd') === today; }).length;
+  return todayCount >= limit ? 'throttled' : '';
+}
+
 function apiGetCandidateCVText_(req) {
   var c = findRow_('Candidates', 'CandidateID', req.candidateId);
   if (!c) throw new Error('Candidate not found');
@@ -752,14 +843,16 @@ function extractDocId_(url) {
 }
  
 /**
- * NEW: lets the worker find applications waiting on it rather than the sheet
- * - e.g. Status 'Approved - Submitting' after dashDecide records a human's
- * approval on the Submission review, so the worker knows what to actually
- * click Submit on. Also returns the latest CV/cover-letter doc URLs for the
- * application's JobID so the worker can re-fill the form before submitting.
+ * Lets the extension find applications waiting on it - Status 'Approved -
+ * Extension' after dashDecide records a human's approval on the Submission
+ * review - so it can submit ones whose tab is gone. Also returns the latest
+ * CV/cover-letter doc URLs for the application's JobID so the form can be
+ * re-filled before submitting.
  */
 function apiListApplicationsByStatus_(req) {
-  noteAgentSeen_(req.status);
+  if (req.status === 'Approved - Extension') noteAgentSeen_('extension');
+  // The worker is retired: anything still approved for it is the extension's to submit now
+  var wanted = req.status === 'Approved - Extension' ? ['Approved - Extension', 'Approved - Submitting'] : [req.status];
   var cvByJob = {}, clByJob = {}, taskByApp = {};
   readRows_('CVVersions', ['JobID', 'DocURL']).forEach(function (v) { cvByJob[v.JobID] = v.DocURL; });
   readRows_('CoverLetters', ['JobID', 'DocURL']).forEach(function (l) { clByJob[l.JobID] = l.DocURL; });
@@ -769,7 +862,7 @@ function apiListApplicationsByStatus_(req) {
   });
 
   return readRows_('Applications', ['ApplicationID', 'CandidateID', 'JobID', 'Company', 'JobTitle', 'JobURL', 'ATS', 'Status'])
-    .filter(function (a) { return a.Status === req.status && (!req.candidateId || a.CandidateID === req.candidateId); })
+    .filter(function (a) { return wanted.indexOf(a.Status) > -1 && (!req.candidateId || a.CandidateID === req.candidateId); })
     .map(function (a) {
       return {
         id: a.ApplicationID, candidateId: a.CandidateID, jobId: a.JobID, company: a.Company,
@@ -815,10 +908,10 @@ function dashData(key) {
                approvedMs: approvedAt[a.ApplicationID] || 0,
                lastError: errors[errors.length - 1].slice(0, 300) };
     }),
-    // Last time the worker / extension asked for approved applications to submit (0 = never)
+    // Last time a Chrome extension checked for approvals to submit / for queued jobs to run (0 = never)
     agents: {
-      worker: Number(props.getProperty(AGENT_SEEN_PREFIX_ + 'worker') || 0),
-      extension: Number(props.getProperty(AGENT_SEEN_PREFIX_ + 'extension') || 0)
+      extension: Number(props.getProperty(AGENT_SEEN_PREFIX_ + 'extension') || 0),
+      autorun: Number(props.getProperty(AGENT_SEEN_PREFIX_ + 'autorun') || 0)
     },
     reviews: awaitingReviews_(),
     prospects: readRows_('Prospects', ['ProspectID', 'CandidateID', 'Company', 'JobTitle', 'JobURL', 'Status',
@@ -965,10 +1058,9 @@ function dashDecide(key, taskId, decision, notes) {
     Reviewer: who, DecidedAt: new Date()
   });
   if (t.Type === 'Submission') {
+    // The extension submits every approved application: the tab that filled it, or a fresh one
     var app = findRow_('Applications', 'ApplicationID', t.RefID);
-    if (app) updateRow_('Applications', app._row, {
-      Status: decision !== 'approve' ? 'Rejected' : (submittedByWorker_(app, t) ? 'Approved - Submitting' : 'Approved - Extension')
-    });
+    if (app) updateRow_('Applications', app._row, { Status: decision !== 'approve' ? 'Rejected' : 'Approved - Extension' });
   }
   var revising = false;
   var docTab = REVISABLE_DOCS_[t.Type];
@@ -1184,16 +1276,14 @@ function dashSnoozeFollowUp(key, followUpId, days) {
 }
 
 /*
- * Heartbeats: the worker asks for 'Approved - Submitting' applications every
- * cycle, the extension for 'Approved - Extension' ones every two minutes. The
- * dashboard shows how long ago each was last seen, so an approval that is
- * "stuck submitting" because nothing is running says so.
+ * Heartbeats: every open extension asks for approved applications to submit
+ * every two minutes ('extension'), and one with Auto-run switched on asks for
+ * queued jobs ('autorun'). The dashboard shows how long ago each was last
+ * seen, so work that is waiting because no Chrome is running says so.
  */
 var AGENT_SEEN_PREFIX_ = 'AGENT_SEEN_';
 
-function noteAgentSeen_(status) {
-  var agent = status === 'Approved - Submitting' ? 'worker' : status === 'Approved - Extension' ? 'extension' : '';
-  if (!agent) return;
+function noteAgentSeen_(agent) {
   var props = PropertiesService.getScriptProperties();
   var last = Number(props.getProperty(AGENT_SEEN_PREFIX_ + agent) || 0);
   if (Date.now() - last > 60000) props.setProperty(AGENT_SEEN_PREFIX_ + agent, String(Date.now())); // spares the property quota
@@ -1208,18 +1298,6 @@ function noteAgentSeen_(status) {
  */
 function countsAsApplication_(status) {
   return status !== 'Failed' && status !== 'Retried';
-}
-
-/**
- * 'Approved - Submitting' is the worker's queue, so only applications the
- * worker filled go there. Extension-filled ones are submitted by the tab
- * that is polling checkApproval ('Approved - Extension'), which would
- * otherwise race the worker into a double submission. Rows from before
- * FilledBy existed are recognised by the worker's snapshot marker.
- */
-function submittedByWorker_(app, task) {
-  if (app.FilledBy) return app.FilledBy === 'worker';
-  return String(task.AIFindings || '').indexOf('unified-form-filler') > -1;
 }
 
 /** A sheet date cell as yyyy-MM-dd in the script's time zone, or '' if blank/unreadable. */
