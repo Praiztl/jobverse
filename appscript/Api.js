@@ -885,9 +885,11 @@ function dashData(key) {
     if (countsAsApplication_(a.Status)) countByCand[a.CandidateID] = (countByCand[a.CandidateID] || 0) + 1;
   });
   // When each application's submission was approved, so the dashboard can tell "submitting" from "stuck"
-  var approvedAt = {};
-  readRows_('ReviewQueue', ['Type', 'RefID', 'DecidedAt']).forEach(function (t) {
-    if (t.Type === 'Submission' && t.DecidedAt) approvedAt[t.RefID] = toEpochMs_(t.DecidedAt);
+  var approvedAt = {}, reviewOf = {};
+  readRows_('ReviewQueue', ['TaskID', 'Type', 'RefID', 'DecidedAt']).forEach(function (t) {
+    if (t.Type !== 'Submission') return;
+    reviewOf[t.RefID] = t.TaskID; // rows are appended in order, so the newest wins
+    if (t.DecidedAt) approvedAt[t.RefID] = toEpochMs_(t.DecidedAt);
   });
   var props = PropertiesService.getScriptProperties();
   var docs = latestDocsByJob_();
@@ -909,6 +911,7 @@ function dashData(key) {
                approvedMs: approvedAt[a.ApplicationID] || 0,
                // What a reviewer approves: the documents attached to this application
                cvUrl: docs.cv[a.JobID] || '', letterUrl: docs.letter[a.JobID] || '',
+               reviewId: reviewOf[a.ApplicationID] || '',
                lastError: errors[errors.length - 1].slice(0, 300) };
     }),
     // Last time a Chrome extension checked for approvals to submit / for queued jobs to run (0 = never)
@@ -1048,6 +1051,51 @@ function dashRevealAccountPassword(key, accountId) {
   }
   logActivity_(viewer, 'account_password_revealed', 'account', accountId, acct.ATSDomain);
   return { site: acct.ATSDomain, email: acct.Email || '', password: pw || '(no password saved)' };
+}
+
+/**
+ * Approve & submit / Don't submit from the Applications page, for an
+ * application that is 'Awaiting Review'. Decides every Submission review still
+ * waiting for it (the extension tab holding the form polls one of them), and on
+ * approval the job's waiting CV / cover letter reviews too. If no review is
+ * waiting - it was decided or edited in the sheet, or never written - a decided
+ * one is added, so the extension has a task to submit against, and what was
+ * found is logged.
+ */
+function dashDecideApplication(key, applicationId, decision, notes) {
+  requireDashAccess_(key);
+  decision = decision === 'approve' ? 'approve' : 'revise';
+  var app = findRow_('Applications', 'ApplicationID', applicationId);
+  if (!app) throw new Error('Application not found');
+  if (app.Status !== 'Awaiting Review') return { already: true, status: app.Status };
+  var who = Session.getActiveUser().getEmail();
+
+  var rows = readRows_('ReviewQueue', ['TaskID', 'Type', 'JobID', 'RefID', 'Status']);
+  var subs = rows.filter(function (t) { return t.Type === 'Submission' && t.RefID === applicationId; });
+  var waiting = subs.filter(function (t) { return t.Status === 'Awaiting Human'; });
+
+  if (decision === 'approve' && app.JobID) {
+    rows.filter(function (t) { return REVISABLE_DOCS_[t.Type] && t.JobID === app.JobID && t.Status === 'Awaiting Human'; })
+      .forEach(function (t) { dashDecide(key, t.TaskID, 'approve', ''); });
+  }
+  if (waiting.length) {
+    waiting.forEach(function (t) { dashDecide(key, t.TaskID, decision, notes); });
+    return { decided: true };
+  }
+
+  logActivity_(who || 'reviewer', 'review_missing', 'application', applicationId,
+    'No waiting review for this application; found: ' +
+    (subs.map(function (t) { return t.TaskID + ' ' + t.Status; }).join(', ') || 'none'));
+  var now = new Date();
+  appendObject_('ReviewQueue', {
+    TaskID: newId_('REV'), CreatedAt: now, Type: 'Submission',
+    CandidateID: app.CandidateID, JobID: app.JobID || '', RefID: applicationId,
+    Summary: app.Company + ' - ' + app.JobTitle, AIFindings: '[]',
+    Status: 'Decided', Reviewer: who, DecidedAt: now, Decision: decision, Notes: notes || ''
+  });
+  updateRow_('Applications', app._row, { Status: decision === 'approve' ? 'Approved - Extension' : 'Rejected' });
+  logActivity_(who || 'reviewer', 'review_' + decision, 'Submission', applicationId, notes || '');
+  return { decided: true, reviewWasMissing: true };
 }
 
 /**

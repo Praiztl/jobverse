@@ -664,11 +664,13 @@ PAGES.applications = () => {
 function appRowHtml(a){
   const s = appInfo(a);
   const canRetry = a.status === 'Rejected' || s.group === 'attention';
-  const canMark = s.stuck || s.unconfirmed || (s.approved && !s.stuck);
+  const ready = s.group === 'review';
+  // Failed includes an approved application the extension could not re-submit - it may have gone by hand
+  const canMark = s.stuck || s.unconfirmed || (s.approved && !s.stuck) || a.status === 'Failed' || a.status === 'Error';
   const hint = s.stuck ? stuckReason(a) : s.unconfirmed ? 'Submit was clicked but no confirmation was seen. Check the employer\'s site or the candidate\'s inbox.'
     : (a.status === 'Failed' || a.status === 'Error') && a.lastError ? a.lastError : '';
-  // The final-application review this row is waiting on, if any
-  const sub = s.group === 'review' && D.reviews.find(t => t.type === 'Submission' && t.refId === a.id);
+  // The final-application review behind this row, for "What was filled in"
+  const sub = ready && (D.reviews.find(t => t.type === 'Submission' && t.refId === a.id) || (a.reviewId ? { id: a.reviewId } : null));
   const files = { cvUrl: a.cvUrl, letterUrl: a.letterUrl };
   const filledIn = sub && OPEN_FINDINGS.has(sub.id) ? (FINDINGS[sub.id] == null ? '<div class="findings">Loading…</div>' : renderFindings(FINDINGS[sub.id])) : '';
   const extra = docFramesHtml(a.id, files) + filledIn;
@@ -682,8 +684,8 @@ function appRowHtml(a){
     <td class="mut nowrap" title="${a.createdMs ? esc(new Date(a.createdMs).toLocaleString('en-GB')) : ''}">${esc(shortDate(a.createdMs))}${a.submittedMs ? `<br>sent ${esc(shortDate(a.submittedMs))}` : ''}</td>
     <td>${a.shot ? `<a href="${esc(a.shot)}">screenshot</a>` : '<span class="mut">-</span>'}</td>
     <td><div class="acts" style="justify-content:flex-end">
-      ${sub ? `<button class="btn approve tiny" onclick="approveApp('${a.id}')">Approve &amp; submit</button>
-        <button class="btn reject tiny" onclick="decide('${sub.id}','revise')">Don't submit</button>` : ''}
+      ${ready ? `<button class="btn approve tiny" onclick="approveApp('${a.id}')">Approve &amp; submit</button>
+        <button class="btn reject tiny" onclick="rejectApp('${a.id}')">Don't submit</button>` : ''}
       ${canMark ? `<button class="btn ghost tiny" onclick="markSubmitted('${a.id}')">Mark submitted</button>` : ''}
       ${canRetry ? `<button class="btn ghost tiny" onclick="retryApp('${a.id}')">Retry</button>` : ''}
     </div></td></tr>` + (extra ? `<tr class="pvrow"><td colspan="6">${extra}</td></tr>` : '');
@@ -1027,10 +1029,39 @@ async function approveGroup(encodedKey){
 }
 
 /** Approve & submit from Applications: the job's waiting CV / cover letter cards go with it. */
-function approveApp(appId){
-  const g = reviewGroups().find(x => x.items.some(t => t.type === 'Submission' && t.refId === appId));
-  if(g) approveGroup(encodeURIComponent(g.key));
-  else toast('This application has no review waiting - refresh the page', true);
+/**
+ * Approve & submit / Don't submit from Applications. Decided on the application itself
+ * (dashDecideApplication), so it works whatever state its review rows are in; on approval
+ * the job's waiting CV / cover letter reviews are approved with it.
+ */
+async function approveApp(appId){
+  const a = D.applications.find(x => x.id === appId);
+  if(!a) return;
+  const ok = await dialog({ title: 'Approve and submit?', ok: 'Approve & submit',
+    body: `<b>${esc(a.company)}</b> - ${esc(a.title)} for ${esc(candName(a.cand))}.<br><br>The Chrome extension then clicks Submit on the filled form and records the employer's confirmation.` });
+  if(ok) decideApp(a, 'approve', '');
+}
+async function rejectApp(appId){
+  const a = D.applications.find(x => x.id === appId);
+  if(!a) return;
+  const notes = await dialog({ title: "Don't submit this application?", danger: true, ok: "Don't submit",
+    body: `<b>${esc(a.company)}</b> - ${esc(a.title)} will not be sent. Retry runs it again later if you change your mind.`, input: 'Reason (optional)' });
+  if(notes !== null) decideApp(a, 'revise', notes);
+}
+function decideApp(a, d, notes){
+  const before = a.status, reviews = D.reviews;
+  a.status = d === 'approve' ? 'Approved - Extension' : 'Rejected';
+  a.approvedMs = Date.now();
+  if(d === 'approve') D.reviews = D.reviews.filter(t => !(t.refId === a.id || (a.jobId && t.jobId === a.jobId)));
+  else D.reviews = D.reviews.filter(t => t.refId !== a.id);
+  render();
+  rpc('dashDecideApplication', a.id, d, notes)
+    .then(r => {
+      if(r && r.already) toast('Already decided - it is now "' + appInfo({ status: r.status }).label + '"');
+      else toast(d === 'approve' ? 'Approved - it will be submitted shortly' : 'Not submitted');
+      load(true);
+    })
+    .catch(e => { a.status = before; D.reviews = reviews; render(); fail(e); });
 }
 
 /** Decides items one after another (documents before the submission), restoring any that fail. */
