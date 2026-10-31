@@ -349,7 +349,8 @@ function appInfo(a){
   if(!s && /Human Needed$/.test(a.status || '')) {
     const why = a.status.replace(/\s*-\s*Human Needed$/, '');
     s = { label: why === 'Submit Unconfirmed' ? 'Submitted? Check the employer site'
-            : why === 'Form Incomplete' ? 'Approved - form has empty fields' : 'Needs a person: ' + (why === 'HumanHelp' ? 'help on the page' : why),
+            : why === 'Form Incomplete' ? 'Approved - form has empty fields'
+            : why === 'Check Before Submit' ? 'Approved - screenshot check found problems' : 'Needs a person: ' + (why === 'HumanHelp' ? 'help on the page' : why),
           cls: 'c-cap', group: 'attention', unconfirmed: why === 'Submit Unconfirmed' };
   }
   s = Object.assign({ label: a.status || 'Unknown', cls: 'c-prog', group: 'flight' }, s);
@@ -669,6 +670,7 @@ function appRowHtml(a){
   // Failed includes an approved application the extension could not re-submit - it may have gone by hand
   const canMark = s.stuck || s.unconfirmed || (s.approved && !s.stuck) || a.status === 'Failed' || a.status === 'Error';
   const hint = s.stuck ? stuckReason(a) : s.unconfirmed ? 'Submit was clicked but no confirmation was seen. Check the employer\'s site or the candidate\'s inbox.'
+    : /^Check Before Submit/.test(a.status) ? 'Not submitted yet: the last screenshot check before Submit found problems. The open tab lists them (bottom right) - fix them and press "check again", or "submit" if they are fine.'
     : /^Form Incomplete/.test(a.status) ? 'Not submitted: required fields were still empty or invalid. Finish them in the open tab (marked red) and it submits by itself. If the tab is gone, use Retry.'
     : (a.status === 'Failed' || a.status === 'Error') && a.lastError ? a.lastError : '';
   // The final-application review behind this row, for "What was filled in"

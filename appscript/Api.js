@@ -64,6 +64,7 @@ function doPost(e) {
       answerField: apiAnswerField_,
       decideClick: apiDecideClick_,
       chooseNextStep: apiChooseNextStep_,
+      visualCheck: apiVisualCheck_,
       requestReview: apiRequestReview_,
       checkApproval: apiCheckApproval_,
       captchaPause: apiCaptchaPause_,
@@ -408,6 +409,46 @@ function apiDecideClick_(req) {
     reason: decision.reason || '',
     needsHuman: !decision.shouldClick && /human/i.test(String(decision.reason || ''))
   };
+}
+
+/**
+ * The last look a person would take before submitting: screenshots of the
+ * filled form (top to bottom, JPEG base64), checked by the AI for anything
+ * unanswered, showing an error, or wrong for this candidate. The extension
+ * calls it before the form goes to review and again right before Submit.
+ * Config VISUAL_CHECK = off turns it off. -> { issues: [{ field, problem }] }
+ */
+function apiVisualCheck_(req) {
+  if (String(getConfig_('VISUAL_CHECK') || '').toLowerCase() === 'off') return { issues: [], skipped: true };
+  var cand = findRow_('Candidates', 'CandidateID', req.candidateId);
+  if (!cand) throw new Error('Candidate not found');
+  var images = (req.images || []).slice(0, 8);
+  if (!images.length) return { issues: [], skipped: true };
+
+  var content = images.map(function (b64) {
+    return { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b64 } };
+  });
+  content.push({ type: 'text', text:
+    'These are screenshots of one online job application form, top to bottom, filled in by a bot for this candidate. ' +
+    (req.stage === 'submit' ? 'A reviewer has approved it and Submit is about to be pressed.' : 'It is about to go to a human reviewer.') +
+    '\n\nCANDIDATE: ' + JSON.stringify({
+      fullName: cand.FullName, email: cand.ApplicationEmail || cand.Email, phone: cand.Phone, location: cand.Location,
+      nationality: cand.Nationality, rightToWork: cand.RightToWork, noticePeriod: cand.NoticePeriod
+    }) +
+    '\n\nCANDIDATE PROFILE (summary): ' + String(cand.AIProfileJSON || '').slice(0, 3000) +
+    '\n\nWHAT THE BOT SAYS IT FILLED: ' + JSON.stringify(req.filled || []).slice(0, 4000) +
+    '\n\nList only real problems a careful person would fix before submitting: required questions (marked * or "required") left ' +
+    'unanswered; fields showing an error or warning message; dropdowns still on a placeholder like "Select..."; required consent ' +
+    'boxes not ticked; values that are wrong for this candidate (a phone country code that does not match their number or country, ' +
+    'a name or email that is not theirs, an answer that contradicts their profile). Ignore optional fields left blank, ' +
+    'coloured highlight boxes and outlines (the bot adds those), and anything outside the form. If you cannot tell, do not list it. ' +
+    'Return JSON: {"issues": [{"field": "the question or field as shown on the page", "problem": "what is wrong, in a short sentence"}]} ' +
+    '- an empty list when the form looks complete and correct.' });
+
+  var result = callClaudeJSON_('You check filled-in job application forms the way an experienced recruiter would.', content, 1200);
+  var issues = (result.issues || []).filter(function (i) { return i && (i.field || i.problem); }).slice(0, 15);
+  saveAIOutput_('VisualCheck', req.candidateId, req.jobId, { stage: req.stage || 'review', shots: images.length, issues: issues });
+  return { issues: issues };
 }
 
 /**
