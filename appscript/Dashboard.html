@@ -26,6 +26,22 @@
     .count{background:var(--mint);color:var(--pine);border-radius:9px;font-size:11px;font-weight:700;padding:1px 7px;min-width:20px;text-align:center}
     .count.warn{background:#F2B8A8;color:#5A1A0C}
     .count:empty,.count[data-n="0"]{display:none}
+    .navsec.more{margin-top:auto;padding-top:18px}
+    nav .minor{font-size:13px;padding:6px 20px}
+
+    /* ---- auto-apply status line, top of every page ---- */
+    .runbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px;border-radius:8px;padding:8px 12px;margin-bottom:14px;border:1px solid var(--line);background:var(--card)}
+    .runbar.off{background:var(--red-bg);border-color:#F0C4B8;color:#6B2010}
+    .runbar .btn{margin-left:auto}
+
+    /* ---- getting started checklist ---- */
+    .checklist{list-style:none;padding:0;margin-top:8px}
+    .checklist li{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--line);font-size:13.5px}
+    .checklist li:last-child{border-bottom:none}
+    .checklist .tick{width:20px;height:20px;border-radius:50%;border:2px solid var(--line);display:grid;place-items:center;font-size:12px;flex-shrink:0}
+    .checklist li.done .tick{background:var(--moss);border-color:var(--moss);color:#fff}
+    .checklist li.done .what{color:var(--mut);text-decoration:line-through}
+    .checklist .btn{margin-left:auto}
 
     /* ---- page ---- */
     main{flex:1;padding:24px 30px 60px;max-width:1240px;min-width:0}
@@ -113,7 +129,29 @@
     .score{font-family:'IBM Plex Mono';font-size:12px;border-radius:6px;padding:1px 7px;background:var(--soft);border:1px solid var(--line)}
     .score.lo{color:var(--red);border-color:#F0C4B8;background:var(--red-bg)}
     .score.hi{color:var(--green);border-color:#BFE0CB;background:var(--green-bg)}
-    .ritem.sub{background:#FBFCF9}
+    .ritem.sub{background:#FBFCF9;max-width:none;margin-top:0;font-size:inherit;color:inherit} /* not the page subtitle's .sub */
+
+    /* ---- documents (view inline before approving) ---- */
+    .docs{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px}
+    .docs .doc{display:inline-flex;gap:6px;align-items:center}
+    .previews{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px;padding:0 18px 14px}
+    td .previews{padding:4px 0 8px}
+    .preview .mut{margin-bottom:4px;font-weight:600}
+    .preview iframe{width:100%;height:560px;border:1px solid var(--line);border-radius:8px;background:#fff}
+    .pvrow td{background:var(--soft)}
+
+    /* ---- overview: how it works ---- */
+    .flow{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px;counter-reset:step}
+    .fstep{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;text-align:left;font-family:inherit;color:inherit;cursor:pointer}
+    .fstep:hover{border-color:var(--moss)}
+    .fstep::before{counter-increment:step;content:counter(step);display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:var(--soft);border:1px solid var(--line);font-size:12px;font-weight:700;margin-bottom:8px}
+    .fstep.now{border-color:var(--moss);box-shadow:0 0 0 2px var(--mint)}
+    .fstep.now::before{background:var(--moss);color:#fff;border-color:var(--moss)}
+    .fstep.bad{border-color:var(--red)}
+    .fstep b{display:block;font-size:14px;margin-bottom:2px}
+    .fstep .n{font-family:'Archivo';font-size:20px;display:block;margin:4px 0 2px;color:var(--ink)}
+    .fstep span{font-size:12.5px;color:var(--mut)}
+    @media (max-width:820px){ .flow{grid-template-columns:repeat(2,1fr)} .preview iframe{height:420px} }
     .findings{font-family:'IBM Plex Mono';font-size:11.5px;background:var(--soft);border:1px solid var(--line);border-radius:6px;padding:8px 10px;white-space:pre-wrap;max-height:260px;overflow:auto;margin-top:10px}
     .findings.kv{font-family:'IBM Plex Sans';white-space:normal}
     .findings.kv div{padding:3px 0;border-bottom:1px solid var(--line)}
@@ -168,20 +206,17 @@
   <nav aria-label="Sections">
     <div class="logo">JOB<span>VERSE</span></div>
     <button data-v="home" class="on">Overview</button>
-    <div class="navsec">Needs you</div>
-    <button data-v="reviews">Review queue <span class="count" id="nReviews"></span></button>
-    <button data-v="applications">Applications <span class="count warn" id="nApps"></span></button>
-    <button data-v="followups">Follow-ups <span class="count warn" id="nFollow"></span></button>
-    <div class="navsec">Pipeline</div>
-    <button data-v="prospects">Find &amp; queue jobs</button>
-    <button data-v="generate">Generate documents</button>
-    <div class="navsec">Setup</div>
+    <button data-v="applications">Applications <span class="count" id="nApps"></span></button>
+    <button data-v="prospects">Find jobs</button>
     <button data-v="candidates">Candidates</button>
-    <button data-v="accounts">Site accounts</button>
-    <div class="navsec">Insight</div>
-    <button data-v="report">Reports</button>
-    <button data-v="log">Activity</button>
-    <button data-v="help">Help &amp; guide</button>
+    <button data-v="followups">Follow-ups <span class="count warn" id="nFollow"></span></button>
+    <div class="navsec more">More</div>
+    <button data-v="reviews" class="minor">Documents to check <span class="count" id="nReviews"></span></button>
+    <button data-v="generate" class="minor">Write a CV by hand</button>
+    <button data-v="accounts" class="minor">Site accounts</button>
+    <button data-v="report" class="minor">Reports</button>
+    <button data-v="log" class="minor">Activity</button>
+    <button data-v="help" class="minor">Help &amp; guide</button>
   </nav>
   <main id="main"><h1>Loading…</h1></main>
   <div id="toast" role="status" aria-live="polite"></div>
@@ -235,7 +270,7 @@ setInterval(() => { const s = document.getElementById('syncAge'); if(s) s.textCo
 
 /** True while redrawing would lose the user's input: the Generate form, an open dialog, or any focused field. */
 function userIsEditing(){
-  if(view === 'generate' || DLG.open) return true;
+  if(view === 'generate' || DLG.open || PREVIEW.size) return true;
   const a = document.activeElement;
   return !!a && document.getElementById('main').contains(a) && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName);
 }
@@ -299,11 +334,11 @@ const AGENT_QUIET_MS = 10 * MIN;       // the extension checks in every 2-3 min 
 
 const APP_STATUS = {
   'In Progress':           { label: 'Filling the form', cls: 'c-prog', group: 'flight' },
-  'Awaiting Review':       { label: 'Waiting for review', cls: 'c-wait', group: 'flight' },
+  'Awaiting Review':       { label: 'Ready for your approval', cls: 'c-wait', group: 'review' },
   'Approved - Submitting': { label: 'Approved - submitting', cls: 'c-prog', group: 'flight' }, // from the retired worker
   'Approved - Extension':  { label: 'Approved - submitting', cls: 'c-prog', group: 'flight' },
   'Submitted':             { label: 'Submitted', cls: 'c-sub', group: 'done' },
-  'Rejected':              { label: 'Sent back (not submitted)', cls: 'c-mut', group: 'closed' },
+  'Rejected':              { label: 'Not sent (you said no)', cls: 'c-mut', group: 'closed' },
   'Failed':                { label: 'Failed', cls: 'c-fail', group: 'attention' },
   'Error':                 { label: 'Failed', cls: 'c-fail', group: 'attention' },
   'Retried':               { label: 'Re-queued', cls: 'c-mut', group: 'closed' }
@@ -331,6 +366,19 @@ function rail(status){
   const idx = /^Approved/.test(status) ? 2 : stages.indexOf(status);
   return '<div class="rail">' + stages.map((s,i) => `<i class="${idx >= i ? 'done':''}" title="${s}"></i>`).join('') + '</div>';
 }
+/** Job (prospect) statuses in everyday words. */
+function prospectLabel(s){
+  s = String(s || '');
+  const words = { 'Found': 'Found', 'Found - Manual Review': 'Found - check it fits', 'Queued': 'In line to apply',
+    'In Progress - Extension': 'Applying now', 'In Review - Extension': 'Filled - waiting for your approval',
+    'In Review - Worker': 'Filled - waiting for your approval', 'Applied': 'Applied', 'Closed': 'Job closed',
+    'Error': "Couldn't apply", 'Skipped': 'Skipped' };
+  if(words[s]) return words[s];
+  const skip = s.match(/^Skipped\s*[-:]\s*(.+)$/);
+  return skip ? 'Skipped: ' + skip[1].toLowerCase() : s;
+}
+function prospectChip(s){ return chip(s).replace('>' + esc(s) + '<', '>' + esc(prospectLabel(s)) + '<'); }
+
 function chip(s){
   s = String(s || '');
   const cls = /Submitted|Created|Done|Interview|Offer/.test(s) ? 'c-sub' : s.includes('CAPTCHA') ? 'c-cap'
@@ -349,6 +397,36 @@ function stuckReason(a){
   const x = agentState('extension');
   return x.ok ? 'The Chrome extension is running but hasn\'t confirmed this - Submit may have been clicked without a confirmation being seen.'
     : 'Waiting for the Chrome extension, which ' + (x.seen ? 'last checked in ' + ago(x.seen) : 'has never checked in') + '. Open Chrome with the extension signed in.';
+}
+
+/* ------------------------------- documents ------------------------------ */
+
+// Which CV / cover letter previews are open, keyed "<card or application id>|cv"
+const PREVIEW = new Set();
+function togglePreview(key){ PREVIEW.has(key) ? PREVIEW.delete(key) : PREVIEW.add(key); render(); }
+
+/** A Google Doc link as its read-only preview page, which can be shown inside the dashboard. */
+function docPreviewUrl(url){
+  const m = String(url || '').match(/\/d\/([-\w]{25,})/) || String(url || '').match(/[?&]id=([-\w]{25,})/);
+  return m ? `https://docs.google.com/document/d/${m[1]}/preview` : url;
+}
+function docList(files){
+  return [['cv', 'CV', files.cvUrl], ['letter', 'Cover letter', files.letterUrl]].filter(d => d[2]);
+}
+/** "View CV" / "View cover letter" buttons (open the document right here) plus a link to the Google Doc. */
+function docButtonsHtml(owner, files, jobUrl){
+  const btns = docList(files).map(([k, label, url]) => {
+    const on = PREVIEW.has(owner + '|' + k);
+    return `<span class="doc"><button class="btn ghost tiny" aria-expanded="${on}" onclick="togglePreview('${owner}|${k}')">${on ? 'Hide' : 'View'} ${label === 'CV' ? 'CV' : label.toLowerCase()}</button>
+      <a class="small" href="${esc(url)}" title="Open in Google Docs">open ↗</a></span>`;
+  });
+  if(jobUrl) btns.push(`<a class="small" href="${esc(jobUrl)}">job posting ↗</a>`);
+  return btns.length ? `<div class="docs">${btns.join('')}</div>` : '';
+}
+function docFramesHtml(owner, files){
+  const open = docList(files).filter(([k]) => PREVIEW.has(owner + '|' + k));
+  return open.length ? '<div class="previews">' + open.map(([k, label, url]) =>
+    `<div class="preview"><div class="mut">${label}</div><iframe src="${esc(docPreviewUrl(url))}" title="${label} preview" loading="lazy"></iframe></div>`).join('') + '</div>' : '';
 }
 
 /* ------------------------------ derived data ---------------------------- */
@@ -378,20 +456,46 @@ function reviewGroups(){
   });
 }
 function attentionApps(){ return D.applications.filter(a => appInfo(a).group === 'attention'); }
+function readyApps(){ return D.applications.filter(a => appInfo(a).group === 'review'); }
+
+/**
+ * Review cards that belong on "Documents to check": anything not tied to an
+ * application the extension is working on. A job being applied to has its CV,
+ * cover letter and final application approved together under Applications.
+ */
+function docGroups(){
+  const live = D.applications.filter(a => ['flight', 'review'].includes(appInfo(a).group));
+  const liveJobs = new Set(live.map(a => a.jobId).filter(Boolean));
+  const liveKeys = new Set(live.map(a => a.cand + '|' + (a.company + ' - ' + a.title).toLowerCase().trim()));
+  return reviewGroups().filter(g => !liveKeys.has(g.key) && !g.items.some(t => t.jobId && liveJobs.has(t.jobId)));
+}
 function followUpsDue(){ return D.followUps.filter(f => f.status === 'Pending' && f.due && f.due <= todayIso()); }
 
 function updateBadges(){
   if(!D) return;
   const set = (id, n) => { const el = document.getElementById(id); el.textContent = n || ''; el.dataset.n = n; };
-  set('nReviews', reviewGroups().length);
-  set('nApps', attentionApps().length);
+  set('nReviews', docGroups().length);
+  const att = attentionApps().length;
+  set('nApps', readyApps().length + att);
+  document.getElementById('nApps').classList.toggle('warn', att > 0);
   set('nFollow', followUpsDue().length);
 }
 
 /* -------------------------------- pages --------------------------------- */
 
+/** One line saying whether queued jobs are being applied to right now, and how to fix it if not. */
+function runBar(){
+  if(!D) return '';
+  const run = agentState('autorun'), x = agentState('extension');
+  const queued = D.prospects.filter(p => p.status === 'Queued').length;
+  const line = queued ? `${queued} job${queued > 1 ? 's' : ''} in line` : 'nothing in line';
+  if(run.ok) return `<div class="runbar"><span class="dot ok"></span><b>Auto-applying is on</b><span class="mut">· ${line}${queued ? '' : ' - pick jobs on Find jobs'}</span></div>`;
+  return `<div class="runbar off"><span class="dot bad"></span><b>Auto-applying is off</b><span>· ${line}. Open Chrome and tick <b>Auto-run the queue</b> in the Jobverse extension.${x.ok ? ' Approved applications still get submitted.' : ''}</span>
+    <button class="btn ghost tiny" onclick="go('help')">How?</button></div>`;
+}
+
 function header(title, sub, right){
-  return `<div class="top"><div><h1>${title}</h1>${sub ? `<p class="sub">${sub}</p>` : ''}</div>
+  return runBar() + `<div class="top"><div><h1>${title}</h1>${sub ? `<p class="sub">${sub}</p>` : ''}</div>
     <div class="sync">${right || ''}<span>Updated <span id="syncAge">${ago(loadedAt)}</span></span>
     <button class="btn ghost tiny" onclick="load()" title="Reload data from the sheet">Refresh</button></div></div>`;
 }
@@ -409,65 +513,99 @@ function render(){
   document.getElementById('main').innerHTML = (PAGES[view] || PAGES.home)();
 }
 
+/** First-run checklist: shown until every step has happened once (or it's hidden). */
+function gettingStartedHtml(){
+  const ever = which => !!(D.agents && D.agents[which]);
+  const items = [
+    { done: D.candidates.length > 0, what: 'Add your first candidate', how: 'They fill in the intake Google Form, then appear under Candidates', to: "'candidates'" },
+    { done: ever('extension'), what: 'Install the Chrome extension and connect it', how: 'Load it in chrome://extensions, then paste the web app URL and API token', to: "'help'" },
+    { done: ever('autorun'), what: 'Turn on "Auto-run the queue" in the extension', how: 'On the computer that should do the applying', to: "'help'" },
+    { done: D.prospects.some(p => !FOUND_STATUSES.includes(p.status)) || D.applications.length > 0, what: 'Pick jobs to apply to', how: 'Find jobs, then Apply', to: "'prospects'" },
+    { done: D.applications.some(a => a.status === 'Submitted' || /^Approved/.test(a.status || '')), what: 'Approve your first application', how: 'Applications, then Approve & submit', to: "'applications',{appTab:'review'}" }
+  ];
+  const left = items.filter(i => !i.done).length;
+  if(!left || store('jobverse_hide_checklist')) return '';
+  return `<div class="card"><div class="top" style="margin-bottom:0"><h2>Getting started · ${items.length - left} of ${items.length} done</h2>
+      <button class="linkbtn" onclick="store('jobverse_hide_checklist','1');render()">Hide</button></div>
+    <ul class="checklist">${items.map(i => `<li class="${i.done ? 'done' : ''}"><span class="tick">${i.done ? '✓' : ''}</span>
+      <div><div class="what">${i.what}</div>${i.done ? '' : `<div class="mut">${i.how}</div>`}</div>
+      ${i.done ? '' : `<button class="btn ghost tiny" onclick="go(${i.to})">Go</button>`}</li>`).join('')}</ul></div>`;
+}
+
 PAGES.home = () => {
-  const groups = reviewGroups(), att = attentionApps(), due = followUpsDue();
+  const groups = docGroups(), att = attentionApps(), due = followUpsDue();
   const queued = D.prospects.filter(p => p.status === 'Queued').length;
   const weekAgo = Date.now() - 7 * DAY;
   const subWeek = D.applications.filter(a => a.status === 'Submitted' && a.submittedMs > weekAgo).length;
   const inFlight = D.applications.filter(a => appInfo(a).group === 'flight').length;
-  const x = agentState('extension'), run = agentState('autorun');
-  const agent = (name, s, hint) => `<div class="agent"><span class="dot ${s.ok ? 'ok' : s.seen ? 'bad' : 'idle'}"></span>
-    <b>${name}</b><span class="mut">${s.ok ? 'on - checked in ' + ago(s.seen) : s.seen ? 'not seen since ' + ago(s.seen) : 'never seen'}</span>
-    ${!s.ok ? `<span class="mut">· ${hint}</span>` : ''}</div>`;
+  const run = agentState('autorun');
   const stat = (n, label, to, hot) => `<button class="stat ${hot && n ? 'hot' : ''}" onclick="go(${to})"><b>${n}</b><span>${label}</span></button>`;
 
+  const ready = readyApps().length;
+  const found = D.prospects.filter(p => FOUND_STATUSES.includes(p.status)).length;
+  const active = D.candidates.filter(c => c.active).length;
+  const steps = [
+    { title: 'Add a candidate', n: active + ' active', hint: 'Their details and background', to: "'candidates'", now: !active },
+    { title: 'Pick jobs', n: queued + ' in line', hint: found + ' found jobs to choose from', to: "'prospects'", now: active && !queued && !inFlight && !ready },
+    { title: 'Extension fills forms', n: inFlight + ' filling', hint: run.ok ? 'Auto-run is on' : 'Turn on Auto-run in the extension', to: "'applications',{appTab:'flight'}", bad: queued && !run.ok },
+    { title: 'Check & submit', n: ready + ' ready', hint: 'View CV + letter, then Approve & submit', to: "'applications',{appTab:'review'}", now: ready }
+  ];
+  const stepsHtml = '<div class="flow">' + steps.map(st => `<button class="fstep ${st.now ? 'now' : ''} ${st.bad ? 'bad' : ''}" onclick="go(${st.to})">
+      <b>${st.title}</b><span class="n">${esc(st.n)}</span><span>${esc(st.hint)}</span></button>`).join('') + '</div>';
+
   const todo = [];
-  groups.slice(0, 3).forEach(g => todo.push({ text: `Review <b>${esc(g.summary)}</b> for ${esc(candName(g.cand))}`, meta: g.items.map(t => DOC_LABEL[t.type] || t.type).join(', '), to: `'reviews'` }));
+  readyApps().slice(0, 3).forEach(a => todo.push({ text: `Approve <b>${esc(a.company)}</b> - ${esc(a.title)} for ${esc(candName(a.cand))}`, meta: 'Form filled - check the CV and cover letter, then Approve & submit', to: `'applications',{appTab:'review'}`, main: true }));
+  groups.slice(0, 3).forEach(g => todo.push({ text: `Check documents for <b>${esc(g.summary)}</b> (${esc(candName(g.cand))})`, meta: g.items.map(t => DOC_LABEL[t.type] || t.type).join(', '), to: `'reviews'` }));
   att.slice(0, 3).forEach(a => todo.push({ text: `<b>${esc(a.company)}</b> - ${esc(a.title)} (${esc(candName(a.cand))})`, meta: appInfo(a).label, to: `'applications',{appTab:'attention'}` }));
   due.slice(0, 3).forEach(f => todo.push({ text: `Check for a reply from <b>${esc(f.company)}</b> (${esc(candName(f.cand))})`, meta: 'Follow-up due ' + esc(f.due), to: `'followups'` }));
 
-  return header('Overview', 'What needs a person right now, and whether the automation is running.') +
+  return header('Overview', 'How Jobverse works: four steps, left to right. The highlighted one needs you.') + gettingStartedHtml() + stepsHtml +
+    `<div class="card flush"><div style="padding:14px 18px 4px"><h2>To do</h2></div>` +
+    (todo.length ? '<table>' + todo.map(t => `<tr><td>${t.text}<div class="mut">${t.meta}</div></td>
+        <td style="text-align:right;width:1%"><button class="btn ${t.main ? 'approve' : 'ghost'} tiny" onclick="go(${t.to})">${t.main ? 'Review' : 'Open'}</button></td></tr>`).join('') + '</table>'
+      : emptyState('All caught up', 'Nothing needs a person right now.')) + '</div>' +
     `<div class="grid">
-      ${stat(groups.length, 'jobs waiting for review', "'reviews'", true)}
       ${stat(att.length, 'applications need attention', "'applications',{appTab:'attention'}", true)}
       ${stat(due.length, 'follow-ups due', "'followups',{fuTab:'due'}", true)}
-      ${stat(inFlight, 'applications in progress', "'applications',{appTab:'flight'}")}
-      ${stat(queued, 'jobs queued to apply', "'prospects',{prosStatus:'Queued'}")}
       ${stat(subWeek, 'submitted in the last 7 days', "'applications',{appTab:'done'}")}
-    </div>
-    <div class="card"><h2>Automation</h2><div class="agents">
-      ${agent('Chrome extension', x, 'open Chrome with the extension connected')}
-      ${agent('Auto-run queue', run, 'tick "Auto-run the queue" in the extension popup on the computer that should do the work')}
-    </div><p class="mut" style="margin-top:10px">Queued jobs are filled by a Chrome with <b>Auto-run the queue</b> switched on, and approved applications are submitted by any open Chrome with the extension.
-      ${queued && !run.ok ? `<br><b style="color:var(--red)">${queued} job${queued > 1 ? 's are' : ' is'} queued but no Chrome is auto-running the queue.</b>` : ''}</p></div>
-    <div class="card flush"><div style="padding:14px 18px 4px"><h2>To do</h2></div>` +
-    (todo.length ? '<table>' + todo.map(t => `<tr><td>${t.text}<div class="mut">${t.meta}</div></td>
-        <td style="text-align:right;width:1%"><button class="btn ghost tiny" onclick="go(${t.to})">Open</button></td></tr>`).join('') + '</table>'
-      : emptyState('All caught up', 'Nothing needs a person right now.')) + '</div>';
+    </div>`;
 };
 
 PAGES.reviews = () => {
-  let groups = reviewGroups().sort((a, b) => (a.oldest || 0) - (b.oldest || 0)); // oldest first: it has waited longest
+  let groups = docGroups().sort((a, b) => (a.oldest || 0) - (b.oldest || 0)); // oldest first: it has waited longest
   const cands = uniq(groups.map(g => g.cand));
   if(F.revCand) groups = groups.filter(g => g.cand === F.revCand);
   if(F.revQ) groups = groups.filter(g => matches(F.revQ, g.summary, candName(g.cand)));
   const pg = paginate(groups, 'revPage', F.revSize || 10);
-  return header('Review queue', 'One card per job. Check the CV and cover letter, then approve the final application - approving that one is what submits it to the employer.') +
+  const ready = readyApps().length;
+  return header('Documents to check', 'CVs and cover letters written by hand (Write a CV by hand) or for jobs no longer being applied to. Applications waiting for approval are under <b>Applications</b>, not here.') +
+    (ready ? `<div class="note"><b>${ready} filled application${ready > 1 ? 's are' : ' is'} waiting for approval</b> - <button class="linkbtn" onclick="go('applications',{appTab:'review'})">open Applications</button></div>` : '') +
     `<div class="toolbar">
       <div><label>Candidate</label><select onchange="setFilter('revCand',this.value)"><option value="">All candidates</option>${cands.map(c => `<option value="${esc(c)}" ${c===F.revCand?'selected':''}>${esc(candName(c))}</option>`).join('')}</select></div>
       <div class="grow"><label>Search</label><input type="search" placeholder="Company or role" value="${esc(F.revQ || '')}" oninput="setSearch('revQ',this)"></div>
     </div>` +
     (pg.total ? pg.rows.map(reviewGroupHtml).join('') + `<div class="card flush">${pagerHtml(pg, 'revPage', 'revSize', [10, 25, 50])}</div>`
-      : `<div class="card">${emptyState(D.reviews.length ? 'No jobs match' : 'Nothing waiting', D.reviews.length ? 'Try clearing the filters.' : 'New CVs, cover letters, NHS statements and finished applications appear here.')}</div>`);
+      : `<div class="card">${emptyState(docGroups().length ? 'No documents match' : 'Nothing to check', docGroups().length ? 'Try clearing the filters.' : 'Documents written with "Write a CV by hand" appear here.')}</div>`);
 };
+
+/** The CV and cover letter a group is about: the final application's attachments, else the document cards' own. */
+function groupFiles(g){
+  const pick = (field, type) => ((g.items.find(t => t[field]) || {})[field]) || ((g.items.find(t => t.type === type) || {}).docUrl) || '';
+  return { cvUrl: pick('cvUrl', 'CV'), letterUrl: pick('letterUrl', 'CoverLetter') };
+}
 
 function reviewGroupHtml(g){
   const docs = g.items.filter(t => t.type !== 'Submission');
+  const sub = g.items.find(t => t.type === 'Submission');
+  const app = sub && D.applications.find(a => a.id === sub.refId);
+  const owner = g.items[0].id, files = groupFiles(g);
   return `<div class="rgroup">
     <div class="rhead"><div><h3>${esc(g.summary)}</h3>
-      <div class="mut">${esc(candName(g.cand))} · ${g.items.length} item${g.items.length > 1 ? 's' : ''} to check${g.oldest !== Infinity ? ' · first added ' + esc(ago(g.oldest)) : ''}</div></div>
+      <div class="mut">${esc(candName(g.cand))} · ${g.items.length} item${g.items.length > 1 ? 's' : ''} to check${g.oldest !== Infinity ? ' · first added ' + esc(ago(g.oldest)) : ''}</div>
+      ${docButtonsHtml(owner, files, app && app.url) || '<div class="mut small" style="margin-top:6px">No CV or cover letter on file for this job</div>'}</div>
       ${g.items.length > 1 ? `<button class="btn approve" onclick="approveGroup('${encodeURIComponent(g.key).replace(/'/g, '%27')}')">Approve all ${g.items.length}${g.hasSubmission ? ' &amp; submit' : ''}</button>` : ''}
     </div>
+    ${docFramesHtml(owner, files)}
     ${g.items.map(t => reviewItemHtml(t, docs.length)).join('')}
   </div>`;
 }
@@ -480,7 +618,7 @@ function reviewItemHtml(t, docCount){
   return `<div class="ritem ${isSub ? 'sub' : ''}">
     <div class="row">
       <div class="what"><span class="kind">${esc(DOC_LABEL[t.type] || t.type)}</span>${score}
-        ${t.docUrl ? `<a href="${esc(t.docUrl)}" class="small">Open document</a>` : ''}
+        ${t.docUrl && !['CV', 'CoverLetter'].includes(t.type) ? `<a href="${esc(t.docUrl)}" class="small">Open document</a>` : ''}
         <button class="linkbtn" onclick="toggleFindings('${t.id}')" aria-expanded="${open}">${open ? 'Hide' : isSub ? 'What will be sent' : 'Reviewer findings'}</button>
         <span class="mut">${esc(ago(t.createdMs))}</span>
       </div>
@@ -489,24 +627,27 @@ function reviewItemHtml(t, docCount){
         <button class="btn reject tiny" onclick="decide('${t.id}','revise')">${isSub ? "Don't submit" : 'Send back'}</button>
       </div>
     </div>
-    ${isSub && docCount ? `<div class="mut" style="margin-top:4px">Check the ${docCount > 1 ? 'documents' : 'document'} above first - they are what gets attached.</div>` : ''}
+    ${isSub ? `<div class="mut" style="margin-top:4px">${docCount ? `Check the ${docCount > 1 ? 'documents' : 'document'} above first - they are what gets attached. ` : ''}Approving makes the Chrome extension click Submit on the filled form.</div>` : ''}
     ${open ? (FINDINGS[t.id] == null ? '<div class="findings">Loading…</div>' : renderFindings(FINDINGS[t.id])) : ''}
   </div>`;
 }
 
 PAGES.applications = () => {
   const all = D.applications.slice().sort((a, b) => (b.createdMs || 0) - (a.createdMs || 0));
-  const tab = F.appTab || 'all';
   const count = g => all.filter(a => appInfo(a).group === g).length;
+  const tab = F.appTab || (count('review') ? 'review' : 'all');
   let rows = tab === 'all' ? all : all.filter(a => appInfo(a).group === tab);
   if(F.appCand) rows = rows.filter(a => a.cand === F.appCand);
   if(F.appQ) rows = rows.filter(a => matches(F.appQ, a.company, a.title, a.ats, candName(a.cand)));
   const pg = paginate(rows, 'appPage', F.appSize || 25);
   const stuck = all.filter(a => appInfo(a).stuck);
-  return header('Applications', 'Every application the extension has started, from filling the form to the employer\'s confirmation.') +
+  return header('Applications', 'Every job the extension applies to. Filled forms wait under <b>Ready to approve</b> until you say yes.') +
     (stuck.length ? `<div class="note bad"><b>${stuck.length} approved application${stuck.length > 1 ? 's have' : ' has'} not been submitted.</b> ${esc(stuckReason(stuck[0]))}
       If you submitted one by hand or can see it on the employer's site, use <b>Mark submitted</b>; otherwise <b>Retry</b> runs it again from the start.</div>` : '') +
+    (tab === 'review' && count('review') ? `<div class="note"><b>These forms are filled in and waiting in a Chrome tab.</b> View the CV and cover letter (and <b>What was filled in</b>),
+      then press <b>Approve &amp; submit</b> - the extension clicks the employer's Submit button within a few seconds. Keep Chrome open with the extension.</div>` : '') +
     tabsHtml('appTab', [
+      { v: 'review', label: 'Ready to approve', n: count('review') },
       { v: 'all', label: 'All', n: all.length }, { v: 'attention', label: 'Needs attention', n: count('attention') },
       { v: 'flight', label: 'In progress', n: count('flight') }, { v: 'done', label: 'Submitted', n: count('done') },
       { v: 'closed', label: 'Closed', n: count('closed') }], tab) +
@@ -516,7 +657,7 @@ PAGES.applications = () => {
     </div>
     <div class="card flush"><div class="tablewrap"><table><tr><th>Company / role</th><th>Candidate</th><th>Status</th><th>Started</th><th>Proof</th><th></th></tr>` +
     (pg.rows.length ? pg.rows.map(appRowHtml).join('')
-      : `<tr><td colspan="6">${emptyState('No applications here', tab === 'attention' ? 'Nothing is stuck or failed.' : 'Try another tab or clear the filters.')}</td></tr>`) +
+      : `<tr><td colspan="6">${emptyState('No applications here', tab === 'attention' ? 'Nothing is stuck or failed.' : tab === 'review' ? 'Nothing is waiting for approval. Filled forms appear here.' : 'Try another tab or clear the filters.')}</td></tr>`) +
     '</table></div>' + (pg.total ? pagerHtml(pg, 'appPage', 'appSize', [25, 50, 100]) : '') + '</div>';
 };
 
@@ -526,17 +667,26 @@ function appRowHtml(a){
   const canMark = s.stuck || s.unconfirmed || (s.approved && !s.stuck);
   const hint = s.stuck ? stuckReason(a) : s.unconfirmed ? 'Submit was clicked but no confirmation was seen. Check the employer\'s site or the candidate\'s inbox.'
     : (a.status === 'Failed' || a.status === 'Error') && a.lastError ? a.lastError : '';
+  // The final-application review this row is waiting on, if any
+  const sub = s.group === 'review' && D.reviews.find(t => t.type === 'Submission' && t.refId === a.id);
+  const files = { cvUrl: a.cvUrl, letterUrl: a.letterUrl };
+  const filledIn = sub && OPEN_FINDINGS.has(sub.id) ? (FINDINGS[sub.id] == null ? '<div class="findings">Loading…</div>' : renderFindings(FINDINGS[sub.id])) : '';
+  const extra = docFramesHtml(a.id, files) + filledIn;
   return `<tr>
-    <td><b>${esc(a.company)}</b>${a.url ? ` <a href="${esc(a.url)}" class="small">posting</a>` : ''}<br><span class="mut">${esc(a.title)}${a.ats ? ' · ' + esc(a.ats) : ''}</span></td>
+    <td><b>${esc(a.company)}</b>${a.url ? ` <a href="${esc(a.url)}" class="small">posting</a>` : ''}<br><span class="mut">${esc(a.title)}${a.ats ? ' · ' + esc(a.ats) : ''}</span>
+      ${docButtonsHtml(a.id, files)}
+      ${sub ? `<button class="linkbtn" style="margin-top:6px" onclick="toggleFindings('${sub.id}')" aria-expanded="${OPEN_FINDINGS.has(sub.id)}">${OPEN_FINDINGS.has(sub.id) ? 'Hide what was filled in' : 'What was filled in'}</button>` : ''}</td>
     <td class="mut">${esc(candName(a.cand))}</td>
     <td>${appChip(a)}${rail(a.status)}${hint ? `<div class="${s.group === 'attention' ? 'err' : 'mut'}" style="max-width:360px">${esc(hint)}</div>` : ''}
       ${a.outcome ? `<div style="margin-top:4px">${chip(a.outcome)}</div>` : ''}</td>
     <td class="mut nowrap" title="${a.createdMs ? esc(new Date(a.createdMs).toLocaleString('en-GB')) : ''}">${esc(shortDate(a.createdMs))}${a.submittedMs ? `<br>sent ${esc(shortDate(a.submittedMs))}` : ''}</td>
     <td>${a.shot ? `<a href="${esc(a.shot)}">screenshot</a>` : '<span class="mut">-</span>'}</td>
     <td><div class="acts" style="justify-content:flex-end">
-      ${canMark ? `<button class="btn approve tiny" onclick="markSubmitted('${a.id}')">Mark submitted</button>` : ''}
+      ${sub ? `<button class="btn approve tiny" onclick="approveApp('${a.id}')">Approve &amp; submit</button>
+        <button class="btn reject tiny" onclick="decide('${sub.id}','revise')">Don't submit</button>` : ''}
+      ${canMark ? `<button class="btn ghost tiny" onclick="markSubmitted('${a.id}')">Mark submitted</button>` : ''}
       ${canRetry ? `<button class="btn ghost tiny" onclick="retryApp('${a.id}')">Retry</button>` : ''}
-    </div></td></tr>`;
+    </div></td></tr>` + (extra ? `<tr class="pvrow"><td colspan="6">${extra}</td></tr>` : '');
 }
 
 PAGES.followups = () => {
@@ -595,21 +745,21 @@ PAGES.prospects = () => {
   const pg = paginate(rows, 'prosPage', F.prosSize || 25);
   const ready = F.pCand ? D.prospects.filter(p => p.cand === F.pCand && FOUND_STATUSES.includes(p.status)).length : 0;
   const one = !!F.pCand;
-  return header('Find &amp; queue jobs', 'Search the job boards for a candidate, then queue the jobs to apply to. Queued jobs are filled automatically by a Chrome with "Auto-run the queue" switched on in the extension.') +
+  return header('Find jobs', 'Pick a candidate, find jobs, then press <b>Apply</b> on the ones they should go for. The extension fills them in by itself and asks you before anything is sent.') +
     `<div class="card">
       <div class="toolbar" style="margin-bottom:0">
         <div class="grow"><label for="pCand">Candidate</label><select id="pCand" onchange="setFindJobsCandidate(this.value)">${candOpts(F.pCand, 'All candidates (view only)')}</select></div>
         <div style="flex:0"><button class="btn primary" onclick="findJobs()" ${one ? '' : 'disabled title="Pick a candidate first"'}>Find new jobs</button></div>
       </div>
       <div class="acts" style="margin-top:12px">
-        <span class="mut">${one ? `<b style="color:var(--ink)">${ready}</b> found and ready to queue. Queue the newest:` : 'Pick a candidate to queue jobs.'}</span>
-        ${[5, 10, 20].map(n => `<button class="btn approve tiny qbtn" onclick="queueAll(${n})" ${one && ready ? '' : 'disabled'}>${n}</button>`).join('')}
-        <button class="btn approve tiny qbtn" onclick="queueAll(0)" ${one && ready ? '' : 'disabled'}>All ${one ? ready : ''}</button>
+        <span class="mut">${one ? `<b style="color:var(--ink)">${ready}</b> found. Apply to the newest:` : 'Pick a candidate to choose jobs.'}</span>
+        ${[5, 10, 20].map(n => `<button class="btn ghost tiny qbtn" onclick="queueAll(${n})" ${one && ready ? '' : 'disabled'}>${n}</button>`).join('')}
+        <button class="btn ghost tiny qbtn" onclick="queueAll(0)" ${one && ready ? '' : 'disabled'}>All ${one ? ready : ''}</button>
         <span class="mut" id="pMsg"></span>
       </div>
     </div>
     <div class="toolbar">
-      <div><label>Status</label><select onchange="setFilter('prosStatus',this.value)">${opts(statuses, F.prosStatus, 'Any status')}</select></div>
+      <div><label>Status</label><select onchange="setFilter('prosStatus',this.value)"><option value="">Any status</option>${statuses.map(v => `<option value="${esc(v)}" ${v === F.prosStatus ? 'selected' : ''}>${esc(prospectLabel(v))}</option>`).join('')}</select></div>
       <div><label>Sort</label><select onchange="setFilter('prosSort',this.value)">
         <option value="newest" ${dir < 0 ? 'selected' : ''}>Newest found first</option><option value="oldest" ${dir > 0 ? 'selected' : ''}>Oldest found first</option></select></div>
       <div class="grow"><label>Search</label><input type="search" placeholder="Company, role or source" value="${esc(F.prosQ || '')}" oninput="setSearch('prosQ',this)"></div>
@@ -619,16 +769,16 @@ PAGES.prospects = () => {
       <td class="mut nowrap" title="${esc(p.found ? new Date(p.found).toLocaleString('en-GB') : 'No date recorded')}">${esc(foundDay(p.found))}</td>
       ${one ? '' : `<td class="mut">${esc(candName(p.cand))}</td>`}
       <td><b>${esc(p.company)}</b>${p.url ? ` <a href="${esc(p.url)}" class="small">open</a>` : ''}<br><span class="mut">${esc(p.title)}</span></td>
-      <td class="mut">${esc(p.source || '')}</td><td>${chip(p.status)}</td>
-      <td><div class="acts" style="justify-content:flex-end">${p.status === 'Queued' ? '<span class="mut">queued</span>' :
-        `<button class="btn approve tiny" onclick="prospectAction('${p.id}','Queued')">Queue</button>
+      <td class="mut">${esc(p.source || '')}</td><td>${prospectChip(p.status)}</td>
+      <td><div class="acts" style="justify-content:flex-end">${p.status === 'Queued' ? '<span class="mut">in line</span>' :
+        `<button class="btn ghost tiny" onclick="prospectAction('${p.id}','Queued')">Apply</button>
          ${/^Skipped/.test(p.status) ? '' : `<button class="btn ghost tiny" onclick="prospectAction('${p.id}','Skipped')">Skip</button>`}`}</div></td>
       </tr>`).join('') :
-    `<tr><td colspan="6">${emptyState('No jobs here yet', one ? 'Use "Find new jobs" above, or add rows in the Prospects tab of the sheet.' : '')}</td></tr>`) +
+    `<tr><td colspan="6">${emptyState('No jobs here yet', one ? 'Press "Find new jobs" above.' : '')}</td></tr>`) +
     '</table></div>' + (pg.total ? pagerHtml(pg, 'prosPage', 'prosSize', [25, 50, 100]) : '') + '</div>';
 };
 
-PAGES.generate = () => header('Generate documents', 'Write a tailored CV and cover letter for one job by hand - both go to the Review queue. For applying, queueing the job is usually easier.') +
+PAGES.generate = () => header('Write a CV by hand', 'A tailored CV and cover letter for one job, without applying - both appear under Documents to check. To apply, use Find jobs instead.') +
   `<div class="card">
     <label for="gCand">Candidate</label><select id="gCand">${candOpts(F.pCand || loadFindJobsCandidate())}</select>
     <label for="gUrl">Job URL (optional)</label><input id="gUrl" placeholder="https://...">
@@ -659,8 +809,9 @@ PAGES.candidates = () => {
         <td><input type="number" min="0" value="${c.target}" style="width:76px;padding:5px" aria-label="Target applications for ${esc(c.name)}" title="0 = no limit" onchange="setTarget('${c.id}', this.value)"></td>
         <td><label class="tog"><input type="checkbox" ${c.active?'checked':''} onchange="setActive('${c.id}', this.checked)"> <span>${c.active?'Active':'Inactive'}</span></label></td>
         <td style="text-align:right"><div class="acts" style="justify-content:flex-end">
+          <button class="btn ghost tiny" onclick="setFindJobsCandidate('${c.id}');go('prospects')">Find jobs</button>
           <button class="btn ghost tiny" onclick="go('applications',{appCand:'${c.id}',appTab:'all'})">Applications</button>
-          <button class="btn danger tiny" onclick="delCandidate('${c.id}')">Delete</button></div></td>
+          <button class="linkbtn" style="color:var(--red);margin-left:4px" onclick="delCandidate('${c.id}')">Delete</button></div></td>
       </tr>`;
     }).join('') : `<tr><td colspan="6">${emptyState('No candidates match', '')}</td></tr>`) +
     '</table></div></div>';
@@ -707,7 +858,7 @@ PAGES.log = () => {
       <div><label>Who</label><select onchange="setFilter('logActor',this.value)">${opts(actors, F.logActor, 'Anyone')}</select></div>
       <div><label>Action</label><select onchange="setFilter('logAction',this.value)">${opts(actions, F.logAction, 'Any action')}</select></div>
       <div class="grow"></div>
-      <div style="flex:0;min-width:0"><button class="btn danger" onclick="clearLog()">Clear log</button></div>
+      <div style="flex:0;min-width:0"><button class="linkbtn" style="color:var(--red)" onclick="clearLog()">Clear log</button></div>
     </div>
     <div class="card flush"><div class="tablewrap"><table><tr><th>Time</th><th>Who</th><th>Action</th><th>Detail</th></tr>` +
     (rows.length ? rows.map(l => {
@@ -869,10 +1020,17 @@ async function approveGroup(encodedKey){
   if(!g) return;
   const ok = await dialog({ title: 'Approve everything for this job?', ok: g.hasSubmission ? 'Approve & submit' : 'Approve all',
     body: `<b>${esc(g.summary)}</b> - ${g.items.map(t => esc(DOC_LABEL[t.type] || t.type)).join(', ')}.` +
-      (g.hasSubmission ? '<br><br>The application is then submitted to the employer.' : '') });
+      (g.hasSubmission ? '<br><br>The Chrome extension then clicks Submit on the filled form and records the employer\'s confirmation.' : '') });
   if(!ok) return;
   const r = await sendDecisions(g.items, 'approve', '');
   if(!r.failed) toast('Approved ' + g.items.length + ' item' + (g.items.length > 1 ? 's' : '') + (g.hasSubmission ? ' - submitting shortly' : ''));
+}
+
+/** Approve & submit from Applications: the job's waiting CV / cover letter cards go with it. */
+function approveApp(appId){
+  const g = reviewGroups().find(x => x.items.some(t => t.type === 'Submission' && t.refId === appId));
+  if(g) approveGroup(encodeURIComponent(g.key));
+  else toast('This application has no review waiting - refresh the page', true);
 }
 
 /** Decides items one after another (documents before the submission), restoring any that fail. */
@@ -900,7 +1058,7 @@ function gen(){
   document.getElementById('gMsg').textContent = 'Generating… this takes about a minute.';
   rpc('dashGenerate', document.getElementById('gCand').value, jd, document.getElementById('gUrl').value, document.getElementById('gTone').value)
     .then(r => {
-      document.getElementById('gMsg').innerHTML = `Done: <a href="${esc(r.cvUrl)}">CV</a> · <a href="${esc(r.letterUrl)}">Cover letter</a> - both are in the Review queue.`;
+      document.getElementById('gMsg').innerHTML = `Done: <a href="${esc(r.cvUrl)}">CV</a> · <a href="${esc(r.letterUrl)}">Cover letter</a> - both are under Documents to check.`;
       load(true);
     })
     .catch(e => { document.getElementById('gMsg').textContent = 'Error: ' + e.message; })
@@ -931,7 +1089,7 @@ function queueAll(limit){
       D.prospects.forEach(p => { if(ids.has(String(p.id))) p.status = 'Queued'; });
       if(F.prosStatus && F.prosStatus !== 'Queued') F.prosStatus = ''; // show the queued rows
       render();
-      toast(r.queued ? `Queued ${r.queued}` + (r.remaining ? `, ${r.remaining} still found` : '') + ' - a Chrome with Auto-run on picks them up within a few minutes' : 'Nothing to queue.');
+      toast(r.queued ? `${r.queued} in line to apply` + (r.remaining ? `, ${r.remaining} still to choose from` : '') + ' - the extension picks them up within a few minutes' : 'Nothing to add.');
       load(true); // a refresh that started before the queueing would otherwise show them as Found again
     })
     .catch(e => { render(); fail(e); });
@@ -943,7 +1101,7 @@ function prospectAction(id, status){
   const before = p.status;
   p.status = status; // show it straight away; the sheet is updated in the background
   render();
-  toast(status === 'Queued' ? 'Queued' : 'Skipped');
+  toast(status === 'Queued' ? 'In line to apply - the extension picks it up within a few minutes' : 'Skipped');
   rpc('dashSetProspectStatus', id, status).catch(e => { p.status = before; render(); fail(e); });
 }
 
@@ -985,7 +1143,7 @@ async function retryApp(id){
   if(!a) return;
   const approved = a && /^Approved|Human Needed$/.test(a.status);
   const ok = await dialog({ title: 'Run this application again?', ok: 'Retry',
-    body: `<b>${esc(a.company)}</b> - ${esc(a.title)} goes back in the queue as a new job: fresh form fill, then the Review queue again.` +
+    body: `<b>${esc(a.company)}</b> - ${esc(a.title)} goes back in the queue as a new job: fresh form fill, then back to Ready to approve.` +
       (approved ? '<br><br><b>Check the employer\'s site first</b> - if it already went through, use Mark submitted instead, or the candidate applies twice.' : '') });
   if(!ok) return;
   rpc('dashRetryApplication', id).then(() => { toast('Re-queued'); load(); }).catch(fail);
@@ -1025,11 +1183,11 @@ const HELP_HTML = `
 <h2>The everyday workflow</h2>
 <ol class="steps">
 <li>A candidate fills in the Google form. Within seconds they appear under <b>Candidates</b>, already profiled by the AI.</li>
-<li>Every morning the system finds new jobs for each active candidate. To do it now: <b>Find &amp; queue jobs</b>, pick the candidate, click <b>Find new jobs</b>.</li>
-<li>Queue the jobs you want - one at a time, or the newest 5 / 10 / 20 / All.</li>
-<li>A Chrome with <b>Auto-run the queue</b> switched on in the extension picks up queued jobs within a few minutes and fills each one in, one tab at a time. Nobody needs to click anything for this step - Chrome just has to be open on that computer.</li>
-<li>Each job lands in the <b>Review queue</b> as <b>one card</b> holding its CV, cover letter and final application. Approve each, or <b>Approve all</b>. Sending a document back has a new version written from your notes. Choosing <b>Don't submit</b> on the final application means it is not sent.</li>
-<li>Once the final application is approved it's submitted for real and a screenshot is saved under <b>Applications</b>.</li>
+<li>Every morning the system finds new jobs for each active candidate. To do it now: <b>Find jobs</b>, pick the candidate, click <b>Find new jobs</b>.</li>
+<li>Press <b>Apply</b> on the jobs you want - one at a time, or the newest 5 / 10 / 20 / All. They are now "in line to apply".</li>
+<li>A Chrome with <b>Auto-run the queue</b> switched on in the extension picks them up within a few minutes, writes a tailored CV and cover letter, and fills in each form, one tab at a time. Nobody needs to click anything for this step - Chrome just has to be open on that computer. The line at the top of every page says whether this is running.</li>
+<li>Filled forms wait under <b>Applications &rsaquo; Ready to approve</b>. Press <b>View CV</b> and <b>View cover letter</b> to read them, and <b>What was filled in</b> to see every answer (anything in red needs a person). Then <b>Approve &amp; submit</b>, or <b>Don't submit</b>.</li>
+<li>After approval the extension clicks the employer's Submit button, and a screenshot of the confirmation is saved under <b>Applications</b>.</li>
 <li>A week later, a <b>Follow-up</b> reminds you to check for a reply. Record what happened there.</li>
 </ol>
 </div>
@@ -1080,8 +1238,8 @@ const HELP_HTML = `
 
 <div class="card">
 <h2>FAQ</h2>
-<details class="faq"><summary>Why did the same job used to show up three times in the Review queue?</summary>
-<p>Each job has up to three things to check - the CV, the cover letter and the final application - and each was its own card with the same title. They're now grouped into one card per job.</p></details>
+<details class="faq"><summary>Where did the Review queue go?</summary>
+<p>Jobs being applied to are approved in one place now: <b>Applications &rsaquo; Ready to approve</b>, where one <b>Approve &amp; submit</b> covers the CV, the cover letter and the form. <b>More &rsaquo; Documents to check</b> only holds documents written with "Write a CV by hand", or left over from jobs no longer being applied to.</p></details>
 <details class="faq"><summary>A candidate's job search came back empty. Why?</summary>
 <p>Most likely their role or location isn't covered by the job sources switched on in Config <b>PROSPECT_SOURCES</b>. Jobs come from Adzuna and Reed (UK and Europe), NHS Jobs (including Trac), Workable, Canada Job Bank, MyJobMag (Nigeria), Remotive (remote) and JSearch, which reads Google for Jobs and so brings in listings from LinkedIn, Indeed, Glassdoor, Civil Service Jobs, Jobberman and others. The search uses the first of the candidate's preferred roles, in each of their preferred locations. Anything else can be added by hand in the Prospects tab of the sheet.</p></details>
 <details class="faq"><summary>Something says "Found - Manual Review" instead of Found.</summary>
@@ -1091,7 +1249,7 @@ const HELP_HTML = `
 <details class="faq"><summary>The dashboard feels slow.</summary>
 <p>It runs entirely on Google's servers with the sheet as its database, so each action is a round-trip - a second or two is normal. Data refreshes by itself every 45 seconds; use <b>Refresh</b> to update it now.</p></details>
 <details class="faq"><summary>Is anything ever submitted without a human?</summary>
-<p>No. Every application pauses in the Review queue and only submits after someone approves its final application.</p></details>
+<p>No. Every filled application waits under Applications &rsaquo; Ready to approve and is only submitted after someone presses Approve &amp; submit.</p></details>
 <details class="faq"><summary>What does the Reviewer Agent check?</summary>
 <p>Every generated CV, cover letter or NHS statement is checked by a second AI for claims not backed by the candidate's background, keywords from the job ad that are missing, and general quality. Open <b>Reviewer findings</b> on the item to see them. Its score is a guide - you decide.</p></details>
 <details class="faq"><summary>A job needs an account on the employer's site. What happens?</summary>

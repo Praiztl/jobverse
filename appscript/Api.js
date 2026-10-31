@@ -878,7 +878,7 @@ function dashData(key) {
   requireDashAccess_(key);
   // Only the columns the dashboard shows - Candidates.AIProfileJSON and
   // ReviewQueue.AIFindings alone can be tens of KB per row.
-  var apps = readRows_('Applications', ['ApplicationID', 'CandidateID', 'Company', 'JobTitle', 'ATS', 'Status',
+  var apps = readRows_('Applications', ['ApplicationID', 'CandidateID', 'JobID', 'Company', 'JobTitle', 'ATS', 'Status',
     'JobURL', 'CreatedAt', 'SubmittedAt', 'ConfirmationScreenshotURL', 'Outcome', 'FilledBy', 'ErrorLog']);
   var countByCand = {};
   apps.forEach(function (a) {
@@ -890,6 +890,7 @@ function dashData(key) {
     if (t.Type === 'Submission' && t.DecidedAt) approvedAt[t.RefID] = toEpochMs_(t.DecidedAt);
   });
   var props = PropertiesService.getScriptProperties();
+  var docs = latestDocsByJob_();
   return {
     candidates: readRows_('Candidates', ['CandidateID', 'FullName', 'Email', 'Status', 'Active',
       'TargetApplications', 'PreferredRoles', 'Location', 'CreatedAt']).map(function (c) {
@@ -901,11 +902,13 @@ function dashData(key) {
     }),
     applications: apps.map(function (a) {
       var errors = String(a.ErrorLog || '').trim().split('\n');
-      return { id: a.ApplicationID, cand: a.CandidateID, company: a.Company, title: a.JobTitle,
+      return { id: a.ApplicationID, cand: a.CandidateID, jobId: a.JobID, company: a.Company, title: a.JobTitle,
                ats: a.ATS, status: a.Status, url: a.JobURL, submitted: String(a.SubmittedAt || ''),
                shot: a.ConfirmationScreenshotURL, outcome: a.Outcome, filledBy: a.FilledBy || '',
                createdMs: toEpochMs_(a.CreatedAt), submittedMs: toEpochMs_(a.SubmittedAt),
                approvedMs: approvedAt[a.ApplicationID] || 0,
+               // What a reviewer approves: the documents attached to this application
+               cvUrl: docs.cv[a.JobID] || '', letterUrl: docs.letter[a.JobID] || '',
                lastError: errors[errors.length - 1].slice(0, 300) };
     }),
     // Last time a Chrome extension checked for approvals to submit / for queued jobs to run (0 = never)
@@ -913,7 +916,7 @@ function dashData(key) {
       extension: Number(props.getProperty(AGENT_SEEN_PREFIX_ + 'extension') || 0),
       autorun: Number(props.getProperty(AGENT_SEEN_PREFIX_ + 'autorun') || 0)
     },
-    reviews: awaitingReviews_(),
+    reviews: awaitingReviews_(docs),
     prospects: readRows_('Prospects', ['ProspectID', 'CandidateID', 'Company', 'JobTitle', 'JobURL', 'Status',
       'Source', 'FoundAt']).map(function (p) {
       return { id: p.ProspectID, cand: p.CandidateID, company: p.Company, title: p.JobTitle,
@@ -940,8 +943,8 @@ function dashData(key) {
  * AIFindings (up to 40 KB each). The dashboard fetches findings per card
  * with dashReviewFindings when a reviewer opens it.
  */
-function awaitingReviews_() {
-  var waiting = readRows_('ReviewQueue', ['TaskID', 'Type', 'CandidateID', 'Summary', 'AIScore', 'Status', 'CreatedAt'])
+function awaitingReviews_(docs) {
+  var waiting = readRows_('ReviewQueue', ['TaskID', 'Type', 'CandidateID', 'JobID', 'Summary', 'AIScore', 'Status', 'CreatedAt'])
     .filter(function (t) { return t.Status === 'Awaiting Human'; });
 
   // One card per document per job: when the same job's CV / cover letter / NHS
@@ -974,10 +977,20 @@ function awaitingReviews_() {
   return waiting
     .filter(function (t) { return superseded.indexOf(t) === -1; })
     .map(function (t) {
-      return { id: t.TaskID, type: t.Type, cand: t.CandidateID, summary: t.Summary, refId: t.RefID,
+      return { id: t.TaskID, type: t.Type, cand: t.CandidateID, jobId: t.JobID, summary: t.Summary, refId: t.RefID,
                docUrl: docUrl[t.Type + '|' + t.RefID] || '',
+               // The job's CV and cover letter, so the final-application card shows what gets attached
+               cvUrl: docs.cv[t.JobID] || '', letterUrl: docs.letter[t.JobID] || '',
                score: t.AIScore, created: String(t.CreatedAt), createdMs: toEpochMs_(t.CreatedAt) };
     });
+}
+
+/** Newest CV and cover letter URL per JobID (rows are appended oldest first, so later rows win). */
+function latestDocsByJob_() {
+  var cv = {}, letter = {};
+  readRows_('CVVersions', ['JobID', 'DocURL']).forEach(function (v) { if (v.DocURL) cv[v.JobID] = v.DocURL; });
+  readRows_('CoverLetters', ['JobID', 'DocURL']).forEach(function (l) { if (l.DocURL) letter[l.JobID] = l.DocURL; });
+  return { cv: cv, letter: letter };
 }
 
 /** Full AI findings for one review card, loaded when the reviewer opens it. */
