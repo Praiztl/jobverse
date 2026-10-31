@@ -348,7 +348,8 @@ function appInfo(a){
   let s = APP_STATUS[a.status];
   if(!s && /Human Needed$/.test(a.status || '')) {
     const why = a.status.replace(/\s*-\s*Human Needed$/, '');
-    s = { label: why === 'Submit Unconfirmed' ? 'Submitted? Check the employer site' : 'Needs a person: ' + (why === 'HumanHelp' ? 'help on the page' : why),
+    s = { label: why === 'Submit Unconfirmed' ? 'Submitted? Check the employer site'
+            : why === 'Form Incomplete' ? 'Approved - form has empty fields' : 'Needs a person: ' + (why === 'HumanHelp' ? 'help on the page' : why),
           cls: 'c-cap', group: 'attention', unconfirmed: why === 'Submit Unconfirmed' };
   }
   s = Object.assign({ label: a.status || 'Unknown', cls: 'c-prog', group: 'flight' }, s);
@@ -668,6 +669,7 @@ function appRowHtml(a){
   // Failed includes an approved application the extension could not re-submit - it may have gone by hand
   const canMark = s.stuck || s.unconfirmed || (s.approved && !s.stuck) || a.status === 'Failed' || a.status === 'Error';
   const hint = s.stuck ? stuckReason(a) : s.unconfirmed ? 'Submit was clicked but no confirmation was seen. Check the employer\'s site or the candidate\'s inbox.'
+    : /^Form Incomplete/.test(a.status) ? 'Not submitted: required fields were still empty or invalid. Finish them in the open tab (marked red) and it submits by itself. If the tab is gone, use Retry.'
     : (a.status === 'Failed' || a.status === 'Error') && a.lastError ? a.lastError : '';
   // The final-application review behind this row, for "What was filled in"
   const sub = ready && (D.reviews.find(t => t.type === 'Submission' && t.refId === a.id) || (a.reviewId ? { id: a.reviewId } : null));
@@ -679,7 +681,7 @@ function appRowHtml(a){
       ${docButtonsHtml(a.id, files)}
       ${sub ? `<button class="linkbtn" style="margin-top:6px" onclick="toggleFindings('${sub.id}')" aria-expanded="${OPEN_FINDINGS.has(sub.id)}">${OPEN_FINDINGS.has(sub.id) ? 'Hide what was filled in' : 'What was filled in'}</button>` : ''}</td>
     <td class="mut">${esc(candName(a.cand))}</td>
-    <td>${appChip(a)}${rail(a.status)}${hint ? `<div class="${s.group === 'attention' ? 'err' : 'mut'}" style="max-width:360px">${esc(hint)}</div>` : ''}
+    <td>${appChip(a)}${rail(a.status)}${ready && a.needsPerson ? `<div class="err" style="max-width:360px"><b>${a.needsPerson} thing${a.needsPerson > 1 ? 's' : ''} the extension couldn't do</b> - see the red lines in What was filled in, and fix them in the waiting tab. It won't submit while required fields are empty.</div>` : ''}${hint ? `<div class="${s.group === 'attention' ? 'err' : 'mut'}" style="max-width:360px">${esc(hint)}</div>` : ''}
       ${a.outcome ? `<div style="margin-top:4px">${chip(a.outcome)}</div>` : ''}</td>
     <td class="mut nowrap" title="${a.createdMs ? esc(new Date(a.createdMs).toLocaleString('en-GB')) : ''}">${esc(shortDate(a.createdMs))}${a.submittedMs ? `<br>sent ${esc(shortDate(a.submittedMs))}` : ''}</td>
     <td>${a.shot ? `<a href="${esc(a.shot)}">screenshot</a>` : '<span class="mut">-</span>'}</td>
@@ -1038,7 +1040,8 @@ async function approveApp(appId){
   const a = D.applications.find(x => x.id === appId);
   if(!a) return;
   const ok = await dialog({ title: 'Approve and submit?', ok: 'Approve & submit',
-    body: `<b>${esc(a.company)}</b> - ${esc(a.title)} for ${esc(candName(a.cand))}.<br><br>The Chrome extension then clicks Submit on the filled form and records the employer's confirmation.` });
+    body: `<b>${esc(a.company)}</b> - ${esc(a.title)} for ${esc(candName(a.cand))}.<br><br>The Chrome extension then clicks Submit on the filled form and records the employer's confirmation.` +
+      (a.needsPerson ? `<br><br><b style="color:var(--red)">${a.needsPerson} item${a.needsPerson > 1 ? 's were' : ' was'} left for a person.</b> If a required field is still empty, the extension waits in that tab for you to finish it before submitting.` : '') });
   if(ok) decideApp(a, 'approve', '');
 }
 async function rejectApp(appId){

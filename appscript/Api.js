@@ -469,8 +469,10 @@ function apiRequestReview_(req) {
   var app = findRow_('Applications', 'ApplicationID', req.applicationId);
   if (app) {
     // Who filled it decides who submits it after approval (see dashDecide) - never both
-    ensureColumns_('Applications', ['FilledBy']);
-    updateRow_('Applications', app._row, { Status: 'Awaiting Review', FilledBy: req.filledBy === 'worker' ? 'worker' : 'extension' });
+    ensureColumns_('Applications', ['FilledBy', 'NeedsPerson']);
+    // NeedsPerson: questions the extension left blank or could not get past - shown on the row before approving
+    updateRow_('Applications', app._row, { Status: 'Awaiting Review', FilledBy: req.filledBy === 'worker' ? 'worker' : 'extension',
+      NeedsPerson: Number(req.needsPerson) || 0 });
   }
   notifyReviewers_('Review needed: ' + req.company + ' - ' + req.jobTitle,
     'A completed application is paused for approval. Open the Jobverse Console review queue. Task ' + taskId);
@@ -879,7 +881,7 @@ function dashData(key) {
   // Only the columns the dashboard shows - Candidates.AIProfileJSON and
   // ReviewQueue.AIFindings alone can be tens of KB per row.
   var apps = readRows_('Applications', ['ApplicationID', 'CandidateID', 'JobID', 'Company', 'JobTitle', 'ATS', 'Status',
-    'JobURL', 'CreatedAt', 'SubmittedAt', 'ConfirmationScreenshotURL', 'Outcome', 'FilledBy', 'ErrorLog']);
+    'JobURL', 'CreatedAt', 'SubmittedAt', 'ConfirmationScreenshotURL', 'Outcome', 'FilledBy', 'ErrorLog', 'NeedsPerson']);
   var countByCand = {};
   apps.forEach(function (a) {
     if (countsAsApplication_(a.Status)) countByCand[a.CandidateID] = (countByCand[a.CandidateID] || 0) + 1;
@@ -911,7 +913,7 @@ function dashData(key) {
                approvedMs: approvedAt[a.ApplicationID] || 0,
                // What a reviewer approves: the documents attached to this application
                cvUrl: docs.cv[a.JobID] || '', letterUrl: docs.letter[a.JobID] || '',
-               reviewId: reviewOf[a.ApplicationID] || '',
+               reviewId: reviewOf[a.ApplicationID] || '', needsPerson: Number(a.NeedsPerson) || 0,
                lastError: errors[errors.length - 1].slice(0, 300) };
     }),
     // Last time a Chrome extension checked for approvals to submit / for queued jobs to run (0 = never)
