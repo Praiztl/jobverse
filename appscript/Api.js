@@ -81,6 +81,7 @@ function doPost(e) {
       recordPlatformAccount: apiRecordPlatformAccount_,
       platformAccount: apiPlatformAccount_,
       updatePlatformAccount: apiUpdatePlatformAccount_,
+      findAccountEmail: apiFindAccountEmail_,
       exportDocumentPdf: apiExportDocumentPdf_,
       listApplicationsByStatus: apiListApplicationsByStatus_
     };
@@ -805,6 +806,123 @@ function apiUpdatePlatformAccount_(req) {
   updateRow_('PlatformAccounts', acct._row, { Status: req.status, Notes: req.notes || acct.Notes, UpdatedAt: new Date() });
   logActivity_('extension', 'platform_account_' + req.status, 'candidate', acct.CandidateID, acct.ATSDomain);
   return { updated: true };
+}
+
+/* ------------------ account emails (verify / reset password) ------------------ */
+
+/**
+ * The newest email a job site sent to the candidate's application address
+ * since req.since (ms), with the link and/or code in it, so the extension can
+ * verify a new account or reset a password without a person.
+ *
+ * Reads THIS script's Gmail, read-only (Gmail advanced service). That works
+ * when the candidate's application inbox forwards to this account (Gmail
+ * settings > Forwarding) or is this account / one of its aliases - forwarded
+ * mail keeps the original To:, which is what the search matches on.
+ * req.skipIds: messages already used this run. Config ACCOUNT_EMAIL_LOOKUP=off
+ * turns this off (a person then verifies by hand, as before).
+ */
+function apiFindAccountEmail_(req) {
+  if (String(getConfig_('ACCOUNT_EMAIL_LOOKUP')).toLowerCase() === 'off') return { found: false, off: true };
+  var cand = findRow_('Candidates', 'CandidateID', req.candidateId);
+  if (!cand) throw new Error('Candidate not found');
+  var acct = req.accountId ? findRow_('PlatformAccounts', 'AccountID', req.accountId) : null;
+  var email = String((acct && acct.Email) || cand.ApplicationEmail || cand.Email || '').trim();
+  if (!email) return { found: false };
+  var since = Number(req.since) || (Date.now() - 30 * 60000);
+  var skip = req.skipIds || [];
+  // 2 minutes' slack for clock differences; after: takes epoch seconds
+  var q = '{to:' + email + ' deliveredto:' + email + '} after:' + Math.floor((since - 120000) / 1000);
+  var list;
+  try {
+    list = Gmail.Users.Messages.list('me', { q: q, maxResults: 10, includeSpamTrash: true });
+  } catch (e) {
+    return { found: false, error: 'Could not read the Jobverse inbox: ' + e.message };
+  }
+  var tokens = siteTokens_(normaliseDomain_(req.jobUrl));
+  var best = null;
+  (list.messages || []).forEach(function (m) {
+    if (skip.indexOf(m.id) > -1) return;
+    var msg = Gmail.Users.Messages.get('me', m.id, { format: 'full' });
+    var head = {};
+    (msg.payload.headers || []).forEach(function (h) { head[h.name.toLowerCase()] = h.value; });
+    var body = messageBodies_(msg.payload);
+    var text = body.text || body.html.replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ');
+    var from = String(head.from || '').toLowerCase(), subject = String(head.subject || '');
+    var score = 0;
+    tokens.forEach(function (t) {
+      if (from.indexOf(t) > -1) score += 3;
+      else if ((subject + ' ' + text).toLowerCase().indexOf(t) > -1) score += 2;
+    });
+    if (ACCOUNT_MAIL_WORDS_.test(subject)) score += 2;
+    if (score < 2) return; // neither from this site nor an account email
+    var found = {
+      messageId: m.id, score: score, at: Number(msg.internalDate), from: head.from || '', subject: subject,
+      link: bestAccountLink_(body.html, text, req.purpose), code: accountCode_(subject + '\n' + text)
+    };
+    if (!found.link && !found.code) return;
+    if (!best || found.score > best.score || (found.score === best.score && found.at > best.at)) best = found;
+  });
+  if (!best) return { found: false };
+  logActivity_('extension', 'account_email_used', 'candidate', req.candidateId, normaliseDomain_(req.jobUrl) + ': ' + best.subject);
+  return { found: true, messageId: best.messageId, subject: best.subject, from: best.from, link: best.link, code: best.code };
+}
+
+var ACCOUNT_MAIL_WORDS_ = /verif|confirm|activat|validat|reset|password|passwort|mot de passe|contrase|code|welcome|account|registr|sign.?up|bestätig|vérif/i;
+
+/** Distinctive parts of a site host: acme.wd5.myworkdayjobs.com -> ['acme', 'myworkdayjobs', 'workday']. */
+function siteTokens_(host) {
+  var generic = /^(www|jobs?|careers?|apply|recruit(ing|ment)?|portal|hr|talent|com|co|org|net|io|uk|us|de|fr|nl|ie|ca|au|gov|nhs|wd\d+|eu|app|my)$/;
+  var tokens = String(host || '').split('.').filter(function (t) { return t.length > 2 && !generic.test(t); });
+  // ATS vendors send mail from their own domain, not the employer's
+  ['workday', 'icims', 'taleo', 'successfactors', 'smartrecruiters', 'greenhouse', 'lever', 'jobvite', 'oracle', 'teamtailor', 'personio']
+    .forEach(function (v) { if (host.indexOf(v) > -1 && tokens.indexOf(v) === -1) tokens.push(v); });
+  return tokens;
+}
+
+/** Decoded text/plain and text/html parts of a Gmail API message payload. */
+function messageBodies_(part, out) {
+  out = out || { text: '', html: '' };
+  if (part.body && part.body.data) {
+    var s = Utilities.newBlob(Utilities.base64DecodeWebSafe(part.body.data)).getDataAsString();
+    if (part.mimeType === 'text/html') out.html += s;
+    else if (part.mimeType === 'text/plain') out.text += s;
+  }
+  (part.parts || []).forEach(function (p) { messageBodies_(p, out); });
+  return out;
+}
+
+/** The verify / activate / reset link in an account email, scored by its URL and link text. */
+function bestAccountLink_(html, text, purpose) {
+  var links = [];
+  var re = /<a\b[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, m;
+  while ((m = re.exec(html || ''))) links.push({ url: m[1].replace(/&amp;/g, '&'), label: m[2].replace(/<[^>]+>/g, ' ') });
+  if (!links.length) {
+    (String(text || '').match(/https?:\/\/[^\s<>"')\]]+/g) || []).forEach(function (u) { links.push({ url: u, label: '' }); });
+  }
+  var best = null, bestScore = 0;
+  links.forEach(function (l) {
+    if (!/^https?:\/\//i.test(l.url)) return;
+    var both = (l.url + ' ' + l.label).toLowerCase(), score = 0;
+    if (/unsubscribe|privacy|terms|cookie|help|support|faq|facebook|twitter|linkedin|instagram|youtube|\.(png|jpe?g|gif|svg)(\?|$)/.test(both)) return;
+    if (/verif|confirm|activat|validat|bestätig|vérif|confirma/.test(both)) score += 3;
+    if (/reset|password|passwort|mot.de.passe|contrase|wachtwoord/.test(both)) score += purpose === 'reset' ? 4 : 1;
+    if (/token|key=|code=|ticket|[?&](t|k|id)=|[a-f0-9]{24,}/.test(l.url.toLowerCase())) score += 2;
+    if (/sign.?in|log.?in|account|register/.test(both)) score += 1;
+    if (score > bestScore) { best = l.url; bestScore = score; }
+  });
+  return bestScore >= 2 ? best : null;
+}
+
+/** A one-time code ("Your verification code is 482913"), if the email has one. */
+function accountCode_(text) {
+  var re = /(?:code|passcode|pin|otp|one[- ]time|verification|bestätigungscode|code de vérification|código|verificatiecode|codice)[^A-Za-z0-9]{0,40}([A-Z0-9]{4,8})\b/gi, m;
+  while ((m = re.exec(String(text)))) {
+    if (/\d/.test(m[1])) return m[1]; // "one-time passcode: A7K2Q9" - skip the words, keep the code
+    re.lastIndex = m.index + 1;
+  }
+  m = String(text).match(/^\s*(\d{4,8})\s*$/m) || String(text).match(/\b(\d{6})\b/);
+  return m ? m[1] : null;
 }
 
 /** Latest account for candidate + site, ignoring sign-ups that failed outright. */

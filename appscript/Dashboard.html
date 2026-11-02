@@ -1229,6 +1229,26 @@ const HELP_HTML = `
 </div>
 
 <div class="card">
+<h2>How long things take</h2>
+<p class="mut">Rough times for one computer running the extension. Busy job sites, slow AI responses and long multi-page forms can take longer.</p>
+<table>
+<tr><th>Step</th><th>Usually takes</th><th>Notes</th></tr>
+<tr><td>New candidate profiled</td><td>Under 1 minute</td><td>After they submit the Google form.</td></tr>
+<tr><td>Job search (Find new jobs)</td><td>1 - 3 minutes per candidate</td><td>Runs by itself every morning at about 6am. More locations and job sources take longer; Google stops any single run after 6 minutes.</td></tr>
+<tr><td>Queued job picked up</td><td>Within 3 minutes</td><td>Chrome must be open with <b>Auto-run the queue</b> on. Jobs are done one at a time, so the 10th job in line starts after the 9 before it.</td></tr>
+<tr><td>CV and cover letter written</td><td>1 - 2 minutes</td><td>Both are written, then checked by the Reviewer Agent.</td></tr>
+<tr><td>Form filled in</td><td>2 - 6 minutes</td><td>Longer for multi-page forms (Workday, iCIMS) with many questions. Includes the screenshot check.</td></tr>
+<tr><td>Creating a site account</td><td>Add 1 - 3 minutes</td><td>Only the first time a candidate applies on that site; after that it signs in, which takes seconds.</td></tr>
+<tr><td>Email verification / password reset</td><td>Add up to 3 minutes</td><td>The extension waits up to 2.5 minutes for the site's email. If none arrives, it asks a person.</td></tr>
+<tr><td><b>Whole application, start to "Ready to approve"</b></td><td><b>5 - 10 minutes</b></td><td>About 6 - 10 jobs an hour per computer. One application is stopped after 20 minutes.</td></tr>
+<tr><td>Waiting for a person (CAPTCHA, a question)</td><td>3 minutes, then it moves on</td><td>Change it under "Wait for a person" in the extension's Connection settings. The tab stays open for you to finish.</td></tr>
+<tr><td>Submitted after you approve</td><td>Under 1 minute if its tab is open, otherwise 2 - 8 minutes</td><td>Without an open tab, the extension reopens the job and fills it again first. Not picked up within 20 minutes: it moves to <b>Needs attention</b>.</td></tr>
+<tr><td>Stuck jobs put back in line</td><td>45 minutes</td><td>A job claimed by a computer that went offline returns to the queue.</td></tr>
+<tr><td>Follow-up due</td><td>7 days after submitting</td><td>Reminders are emailed at about 7:30am; the daily report at about 7am.</td></tr>
+</table>
+</div>
+
+<div class="card">
 <h2>An application says "Approved - not submitted yet"</h2>
 <p class="mut">Approved applications are submitted by the <b>Chrome extension</b>: the tab that filled the form if it's still open, otherwise any open Chrome with the extension reopens the job, fills it again and submits it within a few minutes. The Overview page shows whether an extension is running. If none is, the application waits, and after 20 minutes it moves to <b>Applications &rsaquo; Needs attention</b> with the reason.</p>
 <p class="mut">Open Chrome with the extension connected and it carries on by itself. If you can see the application on the employer's site, or you submitted it by hand, click <b>Mark submitted</b>. <b>Retry</b> runs it again from the start - only use it once you're sure it didn't go through.</p>
@@ -1244,7 +1264,7 @@ const HELP_HTML = `
 <div class="card">
 <h2>The Chrome extension</h2>
 <p class="mut">The extension does all the form filling and submitting. It finds its own way from a job ad to the application form, creates or signs in to site accounts when a site needs one, uploads the CV and cover letter, answers each question from the candidate's data, and follows Next through multi-step forms. It never presses Submit until the final application is approved.</p>
-<p class="mut"><b>Auto-run the queue:</b> tick this in the extension popup on the computer that should do the work, and keep Chrome open there. Every few minutes it takes the next queued job for any active candidate (skipping anyone inactive, at their target or at today's limit) and fills it in a background tab. Jobs that only need your approval have their tab closed; after you approve, the extension reopens the job and submits it. Jobs that need a person (a CAPTCHA, an email to verify, a question it couldn't answer) keep their tab open. Two computers can both run it - each job is only ever taken by one of them.</p>
+<p class="mut"><b>Auto-run the queue:</b> tick this in the extension popup on the computer that should do the work, and keep Chrome open there. Every few minutes it takes the next queued job for any active candidate (skipping anyone inactive, at their target or at today's limit) and fills it in a background tab. Jobs that only need your approval have their tab closed; after you approve, the extension reopens the job and submits it. Jobs that need a person (a CAPTCHA, a verification email that never arrived, a question it couldn't answer) keep their tab open. Two computers can both run it - each job is only ever taken by one of them.</p>
 <p class="mut"><b>One job right now:</b> open the extension on the job posting, pick the candidate, and click <b>Apply to this job</b>. <b>Run queued prospects</b> works through one candidate's queue straight away.</p>
 <p class="mut"><b>Sharing it with your team:</b> send them the chrome-extension folder; they open <b>chrome://extensions</b>, turn on <b>Developer mode</b>, click <b>Load unpacked</b> and pick the folder, then paste the web app URL and API token (Config tab of the sheet) into the extension's <b>Connection settings</b>. It's not on the Chrome Web Store on purpose - this is a private internal tool.</p>
 </div>
@@ -1289,7 +1309,8 @@ const HELP_HTML = `
 <details class="faq"><summary>What does the Reviewer Agent check?</summary>
 <p>Every generated CV, cover letter or NHS statement is checked by a second AI for claims not backed by the candidate's background, keywords from the job ad that are missing, and general quality. Open <b>Reviewer findings</b> on the item to see them. Its score is a guide - you decide.</p></details>
 <details class="faq"><summary>A job needs an account on the employer's site. What happens?</summary>
-<p>The extension creates an account with the candidate's application email and a random password (one per candidate per site, saved under <b>Site accounts</b>), or signs in to the one it made before. If the site wants a CAPTCHA solved or an email verified, it asks a person to do that step and carries on.</p></details>
+<p>The extension creates an account with the candidate's application email and a random password (one per candidate per site, saved under <b>Site accounts</b>), or signs in to the one it made before, then goes back to the job and applies. If the site emails a verification code or link, the extension reads it from the Jobverse Gmail and enters the code or opens the link itself. If the site says the email is already registered, or the saved password stops working, it uses <b>Forgot password</b> and the reset email to set the saved password again. A CAPTCHA still needs a person, and so does an email that hasn't arrived after 2.5 minutes.</p>
+<p>For the email steps to work, each candidate's application inbox must <b>forward</b> its mail to the Gmail account that runs Jobverse (in that inbox: Gmail Settings &rsaquo; Forwarding and POP/IMAP &rsaquo; Add a forwarding address). Jobverse only reads it; it never sends or deletes from it. Turn this off with Config <b>ACCOUNT_EMAIL_LOOKUP</b> = <b>off</b>.</p></details>
 </div>
 `;
 </script>

@@ -94,7 +94,8 @@ var JV = {
     ['RAPIDAPI_KEY', '', 'Free/metered at rapidapi.com, subscribe to the JSearch API. Broader global coverage for the Prospect Finder.'],
     ['PROSPECT_SOURCES', 'adzuna,reed,jsearch,nhs,workable,myjobmag', 'Comma separated sources to search: adzuna, reed, jsearch (Google for Jobs - brings in LinkedIn, Indeed, Glassdoor, Civil Service Jobs, Jobberman listings), remotive, nhs (NHS Jobs, incl. Trac-run vacancies), jobbank (Canada Job Bank, Canada-wide), workable, myjobmag (Nigeria). A source with no key set is skipped silently.'],
     ['NHS_TRAC_FOLLOWUP_DEFAULT_DAYS', '14', 'If the vacancy closing date cannot be found on the NHS Jobs page, the Trac follow-up is scheduled this many days out instead.'],
-    ['FOLLOWUP_DAYS_AFTER_SUBMIT', '7', 'Every submitted application gets a follow-up (chase the employer) due this many days after submission.']
+    ['FOLLOWUP_DAYS_AFTER_SUBMIT', '7', 'Every submitted application gets a follow-up (chase the employer) due this many days after submission.'],
+    ['ACCOUNT_EMAIL_LOOKUP', 'on', 'on = when a job site needs an account, the extension reads its verification code/link or password-reset email from this account\'s Gmail (read-only). Each candidate\'s application inbox must forward to this Gmail. off = a person verifies by hand.']
   ],
 
   TONE_DEFAULTS: [

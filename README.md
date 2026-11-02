@@ -38,6 +38,7 @@ approves the actual submission before anything reaches a real employer.
 | `Analytics.js` (`reviewerAccuracyReport`) | Deployed and run once — `ReviewQueue` had zero Decided rows at last check, so there's nothing to measure yet |
 | Config-gated auto-decide (patch 05) | Still not applied — needs real Decided rows in `ReviewQueue` first |
 | `PlatformAccounts` tab + site sign-in/sign-up handling | Live in the **Chrome extension** (per-site random passwords in Script Properties). The worker has no sign-in/sign-up handling - jobs behind an account wall end as `Error` there; run them through the extension. |
+| Account emails + password reset (`findAccountEmail`) | **Written, not yet deployed or tested on a live site.** On a "verify your email" page the extension asks the backend for the site's email (Gmail advanced service, read-only, `gmail.readonly` scope) and enters the code or opens the link. "Email already registered" on sign-up, or a rejected saved password, runs Forgot password -> reset email -> sets the saved password -> signs in. After any account step the tab goes back to the job page once, since many sites land on a dashboard. Needs each candidate's application inbox to forward to the Jobverse Gmail; Config `ACCOUNT_EMAIL_LOOKUP` = `off` disables it. Email parsing tested against sample emails only. |
 | Chrome extension auto-run | **Live** — replaces the worker. With "Auto-run the queue" ticked in the popup, the extension claims the next queued prospect (`nextQueuedProspect`, `Queued` -> `In Progress - Extension` under the script lock, stale claims re-queued after 45 min) every 3 minutes and fills it. Every approval becomes `Approved - Extension`; leftover `Approved - Submitting` rows are submitted by the extension too. |
 | `worker/worker.js` | **Retired.** Fills a form and requests review, then re-fills and submits for real only after a human approves. Reads the job ad itself before analysing it. Every prospect leaves `Queued` (`In Review - Worker`, `Skipped` or `Error`), so failures are never retried in a loop - re-queue from the dashboard. Only submits applications it filled itself (`FilledBy = worker`). |
 | `worker/unified-form-filler.js` | Generic filler for any ATS: picks the frame holding the form, fills text/select/radio/checkbox fields via `answerField`, uploads CV/cover letter, follows Next. `fillForm` never clicks Submit/Apply on a form - only `clickSubmit` does, after approval, and it reports whether a confirmation appeared. |
@@ -59,6 +60,12 @@ approves the actual submission before anything reaches a real employer.
    Manage deployments → pencil icon → Version: New version → Deploy) — a
    plain `clasp push` alone does **not** update what's live at your `/exec`
    URL, it only updates the editor's source.
+   This push adds the `gmail.readonly` scope and the Gmail advanced service:
+   run any function once in the editor (e.g. `setupJobverse()`, which also
+   adds the new `ACCOUNT_EMAIL_LOOKUP` Config row) and accept the new
+   permission before redeploying. Then, in each candidate's application
+   inbox, forward mail to the Gmail account that owns the script (Settings ->
+   Forwarding and POP/IMAP), and reload the unpacked extension in Chrome.
 2. Confirm the `onReviewQueueEdit` installable trigger is registered
    (Triggers → Add Trigger → From spreadsheet → On edit), if not already.
 3. Run `reviewerAccuracyReport()` once real `Decided` rows exist, and look
