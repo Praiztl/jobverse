@@ -55,7 +55,11 @@ function callClaudeJSON_(systemPrompt, userPrompt, maxTokens) {
   return JSON.parse(clean);
 }
 
+/** Written once per form field or click: nothing reads them, so they stay out of the sheet unless debugging. */
+var AI_STEP_AGENTS_ = { FieldAnswerer: true, ClickDecider: true, NextStepChooser: true };
+
 function saveAIOutput_(agent, candidateId, jobId, outputObj) {
+  if (AI_STEP_AGENTS_[agent] && String(getConfig_('LOG_AI_STEPS')).toLowerCase() !== 'on') return '';
   var id = newId_('OUT');
   appendObject_('AIOutputs', {
     OutputID: id,

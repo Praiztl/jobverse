@@ -50,7 +50,13 @@ approves the actual submission before anything reaches a real employer.
 | Approving from Applications (`Dashboard.html`) | Filled forms show under Applications → **Ready to approve** with View CV / View cover letter (inline preview), **What was filled in**, and **Approve & submit**, which approves the job's waiting documents and final application together; the waiting Chrome tab then clicks Submit. This is the only place job applications are approved: the old Review queue is now **More → Documents to check** and holds only documents not tied to an application being applied to (matched by `jobId`, which `dashData` now returns for applications and reviews). |
 | Screenshot check (`apiVisualCheck_` + extension) | Before a filled form goes to review, and again right before Submit, the extension screenshots the form (up to 8 screens, JPEG, ~1100px wide) and the AI lists anything unanswered, showing an error, or wrong for the candidate. Review: issues go to the reviewer in red. Submit: it holds with a list in the tab ("check again" / "submit anyway"), status `Check Before Submit - Human Needed`. Taking a screenshot brings the tab to the front for a moment. If the check fails to run, it never blocks. Turn off with Config `VISUAL_CHECK` = `off`. Tested with a stubbed AI only. |
 | Simplified console (`Dashboard.html`) | Five main nav items (Overview, Applications, Find jobs, Candidates, Follow-ups), the rest under **More**. An "Auto-applying is on/off" line tops every page. Overview has a first-run checklist (hideable, per browser), the 4-step flow, and a to-do list led by approvals. Job statuses use plain words ("In line to apply" for `Queued`); the sheet values are unchanged. |
-| Help & guide (`Dashboard.html`) | Updated — documents the extension's auto-run as the hands-off path |
+| Shared dashboard data (`Cache.js`) | **Written, tested against a mocked Apps Script only.** `dashData` serves one gzipped snapshot from CacheService to everyone, for up to 20 s; `logActivity_` marks it stale on every action, and a person's own action reads the sheet. The page polls every 30 s only while visible and gets `{ unchanged: true }` when nothing moved. Config is shared for 60 s, so a hand edit in the Config tab can take that long. `jobverseHealth()` in the editor prints row counts and build time. |
+| One submission across Chromes (`apiClaimSubmission_`) | **Written, tested with `background.js` against a mock backend, not on a live site.** Every Chrome sees an approved application, so each must win this claim before filling or pressing Submit. A claim never passes to another Chrome by itself; a stuck one goes to a person (Retry / Mark submitted). |
+| Update CV / cover letter (`dashReviseDocument`) | **Written, not yet tried live.** On Ready to approve and Sent back: a new version from a person's notes and keywords, built on the document's current text, then the Reviewer Agent. Newest version always wins. A tab waiting with the old file is told at approval (`docsChanged`, which also catches edits made in Google Docs), closes, and the form is filled again. |
+| Sent back (`Dashboard.html`) | **Written, not yet tried live.** Don't submit moves an application to Applications > Sent back with its reason; Update, then Run again (fresh fill, back to Ready to approve) or Drop (`Dropped` status). |
+| Follow-ups on submission | **Written, tested against a mocked Apps Script only.** The page opens on All open, so an application shows from the moment it is submitted; `DueDate` stays the chase date. `buildDashData_` adds any follow-up a Submitted row lacks, so hand-marked rows no longer wait for the morning backfill. |
+| Rewrites and the script lock (`Revisions.js`) | Rows are claimed one at a time under a brief lock and the AI work runs outside it. It used to hold the lock every Chrome needs to claim a job for minutes at a time. |
+| Help & guide (`Dashboard.html`) | Updated — documents the extension's auto-run as the hands-off path, document updates, Sent back and working as a team |
 | Postgres schema / `db/sync/*.js` | Still stale/unused — needs a full rework against the real tables (`Jobs`, `CVVersions`, `CoverLetters`, `NHSStatements`, `AIOutputs`, `FollowUps`) |
 | `worker/.env.example` deployment URL leak | A real `/exec` URL was briefly committed, then removed (`fix-env-example.sh`). If the Apps Script deployment behind it hasn't been rotated (new deployment, old one archived) yet, do that — the URL is still visible in git history. |
 
@@ -66,6 +72,12 @@ approves the actual submission before anything reaches a real employer.
    permission before redeploying. Then, in each candidate's application
    inbox, forward mail to the Gmail account that owns the script (Settings ->
    Forwarding and POP/IMAP), and reload the unpacked extension in Chrome.
+   Deploy the backend first, then reload the extension (version 1.1.0) in
+   **every** Chrome: the new extension needs `claimSubmission`, and an old
+   extension still running alongside it skips the claim. Run `setupJobverse()`
+   once to add the new `Applications` columns and the `LOG_AI_STEPS` Config row.
+   For VAs to see documents, share the Drive folder `Jobverse Platform` with
+   their Google accounts: generated Docs are private to the deploying account.
 2. Confirm the `onReviewQueueEdit` installable trigger is registered
    (Triggers → Add Trigger → From spreadsheet → On edit), if not already.
 3. Run `reviewerAccuracyReport()` once real `Decided` rows exist, and look

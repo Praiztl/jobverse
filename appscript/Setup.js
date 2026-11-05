@@ -43,7 +43,7 @@ var JV = {
       'ApplicationID', 'CreatedAt', 'CandidateID', 'JobID', 'Company', 'JobTitle',
       'JobURL', 'ATS', 'Status', 'DedupeHash', 'CVVersionID', 'LetterID',
       'SubmittedAt', 'ConfirmationScreenshotURL', 'RecruiterEmail', 'Outcome',
-      'InterviewDate', 'ErrorLog', 'FilledBy'
+      'InterviewDate', 'ErrorLog', 'FilledBy', 'NeedsPerson', 'SubmitClaimedBy', 'SubmitClaimedAt'
     ],
     Prospects: [
       'ProspectID', 'FoundAt', 'CandidateID', 'Company', 'JobTitle', 'JobURL',
@@ -94,7 +94,8 @@ var JV = {
     ['RAPIDAPI_KEY', '', 'Free/metered at rapidapi.com, subscribe to the JSearch API. Broader global coverage for the Prospect Finder.'],
     ['PROSPECT_SOURCES', 'adzuna,reed,jsearch,nhs,workable,myjobmag', 'Comma separated sources to search: adzuna, reed, jsearch (Google for Jobs - brings in LinkedIn, Indeed, Glassdoor, Civil Service Jobs, Jobberman listings), remotive, nhs (NHS Jobs, incl. Trac-run vacancies), jobbank (Canada Job Bank, Canada-wide), workable, myjobmag (Nigeria). A source with no key set is skipped silently.'],
     ['NHS_TRAC_FOLLOWUP_DEFAULT_DAYS', '14', 'If the vacancy closing date cannot be found on the NHS Jobs page, the Trac follow-up is scheduled this many days out instead.'],
-    ['FOLLOWUP_DAYS_AFTER_SUBMIT', '7', 'Every submitted application gets a follow-up (chase the employer) due this many days after submission.'],
+    ['FOLLOWUP_DAYS_AFTER_SUBMIT', '7', 'Every submitted application appears on Follow-ups straight away; the reminder to chase the employer falls due this many days after submission.'],
+    ['LOG_AI_STEPS', 'off', 'on = also write every per-field, click and navigation AI answer to the AIOutputs tab (for debugging). off = skip them: faster form filling and a much smaller spreadsheet.'],
     ['ACCOUNT_EMAIL_LOOKUP', 'on', 'on = when a job site needs an account, the extension reads its verification code/link or password-reset email from this account\'s Gmail (read-only). Each candidate\'s application inbox must forward to this Gmail. off = a person verifies by hand.']
   ],
 
@@ -222,14 +223,28 @@ function sheet_(name) {
   return SHEET_CACHE_[name];
 }
 
+/*
+ * Every request starts by reading Config (the API token or dashboard key), so
+ * it is shared between executions for a minute - an edit made by hand in the
+ * Config tab can take that long to apply. setConfig_ clears it at once.
+ */
+var CONFIG_SHARED_KEY_ = 'config:v1', CONFIG_SHARED_SECONDS_ = 60;
+
 function getConfig_(key) {
   if (!CONFIG_CACHE_) {
-    CONFIG_CACHE_ = {};
-    var sh = sheet_('Config');
-    if (sh && sh.getLastRow() >= 2) {
-      sh.getRange(2, 1, sh.getLastRow() - 1, 2).getValues().forEach(function (r) {
-        if (r[0] !== '' && !(r[0] in CONFIG_CACHE_)) CONFIG_CACHE_[r[0]] = String(r[1]);
-      });
+    var shared = null;
+    try { shared = CacheService.getScriptCache().get(CONFIG_SHARED_KEY_); } catch (ignored) {}
+    if (shared) {
+      CONFIG_CACHE_ = JSON.parse(shared);
+    } else {
+      CONFIG_CACHE_ = {};
+      var sh = sheet_('Config');
+      if (sh && sh.getLastRow() >= 2) {
+        sh.getRange(2, 1, sh.getLastRow() - 1, 2).getValues().forEach(function (r) {
+          if (r[0] !== '' && !(r[0] in CONFIG_CACHE_)) CONFIG_CACHE_[r[0]] = String(r[1]);
+        });
+      }
+      try { CacheService.getScriptCache().put(CONFIG_SHARED_KEY_, JSON.stringify(CONFIG_CACHE_), CONFIG_SHARED_SECONDS_); } catch (ignored) {}
     }
   }
   return CONFIG_CACHE_[key] || '';
@@ -238,6 +253,7 @@ function getConfig_(key) {
 function setConfig_(key, value) {
   var sh = sheet_('Config');
   CONFIG_CACHE_ = null;
+  try { CacheService.getScriptCache().remove(CONFIG_SHARED_KEY_); } catch (ignored) {}
   var data = sh.getRange(2, 1, Math.max(sh.getLastRow() - 1, 1), 1).getValues();
   for (var i = 0; i < data.length; i++) {
     if (data[i][0] === key) { sh.getRange(i + 2, 2).setValue(value); return; }
@@ -252,6 +268,10 @@ function newId_(prefix) {
 
 function logActivity_(actor, action, refType, refId, detail) {
   sheet_('ActivityLog').appendRow([new Date(), actor, action, refType, refId, detail || '']);
+  // Everything a person or the extension does is logged, so this one line keeps
+  // the shared dashboard snapshot honest (see Cache.js). AI steps change nothing
+  // anyone is looking at until the step that follows them.
+  if (actor !== 'ai') dashTouch_();
 }
 
 function getHeaderMap_(sh) {
@@ -321,9 +341,10 @@ function colRuns_(colNums, avoid) {
 /**
  * The row whose idField equals idValue, or null. Scans only the ID column,
  * then reads just the matching row (newest match first - IDs are unique, and
- * recent rows are the ones usually looked up).
+ * recent rows are the ones usually looked up). Pass `cols` to read only those
+ * columns, for lookups repeated often on tabs with big JSON columns.
  */
-function findRow_(name, idField, idValue) {
+function findRow_(name, idField, idValue, cols) {
   var sh = sheet_(name);
   if (!sh || sh.getLastRow() < 2) return null;
   var map = getHeaderMap_(sh);
@@ -332,8 +353,20 @@ function findRow_(name, idField, idValue) {
   var target = String(idValue);
   for (var i = ids.length - 1; i >= 0; i--) {
     if (String(ids[i][0]) !== target) continue;
-    var row = sh.getRange(i + 2, 1, 1, sh.getLastColumn()).getValues()[0];
     var o = { _row: i + 2 };
+    if (cols) {
+      var wanted = cols.filter(function (h) { return map[h]; });
+      var avoid = HEAVY_COLS_.filter(function (h) { return map[h] && wanted.indexOf(h) === -1; })
+        .map(function (h) { return map[h]; });
+      colRuns_(wanted.map(function (h) { return map[h]; }), avoid).forEach(function (run) {
+        var part = sh.getRange(i + 2, run[0], 1, run[1] - run[0] + 1).getValues()[0];
+        wanted.forEach(function (h) {
+          if (map[h] >= run[0] && map[h] <= run[1]) o[h] = part[map[h] - run[0]];
+        });
+      });
+      return o;
+    }
+    var row = sh.getRange(i + 2, 1, 1, sh.getLastColumn()).getValues()[0];
     Object.keys(map).forEach(function (h) { o[h] = row[map[h] - 1]; });
     return o;
   }

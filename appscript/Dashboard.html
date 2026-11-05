@@ -230,6 +230,7 @@
 // Passed back on every server call - each dash* function re-checks it (see doGet in Api.gs)
 const DASH_KEY = <?!= JSON.stringify(dashKey) ?>;
 let D = null, view = 'home', loadedAt = 0;
+let dataVersion = '', loadsInFlight = 0, writeSeq = 0; // see load()
 const F = {}; // per-view filter state
 
 /* ------------------------------- storage -------------------------------- */
@@ -243,16 +244,27 @@ function saveFindJobsCandidate(id){ store('jobverse_findJobs_candidate', id); }
 
 /** google.script.run as a promise; every dash* function takes the dashboard key first. */
 function rpc(fn, ...args){
+  if(fn !== 'dashData') writeSeq++;
   return new Promise((resolve, reject) =>
     google.script.run.withSuccessHandler(resolve).withFailureHandler(reject)[fn](DASH_KEY, ...args));
 }
 
-// background = the periodic refresh (or a refresh after an action): the data is
-// updated, but the page is only redrawn if that won't wipe something being typed.
-function load(background){
-  rpc('dashData')
-    .then(d => {
-      D = d; loadedAt = Date.now();
+// background = a refresh nobody asked for: the data is updated, but the page is
+// only redrawn if that won't wipe something being typed.
+// shared = happy with the copy everyone shares (Cache.js) and told "unchanged" if
+// it's the one already held. Without it - after a person's own action, or Refresh -
+// the server reads the sheet, so what they just did can't appear undone.
+function load(background, shared){
+  if(background && shared && (loadsInFlight || document.hidden)) return;
+  const seq = writeSeq;
+  loadsInFlight++;
+  rpc('dashData', shared ? dataVersion : '', !shared)
+    .then(r => {
+      const d = typeof r === 'string' ? JSON.parse(r) : r;
+      loadedAt = Date.now();
+      if(d.unchanged) return;
+      if(shared && seq !== writeSeq) return; // something changed while this was on its way - it would undo that on screen
+      D = d; dataVersion = d.version || '';
       updateBadges();
       if(background && userIsEditing()) return;
       render();
@@ -263,9 +275,13 @@ function load(background){
         `<h1>Connection error</h1><div class="card"><p style="color:var(--red);font-weight:600">${esc(e.message)}</p>
          <p class="mut" style="margin-top:8px">The backend threw an error. Check Apps Script's Executions panel (clock icon) for the full stack trace.</p>
          <p style="margin-top:12px"><button class="btn primary" onclick="load()">Try again</button></p></div>`;
-    });
+    })
+    .finally(() => { loadsInFlight--; });
 }
-load(); setInterval(() => load(true), 45000);
+load(false, true);
+setInterval(() => load(true, true), 30000);
+// A tab in the background doesn't refresh; it catches up the moment it's looked at
+document.addEventListener('visibilitychange', () => { if(!document.hidden && Date.now() - loadedAt > 30000) load(true, true); });
 setInterval(() => { const s = document.getElementById('syncAge'); if(s) s.textContent = ago(loadedAt); }, 15000);
 
 /** True while redrawing would lose the user's input: the Generate form, an open dialog, or any focused field. */
@@ -338,7 +354,8 @@ const APP_STATUS = {
   'Approved - Submitting': { label: 'Approved - submitting', cls: 'c-prog', group: 'flight' }, // from the retired worker
   'Approved - Extension':  { label: 'Approved - submitting', cls: 'c-prog', group: 'flight' },
   'Submitted':             { label: 'Submitted', cls: 'c-sub', group: 'done' },
-  'Rejected':              { label: 'Not sent (you said no)', cls: 'c-mut', group: 'closed' },
+  'Rejected':              { label: 'Sent back - not submitted', cls: 'c-wait', group: 'sentback' },
+  'Dropped':               { label: 'Sent back - dropped', cls: 'c-mut', group: 'closed' },
   'Failed':                { label: 'Failed', cls: 'c-fail', group: 'attention' },
   'Error':                 { label: 'Failed', cls: 'c-fail', group: 'attention' },
   'Retried':               { label: 'Re-queued', cls: 'c-mut', group: 'closed' }
@@ -431,6 +448,31 @@ function docFramesHtml(owner, files){
     `<div class="preview"><div class="mut">${label}</div><iframe src="${esc(docPreviewUrl(url))}" title="${label} preview" loading="lazy"></iframe></div>`).join('') + '</div>' : '';
 }
 
+const DOC_KINDS = { cv: { type: 'CV', label: 'CV' }, letter: { type: 'CoverLetter', label: 'cover letter' } };
+
+/** The latest rewrite of this application's CV or cover letter, if there's been one. */
+function docRevision(a, kind){
+  return a.jobId ? (D.revisions || []).find(r => r.jobId === a.jobId && r.type === DOC_KINDS[kind].type) : null;
+}
+/** True while a rewrite is running: approving or re-running now would use the version being replaced. */
+function isRevising(a){ return Object.keys(DOC_KINDS).some(k => (docRevision(a, k) || {}).state === 'working'); }
+/** The Reviewer Agent's check of the application's current CV or cover letter. */
+function docReview(a, kind){ return a.jobId ? D.reviews.find(t => t.type === DOC_KINDS[kind].type && t.jobId === a.jobId) : null; }
+
+/** Per document: rewriting / failed / updated, and the Reviewer Agent's score for the current version. */
+function docStatusHtml(a){
+  return Object.keys(DOC_KINDS).map(kind => {
+    const label = DOC_KINDS[kind].label, cap = label === 'CV' ? 'CV' : 'Cover letter', r = docRevision(a, kind), t = docReview(a, kind);
+    const open = t && OPEN_FINDINGS.has(t.id);
+    const check = t ? ` <button class="linkbtn" onclick="toggleFindings('${t.id}')" aria-expanded="${!!open}">${open ? 'Hide' : 'AI check of the'} ${label}${open || t.score === '' ? '' : ': score ' + esc(t.score)}</button>` : '';
+    if(r && r.state === 'working') return `<div class="mut" style="margin-top:4px">Rewriting the ${label} - usually about a minute…</div>`;
+    if(r && r.state === 'error') return `<div class="err">The ${label} rewrite failed: ${esc(r.error)}
+      ${r.id ? `<button class="linkbtn" onclick="retryRevision('${r.id}')">Try again</button>` : ''}</div>`;
+    if(r && r.state === 'done' && r.at >= (a.createdMs || 0)) return `<div class="mut" style="margin-top:4px"><b style="color:var(--ink)">${cap} updated ${esc(ago(r.at))}.</b>${check}</div>`;
+    return check ? `<div style="margin-top:4px">${check}</div>` : '';
+  }).join('');
+}
+
 /* ------------------------------ derived data ---------------------------- */
 
 const DOC_LABEL = { CV: 'CV', CoverLetter: 'Cover letter', NHSStatement: 'NHS statement', Submission: 'Final application' };
@@ -466,7 +508,7 @@ function readyApps(){ return D.applications.filter(a => appInfo(a).group === 're
  * cover letter and final application approved together under Applications.
  */
 function docGroups(){
-  const live = D.applications.filter(a => ['flight', 'review'].includes(appInfo(a).group));
+  const live = D.applications.filter(a => ['flight', 'review', 'sentback'].includes(appInfo(a).group));
   const liveJobs = new Set(live.map(a => a.jobId).filter(Boolean));
   const liveKeys = new Set(live.map(a => a.cand + '|' + (a.company + ' - ' + a.title).toLowerCase().trim()));
   return reviewGroups().filter(g => !liveKeys.has(g.key) && !g.items.some(t => t.jobId && liveJobs.has(t.jobId)));
@@ -557,6 +599,7 @@ PAGES.home = () => {
 
   const todo = [];
   readyApps().slice(0, 3).forEach(a => todo.push({ text: `Approve <b>${esc(a.company)}</b> - ${esc(a.title)} for ${esc(candName(a.cand))}`, meta: 'Form filled - check the CV and cover letter, then Approve & submit', to: `'applications',{appTab:'review'}`, main: true }));
+  D.applications.filter(a => appInfo(a).group === 'sentback').slice(0, 3).forEach(a => todo.push({ text: `Sent back: <b>${esc(a.company)}</b> - ${esc(a.title)} for ${esc(candName(a.cand))}`, meta: 'Update the documents, then Run again', to: `'applications',{appTab:'sentback'}` }));
   groups.slice(0, 3).forEach(g => todo.push({ text: `Check documents for <b>${esc(g.summary)}</b> (${esc(candName(g.cand))})`, meta: g.items.map(t => DOC_LABEL[t.type] || t.type).join(', '), to: `'reviews'` }));
   att.slice(0, 3).forEach(a => todo.push({ text: `<b>${esc(a.company)}</b> - ${esc(a.title)} (${esc(candName(a.cand))})`, meta: appInfo(a).label, to: `'applications',{appTab:'attention'}` }));
   due.slice(0, 3).forEach(f => todo.push({ text: `Check for a reply from <b>${esc(f.company)}</b> (${esc(candName(f.cand))})`, meta: 'Follow-up due ' + esc(f.due), to: `'followups'` }));
@@ -580,8 +623,11 @@ PAGES.reviews = () => {
   if(F.revQ) groups = groups.filter(g => matches(F.revQ, g.summary, candName(g.cand)));
   const pg = paginate(groups, 'revPage', F.revSize || 10);
   const ready = readyApps().length;
+  const failed = (D.revisions || []).filter(r => r.state === 'error' && r.id);
   return header('Documents to check', 'CVs and cover letters written by hand (Write a CV by hand) or for jobs no longer being applied to. Applications waiting for approval are under <b>Applications</b>, not here.') +
     (ready ? `<div class="note"><b>${ready} filled application${ready > 1 ? 's are' : ' is'} waiting for approval</b> - <button class="linkbtn" onclick="go('applications',{appTab:'review'})">open Applications</button></div>` : '') +
+    failed.map(r => `<div class="note bad"><b>The ${esc((DOC_LABEL[r.type] || r.type).toLowerCase())} rewrite for ${esc(r.summary)} failed:</b> ${esc(r.error)}
+      <button class="linkbtn" onclick="retryRevision('${r.id}')">Try again</button></div>`).join('') +
     `<div class="toolbar">
       <div><label>Candidate</label><select onchange="setFilter('revCand',this.value)"><option value="">All candidates</option>${cands.map(c => `<option value="${esc(c)}" ${c===F.revCand?'selected':''}>${esc(candName(c))}</option>`).join('')}</select></div>
       <div class="grow"><label>Search</label><input type="search" placeholder="Company or role" value="${esc(F.revQ || '')}" oninput="setSearch('revQ',this)"></div>
@@ -647,9 +693,11 @@ PAGES.applications = () => {
     (stuck.length ? `<div class="note bad"><b>${stuck.length} approved application${stuck.length > 1 ? 's have' : ' has'} not been submitted.</b> ${esc(stuckReason(stuck[0]))}
       If you submitted one by hand or can see it on the employer's site, use <b>Mark submitted</b>; otherwise <b>Retry</b> runs it again from the start.</div>` : '') +
     (tab === 'review' && count('review') ? `<div class="note"><b>These forms are filled in and waiting in a Chrome tab.</b> View the CV and cover letter (and <b>What was filled in</b>),
-      then press <b>Approve &amp; submit</b> - the extension clicks the employer's Submit button within a few seconds. Keep Chrome open with the extension.</div>` : '') +
+      then press <b>Approve &amp; submit</b> - the extension clicks the employer's Submit button within a few seconds. Something to change? <b>Update CV</b> or <b>Update cover letter</b> writes a new version, and that's the one that gets sent. Keep Chrome open with the extension.</div>` : '') +
+    (tab === 'sentback' && count('sentback') ? `<div class="note"><b>These were not submitted.</b> Press <b>Update CV</b> or <b>Update cover letter</b> to fix what was wrong - the Reviewer Agent checks the new version - then <b>Run again</b>: the extension fills the form again with the new documents and it comes back to <b>Ready to approve</b>. <b>Drop</b> clears one nobody will run again.</div>` : '') +
     tabsHtml('appTab', [
       { v: 'review', label: 'Ready to approve', n: count('review') },
+      { v: 'sentback', label: 'Sent back', n: count('sentback') },
       { v: 'all', label: 'All', n: all.length }, { v: 'attention', label: 'Needs attention', n: count('attention') },
       { v: 'flight', label: 'In progress', n: count('flight') }, { v: 'done', label: 'Submitted', n: count('done') },
       { v: 'closed', label: 'Closed', n: count('closed') }], tab) +
@@ -659,28 +707,37 @@ PAGES.applications = () => {
     </div>
     <div class="card flush"><div class="tablewrap"><table><tr><th>Company / role</th><th>Candidate</th><th>Status</th><th>Started</th><th>Proof</th><th></th></tr>` +
     (pg.rows.length ? pg.rows.map(appRowHtml).join('')
-      : `<tr><td colspan="6">${emptyState('No applications here', tab === 'attention' ? 'Nothing is stuck or failed.' : tab === 'review' ? 'Nothing is waiting for approval. Filled forms appear here.' : 'Try another tab or clear the filters.')}</td></tr>`) +
+      : `<tr><td colspan="6">${emptyState('No applications here', tab === 'attention' ? 'Nothing is stuck or failed.' : tab === 'review' ? 'Nothing is waiting for approval. Filled forms appear here.' : tab === 'sentback' ? 'Applications you press Don\'t submit on appear here, with your reason.' : 'Try another tab or clear the filters.')}</td></tr>`) +
     '</table></div>' + (pg.total ? pagerHtml(pg, 'appPage', 'appSize', [25, 50, 100]) : '') + '</div>';
 };
 
 function appRowHtml(a){
   const s = appInfo(a);
-  const canRetry = a.status === 'Rejected' || s.group === 'attention';
+  const sentBack = s.group === 'sentback';
+  const canRetry = sentBack || s.group === 'attention';
   const ready = s.group === 'review';
+  const revising = isRevising(a);
   // Failed includes an approved application the extension could not re-submit - it may have gone by hand
   const canMark = s.stuck || s.unconfirmed || (s.approved && !s.stuck) || a.status === 'Failed' || a.status === 'Error';
   const hint = s.stuck ? stuckReason(a) : s.unconfirmed ? 'Submit was clicked but no confirmation was seen. Check the employer\'s site or the candidate\'s inbox.'
     : /^Check Before Submit/.test(a.status) ? 'Not submitted yet: the last screenshot check before Submit found problems. The open tab lists them (bottom right) - fix them and press "check again", or "submit" if they are fine.'
     : /^Form Incomplete/.test(a.status) ? 'Not submitted: required fields were still empty or invalid. Finish them in the open tab (marked red) and it submits by itself. If the tab is gone, use Retry.'
-    : (a.status === 'Failed' || a.status === 'Error') && a.lastError ? a.lastError : '';
+    : (a.status === 'Failed' || a.status === 'Error') && a.lastError ? a.lastError
+    : sentBack ? 'Sent back' + (a.sentBack && a.sentBack.at ? ' ' + ago(a.sentBack.at) : '') + (a.sentBack && a.sentBack.by ? ' by ' + a.sentBack.by : '') + ': ' + ((a.sentBack && a.sentBack.notes) || 'no reason given') : '';
   // The final-application review behind this row, for "What was filled in"
   const sub = ready && (D.reviews.find(t => t.type === 'Submission' && t.refId === a.id) || (a.reviewId ? { id: a.reviewId } : null));
   const files = { cvUrl: a.cvUrl, letterUrl: a.letterUrl };
   const filledIn = sub && OPEN_FINDINGS.has(sub.id) ? (FINDINGS[sub.id] == null ? '<div class="findings">Loading…</div>' : renderFindings(FINDINGS[sub.id])) : '';
-  const extra = docFramesHtml(a.id, files) + filledIn;
+  const checks = ready || sentBack ? Object.keys(DOC_KINDS).map(k => docReview(a, k)).filter(t => t && OPEN_FINDINGS.has(t.id))
+    .map(t => FINDINGS[t.id] == null ? '<div class="findings">Loading…</div>' : renderFindings(FINDINGS[t.id])).join('') : '';
+  const extra = docFramesHtml(a.id, files) + checks + filledIn;
+  const updates = (ready || sentBack) && a.jobId ? docList(files).map(([k, label]) =>
+    `<button class="btn ghost tiny" ${revising ? 'disabled' : ''} onclick="updateDoc('${a.id}','${k}')">Update ${label === 'CV' ? 'CV' : label.toLowerCase()}</button>`).join(' ') : '';
   return `<tr>
     <td><b>${esc(a.company)}</b>${a.url ? ` <a href="${esc(a.url)}" class="small">posting</a>` : ''}<br><span class="mut">${esc(a.title)}${a.ats ? ' · ' + esc(a.ats) : ''}</span>
       ${docButtonsHtml(a.id, files)}
+      ${updates ? `<div class="acts" style="margin-top:6px">${updates}</div>` : ''}
+      ${ready || sentBack ? docStatusHtml(a) : ''}
       ${sub ? `<button class="linkbtn" style="margin-top:6px" onclick="toggleFindings('${sub.id}')" aria-expanded="${OPEN_FINDINGS.has(sub.id)}">${OPEN_FINDINGS.has(sub.id) ? 'Hide what was filled in' : 'What was filled in'}</button>` : ''}</td>
     <td class="mut">${esc(candName(a.cand))}</td>
     <td>${appChip(a)}${rail(a.status)}${ready && a.needsPerson ? `<div class="err" style="max-width:360px"><b>${a.needsPerson} thing${a.needsPerson > 1 ? 's' : ''} the extension couldn't do</b> - see the red lines in What was filled in, and fix them in the waiting tab. It won't submit while required fields are empty.</div>` : ''}${hint ? `<div class="${s.group === 'attention' ? 'err' : 'mut'}" style="max-width:360px">${esc(hint)}</div>` : ''}
@@ -688,32 +745,35 @@ function appRowHtml(a){
     <td class="mut nowrap" title="${a.createdMs ? esc(new Date(a.createdMs).toLocaleString('en-GB')) : ''}">${esc(shortDate(a.createdMs))}${a.submittedMs ? `<br>sent ${esc(shortDate(a.submittedMs))}` : ''}</td>
     <td>${a.shot ? `<a href="${esc(a.shot)}">screenshot</a>` : '<span class="mut">-</span>'}</td>
     <td><div class="acts" style="justify-content:flex-end">
-      ${ready ? `<button class="btn approve tiny" onclick="approveApp('${a.id}')">Approve &amp; submit</button>
+      ${ready ? `<button class="btn approve tiny" ${revising ? 'disabled title="Wait for the new version"' : ''} onclick="approveApp('${a.id}')">Approve &amp; submit</button>
         <button class="btn reject tiny" onclick="rejectApp('${a.id}')">Don't submit</button>` : ''}
       ${canMark ? `<button class="btn ghost tiny" onclick="markSubmitted('${a.id}')">Mark submitted</button>` : ''}
-      ${canRetry ? `<button class="btn ghost tiny" onclick="retryApp('${a.id}')">Retry</button>` : ''}
+      ${canRetry ? `<button class="btn ghost tiny" ${revising ? 'disabled title="Wait for the new version"' : ''} onclick="retryApp('${a.id}')">${sentBack ? 'Run again' : 'Retry'}</button>` : ''}
+      ${sentBack ? `<button class="btn ghost tiny" onclick="dropApp('${a.id}')">Drop</button>` : ''}
     </div></td></tr>` + (extra ? `<tr class="pvrow"><td colspan="6">${extra}</td></tr>` : '');
 }
 
 PAGES.followups = () => {
-  const tab = F.fuTab || 'due', today = todayIso();
+  const tab = F.fuTab || 'open', today = todayIso();
   const open = D.followUps.filter(f => f.status === 'Pending');
   const lists = {
+    open,
     due: open.filter(f => f.due && f.due <= today),
     upcoming: open.filter(f => !f.due || f.due > today),
     closed: D.followUps.filter(f => f.status !== 'Pending')
   };
-  let rows = lists[tab] || lists.due;
+  let rows = lists[tab] || lists.open;
   if(F.fuCand) rows = rows.filter(f => f.cand === F.fuCand);
-  rows = rows.slice().sort((a, b) => tab === 'closed' ? String(b.due).localeCompare(String(a.due)) : String(a.due).localeCompare(String(b.due)));
+  rows = rows.slice().sort((a, b) => tab === 'open' ? (b.createdMs || 0) - (a.createdMs || 0) // just submitted first
+    : tab === 'closed' ? String(b.due).localeCompare(String(a.due)) : String(a.due).localeCompare(String(b.due)));
   const pg = paginate(rows, 'fuPage', 25);
   return header('Follow-ups', 'Reminders for your team, not for the client.') +
-    `<div class="note"><b>What these are:</b> ${esc(String(D.followUpDays || 7))} days after an application is submitted, Jobverse reminds you to check whether the employer has replied.
-      Look in the candidate's application inbox, then record what happened - <b>Interview</b>, <b>Offer</b> or <b>Rejected</b> is also saved on the application and counted in Reports.
+    `<div class="note"><b>What these are:</b> every application appears here as soon as it is submitted, and ${esc(String(D.followUpDays || 7))} days later it falls due as a reminder to chase the employer.
+      When a reply comes - any time, due or not - look in the candidate's application inbox, then record what happened - <b>Interview</b>, <b>Offer</b> or <b>Rejected</b> is also saved on the application and counted in Reports.
       No reply yet? <b>Check again in 7 days</b> moves it back so it stops nagging. NHS Trac reminders are for claiming and verifying the application on Trac after the vacancy closes.</div>` +
-    tabsHtml('fuTab', [{ v: 'due', label: 'Due now', n: lists.due.length }, { v: 'upcoming', label: 'Upcoming', n: lists.upcoming.length }, { v: 'closed', label: 'Closed', n: lists.closed.length }], tab) +
+    tabsHtml('fuTab', [{ v: 'open', label: 'All open', n: lists.open.length }, { v: 'due', label: 'Due now', n: lists.due.length }, { v: 'upcoming', label: 'Not due yet', n: lists.upcoming.length }, { v: 'closed', label: 'Closed', n: lists.closed.length }], tab) +
     `<div class="toolbar"><div><label>Candidate</label><select onchange="setFilter('fuCand',this.value)">${candOpts(F.fuCand, 'All candidates')}</select></div></div>
-    <div class="card flush"><div class="tablewrap"><table><tr><th>Due</th><th>Company / role</th><th>Candidate</th><th>What to do</th><th>${tab === 'closed' ? 'Result' : ''}</th></tr>` +
+    <div class="card flush"><div class="tablewrap"><table><tr><th>Chase by</th><th>Company / role</th><th>Candidate</th><th>What to do</th><th>${tab === 'closed' ? 'Result' : ''}</th></tr>` +
     (pg.rows.length ? pg.rows.map(f => {
       const d = daysUntil(f.due);
       const when = f.status !== 'Pending' ? esc(f.due) : d == null ? '-' : d < 0 ? `<span class="chip c-fail">${-d} day${d < -1 ? 's' : ''} overdue</span>`
@@ -733,7 +793,7 @@ PAGES.followups = () => {
             <button class="btn ghost tiny" onclick="snoozeFollowUp('${f.id}')">Check again in 7 days</button>`}
           </div>` : chip(f.outcome || f.status)}</td>
       </tr>`;
-    }).join('') : `<tr><td colspan="5">${emptyState(tab === 'due' ? 'Nothing due' : 'Nothing here', tab === 'due' ? 'Every submitted application gets a follow-up here a week later.' : '')}</td></tr>`) +
+    }).join('') : `<tr><td colspan="5">${emptyState(tab === 'due' ? 'Nothing due' : 'Nothing here', tab === 'closed' ? '' : 'Every application appears under All open as soon as it is submitted.')}</td></tr>`) +
     '</table></div>' + (pg.total ? pagerHtml(pg, 'fuPage', null, null) : '') + '</div>';
 };
 
@@ -922,8 +982,11 @@ function setSearch(key, input){
 /* ------------------------------- dialog --------------------------------- */
 
 const DLG = { open: false };
-/** A small modal in place of prompt()/confirm(). Resolves to the typed text (input) / true, or null when cancelled. */
-function dialog({ title, body, input, placeholder, ok = 'OK', danger = false, value = '', readonly = false }){
+/**
+ * A small modal in place of prompt()/confirm(). Resolves to the typed text (input) / true, or null when cancelled.
+ * read: for extra fields put in `body` - called on OK, and what it returns is the result.
+ */
+function dialog({ title, body, input, placeholder, ok = 'OK', danger = false, value = '', readonly = false, read = null }){
   const el = document.getElementById('dlg');
   document.getElementById('dlgTitle').textContent = title;
   document.getElementById('dlgBody').innerHTML = body || '';
@@ -939,7 +1002,7 @@ function dialog({ title, body, input, placeholder, ok = 'OK', danger = false, va
   if(readonly) setTimeout(() => ta.select(), 40);
   return new Promise(resolve => {
     const close = v => { el.classList.remove('on'); DLG.open = false; okBtn.onclick = cancel.onclick = el.onclick = document.onkeydown = null; resolve(v); };
-    okBtn.onclick = () => close(input ? ta.value.trim() : true);
+    okBtn.onclick = () => close(read ? read() : input ? ta.value.trim() : true);
     cancel.onclick = () => close(null);
     el.onclick = e => { if(e.target === el) close(null); };
     document.onkeydown = e => { if(e.key === 'Escape') close(null); };
@@ -1004,7 +1067,7 @@ async function decide(id, d){
   if(d === 'revise'){
     const isSub = t.type === 'Submission';
     notes = await dialog(isSub
-      ? { title: "Don't submit this application?", body: `<b>${esc(t.summary)}</b> will not be sent. It shows as "Sent back" under Applications, where Retry runs it again.`,
+      ? { title: "Don't submit this application?", body: `<b>${esc(t.summary)}</b> will not be sent. It moves to Applications &rsaquo; Sent back, where you can update its documents and run it again.`,
           input: 'Reason (optional)', ok: "Don't submit", danger: true }
       : { title: 'Send back the ' + (DOC_LABEL[t.type] || t.type).toLowerCase() + '?', body: 'A new version is written from your notes plus the Reviewer Agent\'s findings, and comes back here in a minute or two.',
           input: 'What should change? (optional)', placeholder: 'e.g. Lead with the NHS experience; drop the claim about team leadership', ok: 'Send back' });
@@ -1049,10 +1112,62 @@ async function approveApp(appId){
 async function rejectApp(appId){
   const a = D.applications.find(x => x.id === appId);
   if(!a) return;
-  const notes = await dialog({ title: "Don't submit this application?", danger: true, ok: "Don't submit",
-    body: `<b>${esc(a.company)}</b> - ${esc(a.title)} will not be sent. Retry runs it again later if you change your mind.`, input: 'Reason (optional)' });
-  if(notes !== null) decideApp(a, 'revise', notes);
+  const ticks = docList({ cvUrl: a.cvUrl, letterUrl: a.letterUrl }).map(([k, label]) =>
+    `<label class="tog" style="margin-top:8px"><input type="checkbox" id="dlgFix_${k}"> Write a new ${label === 'CV' ? 'CV' : label.toLowerCase()} from my notes</label>`).join('');
+  const r = await dialog({ title: "Don't submit this application?", danger: true, ok: "Don't submit",
+    body: `<b>${esc(a.company)}</b> - ${esc(a.title)} will not be sent. It moves to <b>Sent back</b>, where you can see it, update its documents and run it again.` + ticks,
+    input: "What's wrong? (optional)", placeholder: 'e.g. The CV leaves out the NHS placement',
+    read: () => ({ notes: document.getElementById('dlgInput').value.trim(),
+      fix: Object.keys(DOC_KINDS).filter(k => { const c = document.getElementById('dlgFix_' + k); return c && c.checked; }) }) });
+  if(r === null) return;
+  if(await decideApp(a, 'revise', r.notes)) r.fix.forEach(k => reviseDoc(a, k, r.notes, ''));
 }
+
+/** Update CV / Update cover letter on an application waiting for approval or sent back. */
+async function updateDoc(appId, kind){
+  const a = D.applications.find(x => x.id === appId);
+  if(!a) return;
+  const label = DOC_KINDS[kind].label;
+  const r = await dialog({ title: 'Update the ' + label, ok: 'Write the new ' + label,
+    body: `<b>${esc(a.company)}</b> - ${esc(a.title)} for ${esc(candName(a.cand))}. A new version is written from what you say here, keeping everything else, and the Reviewer Agent checks it again.` +
+      (a.status === 'Awaiting Review' ? ' When you approve, the form is filled again with the new file, so anything typed by hand in the open tab has to be redone.' : '') +
+      `<label for="dlgKw" style="margin-top:10px">Keywords to add (optional)</label><input id="dlgKw" placeholder="e.g. Python, stakeholder management">
+       <div class="mut small" style="margin-top:4px">Used exactly as typed, so only add what is true of the candidate.</div>`,
+    input: 'What should change? (optional)', placeholder: 'e.g. Lead with the NHS experience. Say "project manager", not "coordinator".',
+    read: () => ({ notes: document.getElementById('dlgInput').value.trim(), keywords: document.getElementById('dlgKw').value.trim() }) });
+  if(r !== null) reviseDoc(a, kind, r.notes, r.keywords);
+}
+
+/** The rewrite takes about a minute and runs inside this call; the row says so meanwhile. */
+function reviseDoc(a, kind, notes, keywords){
+  const k = DOC_KINDS[kind];
+  D.revisions = (D.revisions || []).filter(r => !(r.jobId === a.jobId && r.type === k.type));
+  D.revisions.push({ id: '', type: k.type, jobId: a.jobId, state: 'working', error: '', notes, at: Date.now() });
+  render();
+  return rpc('dashReviseDocument', a.id, kind, notes, keywords)
+    .then(r => {
+      if(r && r.busy) toast('That document is already being rewritten');
+      else if(r && r.already) toast('Not changed - it is now "' + appInfo({ status: r.status }).label + '"');
+      else toast('The new ' + k.label + ' is ready - check it, then ' + (a.status === 'Rejected' ? 'press Run again' : 'approve'));
+    })
+    .catch(fail)
+    .finally(() => load());
+}
+
+function retryRevision(id){
+  toast('Trying the rewrite again - usually about a minute');
+  rpc('dashRetryRevision', id).then(() => toast('The new version is ready')).catch(fail).finally(() => load());
+}
+
+async function dropApp(id){
+  const a = D.applications.find(x => x.id === id);
+  if(!a) return;
+  const ok = await dialog({ title: 'Drop this application?', ok: 'Drop',
+    body: `<b>${esc(a.company)}</b> - ${esc(a.title)} leaves Sent back and moves to Closed. It won't be sent.` });
+  if(ok) rpc('dashDropApplication', id).then(() => { toast('Dropped'); load(); }).catch(fail);
+}
+
+/** Resolves to true once the server has recorded the decision. */
 function decideApp(a, d, notes){
   const before = a.status, reviews = D.reviews;
   a.status = d === 'approve' ? 'Approved - Extension' : 'Rejected';
@@ -1060,13 +1175,15 @@ function decideApp(a, d, notes){
   if(d === 'approve') D.reviews = D.reviews.filter(t => !(t.refId === a.id || (a.jobId && t.jobId === a.jobId)));
   else D.reviews = D.reviews.filter(t => t.refId !== a.id);
   render();
-  rpc('dashDecideApplication', a.id, d, notes)
+  return rpc('dashDecideApplication', a.id, d, notes)
     .then(r => {
+      if(r && r.busy){ a.status = before; D.reviews = reviews; render(); toast('A new document is still being written - approve it once it is ready', true); return false; }
       if(r && r.already) toast('Already decided - it is now "' + appInfo({ status: r.status }).label + '"');
-      else toast(d === 'approve' ? 'Approved - it will be submitted shortly' : 'Not submitted');
+      else toast(d === 'approve' ? 'Approved - it will be submitted shortly' : 'Not submitted - it is under Sent back');
       load(true);
+      return !(r && r.already);
     })
-    .catch(e => { a.status = before; D.reviews = reviews; render(); fail(e); });
+    .catch(e => { a.status = before; D.reviews = reviews; render(); fail(e); return false; });
 }
 
 /** Decides items one after another (documents before the submission), restoring any that fail. */
@@ -1178,11 +1295,11 @@ async function retryApp(id){
   const a = D.applications.find(x => x.id === id);
   if(!a) return;
   const approved = a && /^Approved|Human Needed$/.test(a.status);
-  const ok = await dialog({ title: 'Run this application again?', ok: 'Retry',
-    body: `<b>${esc(a.company)}</b> - ${esc(a.title)} goes back in the queue as a new job: fresh form fill, then back to Ready to approve.` +
+  const ok = await dialog({ title: 'Run this application again?', ok: a.status === 'Rejected' ? 'Run again' : 'Retry',
+    body: `<b>${esc(a.company)}</b> - ${esc(a.title)} goes back in the queue as a new job: fresh form fill with the latest CV and cover letter, then back to Ready to approve.` +
       (approved ? '<br><br><b>Check the employer\'s site first</b> - if it already went through, use Mark submitted instead, or the candidate applies twice.' : '') });
   if(!ok) return;
-  rpc('dashRetryApplication', id).then(() => { toast('Re-queued'); load(); }).catch(fail);
+  rpc('dashRetryApplication', id).then(r => { toast(r && r.busy ? 'A new document is still being written - run it again once it is ready' : 'Re-queued'); load(); }).catch(fail);
 }
 
 async function delCandidate(id){
@@ -1224,7 +1341,7 @@ const HELP_HTML = `
 <li>A Chrome with <b>Auto-run the queue</b> switched on in the extension picks them up within a few minutes, writes a tailored CV and cover letter, and fills in each form, one tab at a time. Nobody needs to click anything for this step - Chrome just has to be open on that computer. The line at the top of every page says whether this is running.</li>
 <li>Filled forms wait under <b>Applications &rsaquo; Ready to approve</b>. Press <b>View CV</b> and <b>View cover letter</b> to read them, and <b>What was filled in</b> to see every answer (anything in red needs a person). Then <b>Approve &amp; submit</b>, or <b>Don't submit</b>.</li>
 <li>After approval the extension clicks the employer's Submit button, and a screenshot of the confirmation is saved under <b>Applications</b>.</li>
-<li>A week later, a <b>Follow-up</b> reminds you to check for a reply. Record what happened there.</li>
+<li>The application appears under <b>Follow-ups</b> straight away. A week later it falls due as a reminder to check for a reply. Record what happened there.</li>
 </ol>
 </div>
 
@@ -1244,7 +1361,8 @@ const HELP_HTML = `
 <tr><td>Waiting for a person (CAPTCHA, a question)</td><td>3 minutes, then it moves on</td><td>Change it under "Wait for a person" in the extension's Connection settings. The tab stays open for you to finish.</td></tr>
 <tr><td>Submitted after you approve</td><td>Under 1 minute if its tab is open, otherwise 2 - 8 minutes</td><td>Without an open tab, the extension reopens the job and fills it again first. Not picked up within 20 minutes: it moves to <b>Needs attention</b>.</td></tr>
 <tr><td>Stuck jobs put back in line</td><td>45 minutes</td><td>A job claimed by a computer that went offline returns to the queue.</td></tr>
-<tr><td>Follow-up due</td><td>7 days after submitting</td><td>Reminders are emailed at about 7:30am; the daily report at about 7am.</td></tr>
+<tr><td>Shows on Follow-ups</td><td>As soon as it is submitted</td><td>It falls due 7 days later. Reminders are emailed at about 7:30am; the daily report at about 7am.</td></tr>
+<tr><td>Update CV / cover letter</td><td>About 1 minute</td><td>Includes the Reviewer Agent's check of the new version.</td></tr>
 </table>
 </div>
 
@@ -1256,8 +1374,25 @@ const HELP_HTML = `
 </div>
 
 <div class="card">
+<h2>Changing a CV or cover letter</h2>
+<p class="mut">On any application under <b>Ready to approve</b> or <b>Sent back</b>, press <b>Update CV</b> or <b>Update cover letter</b>. Say what should change and add any keywords (they're used exactly as typed, so only add what's true of the candidate). A new version is written in about a minute, keeping everything you didn't ask to change, and the Reviewer Agent checks it. You can also edit the Google Doc yourself.</p>
+<p class="mut">The newest version is always the one that gets sent. If the form is already waiting in a Chrome tab with the old file, pressing <b>Approve &amp; submit</b> closes that tab and fills the form again with the new one, so anything typed by hand in that tab has to be redone.</p>
+</div>
+
+<div class="card">
+<h2>Applications you sent back</h2>
+<p class="mut">Pressing <b>Don't submit</b> moves an application to <b>Applications &rsaquo; Sent back</b>, with your reason. Tick the document that's wrong to have a new one written straight away, or use <b>Update CV</b> / <b>Update cover letter</b> there later. Then press <b>Run again</b>: the extension fills the form with the new documents and it returns to <b>Ready to approve</b>. <b>Drop</b> clears one nobody will run again.</p>
+</div>
+
+<div class="card">
+<h2>Working as a team</h2>
+<p class="mut">Everyone opens the console with the same <b>?key=</b> link and can find, queue, approve and send back. Each person who runs applications also needs the extension in their Chrome, connected with the web app URL and API token. Two Chromes never work on the same queued job, and only one Chrome submits each approved application.</p>
+<p class="mut">The page refreshes by itself every 30 seconds while you're looking at it. Changes made by others appear within about half a minute; your own appear straight away.</p>
+</div>
+
+<div class="card">
 <h2>Follow-ups</h2>
-<p class="mut">Follow-ups are reminders for <b>your team</b>, not for the client. Every submitted application gets one, due 7 days later (Config: FOLLOWUP_DAYS_AFTER_SUBMIT). When it's due, check the candidate's application inbox for a reply, then record <b>Interview</b>, <b>Offer</b>, <b>Rejected</b> or <b>No reply</b>. Interviews and offers are saved on the application and counted in Reports. If it's too early to tell, <b>Check again in 7 days</b> moves it back. Due follow-ups are also emailed each morning to REPORT_EMAILS.</p>
+<p class="mut">Follow-ups are reminders for <b>your team</b>, not for the client. Every application appears here as soon as it is submitted, and falls due 7 days later (Config: FOLLOWUP_DAYS_AFTER_SUBMIT). When it's due, check the candidate's application inbox for a reply, then record <b>Interview</b>, <b>Offer</b>, <b>Rejected</b> or <b>No reply</b>. Interviews and offers are saved on the application and counted in Reports. If it's too early to tell, <b>Check again in 7 days</b> moves it back. Due follow-ups are also emailed each morning to REPORT_EMAILS.</p>
 <p class="mut">NHS Trac follow-ups remind you to claim and verify the application on Trac after the vacancy closes - mark them <b>Done</b> when that's finished.</p>
 </div>
 

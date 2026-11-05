@@ -41,21 +41,30 @@ function createNHSTracFollowUp_(candidateId, applicationId, company, jobTitle, c
 }
 
 /**
- * The follow-up every submitted application gets: chase the employer
- * FOLLOWUP_DAYS_AFTER_SUBMIT days after submission. One per application -
- * returns the existing id if it's already been logged.
+ * The follow-up every submitted application gets. It shows on the Follow-ups
+ * page the moment the application is submitted; DueDate is only when the
+ * reminder to chase the employer falls due (FOLLOWUP_DAYS_AFTER_SUBMIT days
+ * later). One per application - returns the existing id if it's already been
+ * logged. The lock stops the dashboard's safety net (see buildDashData_) and
+ * the submission itself each adding one.
  */
 function createSubmissionFollowUp_(app) {
-  var existing = readRows_('FollowUps').filter(function (f) {
-    return f.ApplicationID === app.ApplicationID && f.Type === 'Application Follow-up';
-  })[0];
-  if (existing) return existing.FollowUpID;
-  var days = parseInt(getConfig_('FOLLOWUP_DAYS_AFTER_SUBMIT') || '7', 10);
-  var submitted = app.SubmittedAt ? new Date(app.SubmittedAt) : new Date();
-  if (isNaN(submitted.getTime())) submitted = new Date();
-  var due = new Date(submitted.getTime() + days * 24 * 60 * 60 * 1000);
-  return createFollowUp_(app.CandidateID, app.ApplicationID, 'Application Follow-up', app.Company, app.JobTitle, due,
-    'Submitted ' + Utilities.formatDate(submitted, 'GMT', 'yyyy-MM-dd') + ' - check for a reply and chase the employer if there is none.');
+  var lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    var existing = readRows_('FollowUps', ['FollowUpID', 'ApplicationID', 'Type']).filter(function (f) {
+      return f.ApplicationID === app.ApplicationID && f.Type === 'Application Follow-up';
+    })[0];
+    if (existing) return existing.FollowUpID;
+    var days = parseInt(getConfig_('FOLLOWUP_DAYS_AFTER_SUBMIT') || '7', 10);
+    var submitted = app.SubmittedAt ? new Date(app.SubmittedAt) : new Date();
+    if (isNaN(submitted.getTime())) submitted = new Date();
+    var due = new Date(submitted.getTime() + days * 24 * 60 * 60 * 1000);
+    return createFollowUp_(app.CandidateID, app.ApplicationID, 'Application Follow-up', app.Company, app.JobTitle, due,
+      'Submitted ' + Utilities.formatDate(submitted, 'GMT', 'yyyy-MM-dd') + ' - check for a reply and chase the employer if there is none.');
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 /**
@@ -66,11 +75,11 @@ function createSubmissionFollowUp_(app) {
  */
 function backfillSubmissionFollowUps() {
   var have = {};
-  readRows_('FollowUps').forEach(function (f) {
+  readRows_('FollowUps', ['ApplicationID', 'Type']).forEach(function (f) {
     if (f.Type === 'Application Follow-up') have[f.ApplicationID] = true;
   });
   var added = 0;
-  readRows_('Applications').forEach(function (a) {
+  readRows_('Applications', ['ApplicationID', 'CandidateID', 'Company', 'JobTitle', 'Status', 'SubmittedAt']).forEach(function (a) {
     if (a.Status === 'Submitted' && a.ApplicationID && !have[a.ApplicationID]) {
       createSubmissionFollowUp_(a);
       added++;

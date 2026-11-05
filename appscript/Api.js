@@ -69,6 +69,7 @@ function doPost(e) {
       checkApproval: apiCheckApproval_,
       captchaPause: apiCaptchaPause_,
       confirmSubmission: apiConfirmSubmission_,
+      claimSubmission: apiClaimSubmission_,
       reportError: apiReportError_,
       listProspects: apiListProspects_,
       updateProspectStatus: apiUpdateProspectStatus_,
@@ -516,15 +517,65 @@ function apiRequestReview_(req) {
     updateRow_('Applications', app._row, { Status: 'Awaiting Review', FilledBy: req.filledBy === 'worker' ? 'worker' : 'extension',
       NeedsPerson: Number(req.needsPerson) || 0 });
   }
+  dashTouch_();
   notifyReviewers_('Review needed: ' + req.company + ' - ' + req.jobTitle,
     'A completed application is paused for approval. Open the Jobverse Console review queue. Task ' + taskId);
   return { taskId: taskId };
 }
- 
+
+/**
+ * Polled by the tab waiting for a decision. On approval, req.cvUrl and
+ * req.letterUrl (what that tab attached) are compared with the job's documents
+ * now: `docsChanged` tells it the form holds an old file and must not be sent.
+ */
 function apiCheckApproval_(req) {
-  var t = findRow_('ReviewQueue', 'TaskID', req.taskId);
+  var t = findRow_('ReviewQueue', 'TaskID', req.taskId, ['Status', 'Decision', 'Notes', 'JobID', 'CreatedAt']);
   if (!t) throw new Error('Task not found');
-  return { status: t.Status, decision: t.Decision || '', notes: t.Notes || '' };
+  var out = { status: t.Status, decision: t.Decision || '', notes: t.Notes || '' };
+  if (t.Status === 'Decided' && t.Decision === 'approve' && req.checkDocs && t.JobID) {
+    out.docsChanged = docsChangedSince_(t.JobID, toEpochMs_(t.CreatedAt), req.cvUrl, req.letterUrl);
+  }
+  return out;
+}
+
+/** True if the job's newest CV or letter isn't the one given, or was edited in Google Docs after `sinceMs`. */
+function docsChangedSince_(jobId, sinceMs, cvUrl, letterUrl) {
+  return [[latestDocForJob_('CVVersions', jobId), cvUrl], [latestDocForJob_('CoverLetters', jobId), letterUrl]].some(function (pair) {
+    var latest = pair[0], attached = extractDocId_(pair[1]);
+    if (!latest) return false;
+    var id = extractDocId_(latest.DocURL);
+    if (attached && id !== attached) return true;
+    try { return DriveApp.getFileById(id).getLastUpdated().getTime() > sinceMs + 60000; }
+    catch (e) { return false; } // can't tell: never hold an approved application up over it
+  });
+}
+
+/**
+ * Every open Chrome looks for approved applications, so each one must take the
+ * application here before it presses Submit: the first gets it, the others
+ * leave it alone, and the employer receives one application. A claim is never
+ * handed on by itself - a Chrome that dies after claiming may already have
+ * pressed Submit - so an application stuck like that goes to a person (Retry /
+ * Mark submitted on the dashboard).
+ */
+function apiClaimSubmission_(req) {
+  if (!req.deviceId) throw new Error('claimSubmission needs a deviceId');
+  var lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    ensureColumns_('Applications', ['SubmitClaimedBy', 'SubmitClaimedAt']);
+    var app = findRow_('Applications', 'ApplicationID', req.applicationId, ['Status', 'SubmitClaimedBy']);
+    if (!app) throw new Error('Application not found');
+    if (!/^Approved - /.test(String(app.Status))) return { claimed: false, status: app.Status };
+    if (app.SubmitClaimedBy && app.SubmitClaimedBy !== req.deviceId) return { claimed: false, by: app.SubmitClaimedBy };
+    if (!app.SubmitClaimedBy) {
+      updateRow_('Applications', app._row, { SubmitClaimedBy: req.deviceId, SubmitClaimedAt: new Date() });
+      SpreadsheetApp.flush();
+    }
+    return { claimed: true };
+  } finally {
+    lock.releaseLock();
+  }
 }
  
 /**
@@ -644,6 +695,12 @@ function apiClaimProspect_(req) {
  */
 function apiNextQueuedProspect_(req) {
   noteAgentSeen_('autorun');
+  // Most checks find nothing to do: answer those without queueing for the lock every Chrome shares
+  var anything = readRows_('Prospects', ['Status', 'ClaimedAt']).some(function (p) {
+    return p.Status === 'Queued' ||
+      (p.Status === CLAIMED_STATUS_ && p.ClaimedAt && Date.now() - toEpochMs_(p.ClaimedAt) > CLAIM_STALE_MS_);
+  });
+  if (!anything) return { prospect: null, remaining: 0 };
   var lock = LockService.getScriptLock();
   lock.waitLock(20000);
   try {
@@ -1014,29 +1071,39 @@ function apiListApplicationsByStatus_(req) {
   if (req.status === 'Approved - Extension') noteAgentSeen_('extension');
   // The worker is retired: anything still approved for it is the extension's to submit now
   var wanted = req.status === 'Approved - Extension' ? ['Approved - Extension', 'Approved - Submitting'] : [req.status];
-  var cvByJob = {}, clByJob = {}, taskByApp = {};
-  readRows_('CVVersions', ['JobID', 'DocURL']).forEach(function (v) { cvByJob[v.JobID] = v.DocURL; });
-  readRows_('CoverLetters', ['JobID', 'DocURL']).forEach(function (l) { clByJob[l.JobID] = l.DocURL; });
+  // Every open Chrome asks this every two minutes, and usually nothing matches: stop after one read
+  var apps = readRows_('Applications', ['ApplicationID', 'CandidateID', 'JobID', 'Company', 'JobTitle', 'JobURL', 'ATS', 'Status', 'SubmitClaimedBy'])
+    .filter(function (a) { return wanted.indexOf(a.Status) > -1 && (!req.candidateId || a.CandidateID === req.candidateId); });
+  if (!apps.length) return [];
+
+  var docs = latestDocsByJob_(), taskByApp = {};
   // The approved Submission review, so the extension can submit an approved application whose tab is gone
   readRows_('ReviewQueue', ['TaskID', 'Type', 'RefID']).forEach(function (t) {
     if (t.Type === 'Submission') taskByApp[t.RefID] = t.TaskID;
   });
-
-  return readRows_('Applications', ['ApplicationID', 'CandidateID', 'JobID', 'Company', 'JobTitle', 'JobURL', 'ATS', 'Status'])
-    .filter(function (a) { return wanted.indexOf(a.Status) > -1 && (!req.candidateId || a.CandidateID === req.candidateId); })
-    .map(function (a) {
-      return {
-        id: a.ApplicationID, candidateId: a.CandidateID, jobId: a.JobID, company: a.Company,
-        title: a.JobTitle, url: a.JobURL, ats: a.ATS, status: a.Status,
-        cvUrl: cvByJob[a.JobID] || '', letterUrl: clByJob[a.JobID] || '', taskId: taskByApp[a.ApplicationID] || ''
-      };
-    });
+  return apps.map(function (a) {
+    return {
+      id: a.ApplicationID, candidateId: a.CandidateID, jobId: a.JobID, company: a.Company,
+      title: a.JobTitle, url: a.JobURL, ats: a.ATS, status: a.Status, submitClaimedBy: a.SubmitClaimedBy || '',
+      cvUrl: docs.cv[a.JobID] || '', letterUrl: docs.letter[a.JobID] || '', taskId: taskByApp[a.ApplicationID] || ''
+    };
+  });
 }
  
 /* ------------------------- dashboard RPC (google.script.run) ------------------------- */
  
-function dashData(key) {
+/**
+ * The console's data, shared between everyone viewing it (Cache.js).
+ * haveVersion: the version the page already holds, answered with { unchanged: true }
+ * when it's still current. fresh: skip the shared copy, for a refresh straight
+ * after this person's own action.
+ */
+function dashData(key, haveVersion, fresh) {
   requireDashAccess_(key);
+  return dashSnapshot_(haveVersion, fresh);
+}
+
+function buildDashData_() {
   // Only the columns the dashboard shows - Candidates.AIProfileJSON and
   // ReviewQueue.AIFindings alone can be tens of KB per row.
   var apps = readRows_('Applications', ['ApplicationID', 'CandidateID', 'JobID', 'Company', 'JobTitle', 'ATS', 'Status',
@@ -1045,15 +1112,20 @@ function dashData(key) {
   apps.forEach(function (a) {
     if (countsAsApplication_(a.Status)) countByCand[a.CandidateID] = (countByCand[a.CandidateID] || 0) + 1;
   });
-  // When each application's submission was approved, so the dashboard can tell "submitting" from "stuck"
-  var approvedAt = {}, reviewOf = {};
-  readRows_('ReviewQueue', ['TaskID', 'Type', 'RefID', 'DecidedAt']).forEach(function (t) {
+  var reviewRows = readRows_('ReviewQueue', ['TaskID', 'Type', 'CandidateID', 'JobID', 'RefID', 'Summary', 'AIScore', 'Status',
+    'CreatedAt', 'DecidedAt', 'Decision', 'Notes', 'Reviewer', 'RevisedAs']);
+  // When each application's submission was approved, so the dashboard can tell "submitting" from "stuck",
+  // and why it was sent back when it was
+  var approvedAt = {}, reviewOf = {}, sentBack = {};
+  reviewRows.forEach(function (t) {
     if (t.Type !== 'Submission') return;
     reviewOf[t.RefID] = t.TaskID; // rows are appended in order, so the newest wins
     if (t.DecidedAt) approvedAt[t.RefID] = toEpochMs_(t.DecidedAt);
+    if (t.Decision === 'revise') sentBack[t.RefID] = { notes: String(t.Notes || ''), by: String(t.Reviewer || ''), at: toEpochMs_(t.DecidedAt) };
   });
   var props = PropertiesService.getScriptProperties();
   var docs = latestDocsByJob_();
+  var followUpRows = dashFollowUps_(apps);
   return {
     candidates: readRows_('Candidates', ['CandidateID', 'FullName', 'Email', 'Status', 'Active',
       'TargetApplications', 'PreferredRoles', 'Location', 'CreatedAt']).map(function (c) {
@@ -1073,6 +1145,7 @@ function dashData(key) {
                // What a reviewer approves: the documents attached to this application
                cvUrl: docs.cv[a.JobID] || '', letterUrl: docs.letter[a.JobID] || '',
                reviewId: reviewOf[a.ApplicationID] || '', needsPerson: Number(a.NeedsPerson) || 0,
+               sentBack: a.Status === 'Rejected' ? sentBack[a.ApplicationID] || {} : null,
                lastError: errors[errors.length - 1].slice(0, 300) };
     }),
     // Last time a Chrome extension checked for approvals to submit / for queued jobs to run (0 = never)
@@ -1080,17 +1153,18 @@ function dashData(key) {
       extension: Number(props.getProperty(AGENT_SEEN_PREFIX_ + 'extension') || 0),
       autorun: Number(props.getProperty(AGENT_SEEN_PREFIX_ + 'autorun') || 0)
     },
-    reviews: awaitingReviews_(docs),
+    reviews: awaitingReviews_(docs, reviewRows),
+    revisions: documentRevisions_(reviewRows),
     prospects: readRows_('Prospects', ['ProspectID', 'CandidateID', 'Company', 'JobTitle', 'JobURL', 'Status',
       'Source', 'FoundAt']).map(function (p) {
       return { id: p.ProspectID, cand: p.CandidateID, company: p.Company, title: p.JobTitle,
                url: p.JobURL, status: p.Status, source: p.Source, found: toEpochMs_(p.FoundAt) };
     }),
     log: recentActivity_(60),
-    followUps: readRows_('FollowUps').map(function (f) {
+    followUps: followUpRows.map(function (f) {
       return { id: f.FollowUpID, cand: f.CandidateID, app: f.ApplicationID, type: f.Type, company: f.Company,
                title: f.JobTitle, due: sheetDateIso_(f.DueDate), status: f.Status, notes: f.Notes,
-               outcome: f.Outcome || '' };
+               outcome: f.Outcome || '', createdMs: toEpochMs_(f.CreatedAt) };
     }),
     followUpDays: parseInt(getConfig_('FOLLOWUP_DAYS_AFTER_SUBMIT') || '7', 10),
     // Passwords are deliberately not included - see dashRevealAccountPassword
@@ -1103,13 +1177,68 @@ function dashData(key) {
 }
 
 /**
- * ReviewQueue rows still waiting on a human, in one read and without
- * AIFindings (up to 40 KB each). The dashboard fetches findings per card
- * with dashReviewFindings when a reviewer opens it.
+ * FollowUps rows for the dashboard. A submitted application shows on Follow-ups
+ * at once, so any that lacks one - marked Submitted by hand in the sheet, or the
+ * follow-up failed at submission - gets it here instead of at the next morning's
+ * backfill. A few per build, so a big backlog can't hold the dashboard up.
  */
-function awaitingReviews_(docs) {
-  var waiting = readRows_('ReviewQueue', ['TaskID', 'Type', 'CandidateID', 'JobID', 'Summary', 'AIScore', 'Status', 'CreatedAt'])
-    .filter(function (t) { return t.Status === 'Awaiting Human'; });
+function dashFollowUps_(apps) {
+  var rows = readRows_('FollowUps');
+  var have = {};
+  rows.forEach(function (f) { if (f.Type === 'Application Follow-up') have[f.ApplicationID] = true; });
+  var missing = apps.filter(function (a) { return a.Status === 'Submitted' && a.ApplicationID && !have[a.ApplicationID]; });
+  if (!missing.length) return rows;
+  try {
+    missing.slice(0, 5).forEach(function (a) {
+      createSubmissionFollowUp_({ ApplicationID: a.ApplicationID, CandidateID: a.CandidateID, Company: a.Company,
+        JobTitle: a.JobTitle, SubmittedAt: a.SubmittedAt });
+    });
+  } catch (e) {
+    logActivity_('system', 'followup_error', 'system', '-', e.message);
+  }
+  return readRows_('FollowUps');
+}
+
+/**
+ * The latest rewrite of each job's CV / cover letter / statement, for the page
+ * to show on the application: working, failed, or done, and what was asked for.
+ */
+function documentRevisions_(rows) {
+  var latest = {};
+  rows.forEach(function (t) {
+    if (t.Decision === 'revise' && REVISABLE_DOCS_[t.Type]) latest[t.Type + '|' + t.JobID + '|' + t.RefID] = t;
+  });
+  // A newer version of a document has its own RefID: keep only the last per job and type
+  var perDoc = {};
+  Object.keys(latest).forEach(function (k) {
+    var t = latest[k], key = t.Type + '|' + t.JobID;
+    if (!perDoc[key] || t._row > perDoc[key]._row) perDoc[key] = t;
+  });
+  return Object.keys(perDoc).map(function (k) {
+    var t = perDoc[k], state = revisionState_(t.RevisedAs);
+    return { id: t.TaskID, type: t.Type, jobId: t.JobID, cand: t.CandidateID, summary: t.Summary,
+             state: state === 'todo' ? 'working' : state === 'stalled' ? 'error' : state,
+             error: state === 'stalled' ? 'The rewrite stopped part way through.' : state === 'error' ? String(t.RevisedAs).replace(/^Error:\s*/, '') : '',
+             notes: String(t.Notes || ''), at: toEpochMs_(t.DecidedAt) };
+  });
+}
+
+/** Whether a rewrite of this job's documents is waiting or running, from ReviewQueue rows. */
+function jobHasRevisionRunning_(rows, jobId) {
+  return rows.some(function (t) {
+    if (t.JobID !== jobId || t.Decision !== 'revise' || !REVISABLE_DOCS_[t.Type]) return false;
+    var state = revisionState_(t.RevisedAs);
+    return state === 'todo' || state === 'working';
+  });
+}
+
+/**
+ * ReviewQueue rows still waiting on a human, without AIFindings (up to 40 KB
+ * each). The dashboard fetches findings per card with dashReviewFindings when
+ * a reviewer opens it.
+ */
+function awaitingReviews_(docs, rows) {
+  var waiting = rows.filter(function (t) { return t.Status === 'Awaiting Human'; });
 
   // One card per document per job: when the same job's CV / cover letter / NHS
   // statement was written more than once (re-runs, retries, a duplicate prospect),
@@ -1132,11 +1261,9 @@ function awaitingReviews_(docs) {
   }
 
   // The document each CV / cover letter / statement card is about, so it can be opened from the card
-  var docUrl = {};
-  Object.keys(REVISABLE_DOCS_).forEach(function (type) {
-    var d = REVISABLE_DOCS_[type];
-    readRows_(d.sheet, [d.idField, 'DocURL']).forEach(function (r) { docUrl[type + '|' + r[d.idField]] = r.DocURL; });
-  });
+  var docUrl = docs.byRef;
+  var nhs = REVISABLE_DOCS_.NHSStatement;
+  readRows_(nhs.sheet, [nhs.idField, 'DocURL']).forEach(function (r) { docUrl['NHSStatement|' + r[nhs.idField]] = r.DocURL; });
 
   return waiting
     .filter(function (t) { return superseded.indexOf(t) === -1; })
@@ -1149,12 +1276,18 @@ function awaitingReviews_(docs) {
     });
 }
 
-/** Newest CV and cover letter URL per JobID (rows are appended oldest first, so later rows win). */
+/** Newest CV and cover letter URL per JobID (rows are appended oldest first, so later rows win), and every URL by document. */
 function latestDocsByJob_() {
-  var cv = {}, letter = {};
-  readRows_('CVVersions', ['JobID', 'DocURL']).forEach(function (v) { if (v.DocURL) cv[v.JobID] = v.DocURL; });
-  readRows_('CoverLetters', ['JobID', 'DocURL']).forEach(function (l) { if (l.DocURL) letter[l.JobID] = l.DocURL; });
-  return { cv: cv, letter: letter };
+  var cv = {}, letter = {}, byRef = {};
+  readRows_('CVVersions', ['VersionID', 'JobID', 'DocURL']).forEach(function (v) {
+    if (v.DocURL) cv[v.JobID] = v.DocURL;
+    byRef['CV|' + v.VersionID] = v.DocURL;
+  });
+  readRows_('CoverLetters', ['LetterID', 'JobID', 'DocURL']).forEach(function (l) {
+    if (l.DocURL) letter[l.JobID] = l.DocURL;
+    byRef['CoverLetter|' + l.LetterID] = l.DocURL;
+  });
+  return { cv: cv, letter: letter, byRef: byRef };
 }
 
 /** Full AI findings for one review card, loaded when the reviewer opens it. */
@@ -1231,7 +1364,9 @@ function dashDecideApplication(key, applicationId, decision, notes) {
   if (app.Status !== 'Awaiting Review') return { already: true, status: app.Status };
   var who = Session.getActiveUser().getEmail();
 
-  var rows = readRows_('ReviewQueue', ['TaskID', 'Type', 'JobID', 'RefID', 'Status']);
+  var rows = readRows_('ReviewQueue', ['TaskID', 'Type', 'JobID', 'RefID', 'Status', 'Decision', 'RevisedAs']);
+  // Approving now would send the version being replaced
+  if (decision === 'approve' && app.JobID && jobHasRevisionRunning_(rows, app.JobID)) return { busy: true };
   var subs = rows.filter(function (t) { return t.Type === 'Submission' && t.RefID === applicationId; });
   var waiting = subs.filter(function (t) { return t.Status === 'Awaiting Human'; });
 
@@ -1293,6 +1428,93 @@ function dashDecide(key, taskId, decision, notes) {
   }
   logActivity_(who || 'reviewer', 'review_' + decision, t.Type, t.RefID, notes || '');
   return { decided: true, revising: revising };
+}
+
+/**
+ * "Update CV" / "Update cover letter" on an application that is waiting for
+ * approval or was sent back: writes a new version from a person's notes and
+ * keywords, then the Reviewer Agent checks it. The application's documents are
+ * always the newest version for its job, so it needs nothing else - an open tab
+ * finds out at approval (apiCheckApproval_) and the form is filled again with
+ * the new file. Runs here rather than on a trigger: it starts at once and the
+ * page simply waits about a minute for the answer. With no notes or keywords,
+ * the Reviewer Agent's own findings are the brief.
+ */
+function dashReviseDocument(key, applicationId, kind, notes, keywords) {
+  requireDashAccess_(key);
+  var type = kind === 'letter' ? 'CoverLetter' : 'CV';
+  var docTab = REVISABLE_DOCS_[type];
+  var who = Session.getActiveUser().getEmail();
+  notes = String(notes || '').trim();
+  keywords = String(keywords || '').trim();
+  var brief = [notes, keywords ? 'Keywords to add - the reviewer confirms these are true of the candidate, so use each one exactly as ' +
+    'written in the skills or profile summary: ' + keywords : ''].filter(Boolean).join('\n');
+  var taskId;
+
+  var lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    ensureColumns_('ReviewQueue', ['RevisedAs']);
+    var app = findRow_('Applications', 'ApplicationID', applicationId, ['CandidateID', 'JobID', 'Company', 'JobTitle', 'Status']);
+    if (!app) throw new Error('Application not found');
+    if (['Awaiting Review', 'Rejected'].indexOf(app.Status) === -1) return { already: true, status: app.Status };
+    if (!app.JobID) throw new Error('This application has no job on file, so it has no documents to update.');
+
+    var rows = readRows_('ReviewQueue', ['TaskID', 'Type', 'JobID', 'RefID', 'Status', 'Decision', 'RevisedAs']);
+    var mine = rows.filter(function (t) { return t.Type === type && t.JobID === app.JobID; });
+    if (jobHasRevisionRunning_(mine, app.JobID)) return { busy: true };
+
+    var versions = readRows_(docTab.sheet, [docTab.idField, 'JobID', 'DocURL']).filter(function (r) { return r.JobID === app.JobID && r.DocURL; });
+    if (!versions.length) throw new Error('No ' + (kind === 'letter' ? 'cover letter' : 'CV') + ' on file for this job yet.');
+    var doc = versions[versions.length - 1];
+    var findings = '';
+    if (!brief) {
+      var lastReview = mine.filter(function (t) { return t.RefID === doc[docTab.idField]; }).pop();
+      var full = lastReview ? findRow_('ReviewQueue', 'TaskID', lastReview.TaskID, ['AIFindings']) : null;
+      findings = full ? String(full.AIFindings || '') : '';
+      if (!findings) throw new Error('Say what should change - there are no reviewer findings to work from.');
+    }
+
+    var superseded = mine.filter(function (t) { return t.Status === 'Awaiting Human'; }).map(function (t) { return t._row; });
+    setColumnForRows_('ReviewQueue', 'Status', superseded, 'Superseded');
+    taskId = newId_('REV');
+    var now = new Date();
+    appendObject_('ReviewQueue', {
+      TaskID: taskId, CreatedAt: now, Type: type, CandidateID: app.CandidateID, JobID: app.JobID, RefID: doc[docTab.idField],
+      Summary: app.Company + ' - ' + app.JobTitle, AIFindings: findings, Status: 'Decided', Reviewer: who, DecidedAt: now,
+      Decision: 'revise', Notes: brief, RevisedAs: revisionStamp_()
+    });
+    updateRow_(docTab.sheet, doc._row, { ReviewStatus: 'revise' });
+    logActivity_(who || 'reviewer', 'document_update_requested', type, doc[docTab.idField], brief.slice(0, 500));
+  } finally {
+    lock.releaseLock();
+  }
+  return finishRevision_(taskId);
+}
+
+/** Tries a failed rewrite again, with the same request. */
+function dashRetryRevision(key, taskId) {
+  requireDashAccess_(key);
+  var lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    var t = findRow_('ReviewQueue', 'TaskID', taskId, ['RevisedAs']);
+    if (!t) throw new Error('Rewrite not found');
+    var state = revisionState_(t.RevisedAs);
+    if (state === 'working') return { busy: true };
+    if (state === 'done') return { already: true };
+    updateRow_('ReviewQueue', t._row, { RevisedAs: revisionStamp_() });
+  } finally {
+    lock.releaseLock();
+  }
+  return finishRevision_(taskId);
+}
+
+function finishRevision_(taskId) {
+  reviseOne_(taskId);
+  var t = findRow_('ReviewQueue', 'TaskID', taskId, ['RevisedAs']);
+  if (revisionState_(t.RevisedAs) === 'error') throw new Error(String(t.RevisedAs).replace(/^Error:\s*/, ''));
+  return { revised: String(t.RevisedAs) };
 }
 
 function dashGenerate(key, candidateId, jdText, jobUrl, tone) {
@@ -1416,7 +1638,9 @@ function dashRetryApplication(key, applicationId) {
   requireDashAccess_(key);
   var app = findRow_('Applications', 'ApplicationID', applicationId);
   if (!app) throw new Error('Application not found');
- 
+  // Running it now would pick up the version being replaced
+  if (app.JobID && jobHasRevisionRunning_(readRows_('ReviewQueue', ['Type', 'JobID', 'Decision', 'RevisedAs']), app.JobID)) return { busy: true };
+
   appendObject_('Prospects', {
     ProspectID: newId_('PROS'), FoundAt: new Date(), CandidateID: app.CandidateID,
     Company: app.Company, JobTitle: app.JobTitle, JobURL: app.JobURL,
@@ -1425,6 +1649,17 @@ function dashRetryApplication(key, applicationId) {
   updateRow_('Applications', app._row, { Status: 'Retried' });
   logActivity_(Session.getActiveUser().getEmail() || 'reviewer', 'application_retried', 'application', applicationId, app.Company);
   return { requeued: true };
+}
+
+/** A sent-back application nobody will run again: moves it out of Sent back. Still counts as applied, like any other closed one. */
+function dashDropApplication(key, applicationId) {
+  requireDashAccess_(key);
+  var app = findRow_('Applications', 'ApplicationID', applicationId, ['Status', 'Company']);
+  if (!app) throw new Error('Application not found');
+  if (app.Status !== 'Rejected') return { already: true, status: app.Status };
+  updateRow_('Applications', app._row, { Status: 'Dropped' });
+  logActivity_(Session.getActiveUser().getEmail() || 'reviewer', 'application_dropped', 'application', applicationId, app.Company);
+  return { dropped: true };
 }
 
 /**
@@ -1552,10 +1787,11 @@ function notifyReviewers_(subject, body) {
 }
  
 function latestReport_() {
-  var rows = readRows_('Reports');
-  if (!rows.length) return null;
-  var last = rows[rows.length - 1];
-  try { return { period: last.Period, metrics: JSON.parse(last.MetricsJSON), summary: last.Summary }; }
+  var sh = sheet_('Reports');
+  if (!sh || sh.getLastRow() < 2) return null;
+  var map = getHeaderMap_(sh);
+  var last = sh.getRange(sh.getLastRow(), 1, 1, sh.getLastColumn()).getValues()[0];
+  try { return { period: last[map.Period - 1], metrics: JSON.parse(last[map.MetricsJSON - 1]), summary: last[map.Summary - 1] }; }
   catch (e) { return null; }
 }
  
