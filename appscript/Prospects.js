@@ -146,20 +146,54 @@ function searchProspects_(candidateId) {
     (adzunaDropped ? ' (' + adzunaDropped + ' Adzuna jobs left out: no employer application page found)' : ''));
   return { found: allResults.length, added: added, adzunaDropped: adzunaDropped, errors: sourceErrors };
 }
-/** Run for every active candidate. Safe to run on a daily trigger - skips inactive/archived candidates and silently skips any source with no key set. */
+var SEARCH_CURSOR_KEY_ = 'PROSPECT_SEARCH_NEXT';
+var SEARCH_BATCH_MS_ = 4 * 60 * 1000;        // start no new candidate after this: Apps Script stops a run at 6 minutes
+var SEARCH_CONTINUE_MS_ = 7 * 60 * 1000;     // long enough for this run to have ended, however it ended
+
+/**
+ * Run for every active candidate. Safe to run on a daily trigger - skips
+ * inactive/archived candidates and silently skips any source with no key set.
+ * One run can't reach everyone once there are many candidates, so each picks up
+ * where the last stopped, with a one-off trigger set up first in case this run is killed.
+ */
 function findProspectsForAllCandidates() {
+  var props = PropertiesService.getScriptProperties();
+  var started = Date.now();
+  var ids = readRows_('Candidates', ['CandidateID', 'Status', 'Active']).filter(function (c) {
+    return c.Status !== 'Archived' && String(c.Active).toUpperCase() !== 'FALSE';
+  }).map(function (c) { return c.CandidateID; });
+
+  clearSearchContinuation_();
+  ScriptApp.newTrigger('continueProspectSearch').timeBased().after(SEARCH_CONTINUE_MS_).create();
+
   var summary = [];
-  readRows_('Candidates').forEach(function (c) {
-    if (c.Status === 'Archived') return;
-    if (String(c.Active).toUpperCase() === 'FALSE') return; // skip inactive clients
+  var next = parseInt(props.getProperty(SEARCH_CURSOR_KEY_) || '0', 10) || 0;
+  while (next < ids.length && Date.now() - started < SEARCH_BATCH_MS_) {
+    var id = ids[next++];
+    props.setProperty(SEARCH_CURSOR_KEY_, String(next)); // before searching: a candidate that kills the run isn't tried for ever
     try {
-      var r = findProspectsForCandidate_(c.CandidateID);
-      summary.push(c.CandidateID + ': +' + r.added);
+      var r = findProspectsForCandidate_(id);
+      summary.push(id + ': +' + r.added);
     } catch (e) {
-      logActivity_('system', 'prospect_search_error', 'candidate', c.CandidateID, String(e.message || e));
+      logActivity_('system', 'prospect_search_error', 'candidate', id, String(e.message || e));
     }
-  });
+  }
+  if (next >= ids.length) {
+    props.deleteProperty(SEARCH_CURSOR_KEY_);
+    clearSearchContinuation_();
+  }
   return summary.join(', ');
+}
+
+/** The one-off trigger's target, so the daily trigger on findProspectsForAllCandidates is never touched. */
+function continueProspectSearch() {
+  return findProspectsForAllCandidates();
+}
+
+function clearSearchContinuation_() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'continueProspectSearch') ScriptApp.deleteTrigger(t);
+  });
 }
 
 /* -------------------------------- sources -------------------------------- */

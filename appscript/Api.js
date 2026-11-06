@@ -210,6 +210,12 @@ function apiReviewDocument_(req) {
   return { reviewed: true };
 }
 
+/** Created on that yyyy-MM-dd day. A row with a blank or unreadable date, added by hand, simply isn't - it must not stop the queue. */
+function createdOn_(app, day) {
+  var ms = toEpochMs_(app.CreatedAt);
+  return !!ms && Utilities.formatDate(new Date(ms), 'GMT', 'yyyy-MM-dd') === day;
+}
+
 function apiPrecheckApplication_(req) {
   var cand = findRow_('Candidates', 'CandidateID', req.candidateId);
   if (!cand) throw new Error('Candidate not found');
@@ -225,8 +231,7 @@ function apiPrecheckApplication_(req) {
   var limit = parseInt(getConfig_('MAX_APPS_PER_CANDIDATE_PER_DAY') || '15', 10);
   var today = Utilities.formatDate(new Date(), 'GMT', 'yyyy-MM-dd');
   var todayCount = allApps.filter(function (a) {
-    return a.CandidateID === req.candidateId && countsAsApplication_(a.Status) &&
-      Utilities.formatDate(new Date(a.CreatedAt), 'GMT', 'yyyy-MM-dd') === today;
+    return a.CandidateID === req.candidateId && countsAsApplication_(a.Status) && createdOn_(a, today);
   }).length;
   if (todayCount >= limit) return { block: 'throttled', limit: limit };
 
@@ -277,8 +282,7 @@ function startApplicationLocked_(req) {
   var limit = parseInt(getConfig_('MAX_APPS_PER_CANDIDATE_PER_DAY') || '15', 10);
   var today = Utilities.formatDate(new Date(), 'GMT', 'yyyy-MM-dd');
   var todayCount = allApps.filter(function (a) {
-    return a.CandidateID === req.candidateId && countsAsApplication_(a.Status) &&
-      Utilities.formatDate(new Date(a.CreatedAt), 'GMT', 'yyyy-MM-dd') === today;
+    return a.CandidateID === req.candidateId && countsAsApplication_(a.Status) && createdOn_(a, today);
   }).length;
   if (todayCount >= limit) return { throttled: true, limit: limit };
 
@@ -636,6 +640,7 @@ function apiClaimSubmission_(req) {
 function apiCaptchaPause_(req) {
   var app = findRow_('Applications', 'ApplicationID', req.applicationId);
   var reason = req.reason || 'CAPTCHA';
+  if (app && app.Status === 'Submitted') return { paused: false }; // it went through: nothing may undo that
   if (app) updateRow_('Applications', app._row, { Status: reason + ' - Human Needed' });
   logActivity_('extension', 'automation_pause', 'application', req.applicationId, reason + ': ' + (req.jobUrl || ''));
   notifyReviewers_(reason + ' needs a human: ' + (req.company || ''),
@@ -647,6 +652,8 @@ function apiCaptchaPause_(req) {
 function apiConfirmSubmission_(req) {
   var app = findRow_('Applications', 'ApplicationID', req.applicationId);
   if (!app) throw new Error('Application not found');
+  // The tab and the page-load check can both report it, and a failed report is sent again
+  if (app.Status === 'Submitted') return { recorded: true, already: true, screenshotUrl: app.ConfirmationScreenshotURL || '' };
  
   var shotUrl = '';
   if (req.screenshotBase64) {
@@ -668,11 +675,18 @@ function apiConfirmSubmission_(req) {
   return { recorded: true, screenshotUrl: shotUrl };
 }
  
+/**
+ * Logs an error on the application. It becomes Failed only while being filled or
+ * waiting to submit: a late error must not undo a submission or a pending review,
+ * and logOnly (one field that wouldn't fill) never changes the status.
+ */
 function apiReportError_(req) {
   var app = req.applicationId ? findRow_('Applications', 'ApplicationID', req.applicationId) : null;
-  if (app) updateRow_('Applications', app._row, {
-    Status: 'Failed', ErrorLog: (String(app.ErrorLog || '') + '\n' + req.message).slice(0, 5000)
-  });
+  if (app) {
+    var patch = { ErrorLog: (String(app.ErrorLog || '') + '\n' + req.message).slice(0, 5000) };
+    if (!req.logOnly && /^(In Progress$|Approved - )/.test(String(app.Status))) patch.Status = 'Failed';
+    updateRow_('Applications', app._row, patch);
+  }
   logActivity_('extension', 'error', 'application', req.applicationId || '-', req.message);
   return { logged: true };
 }
@@ -804,9 +818,7 @@ function candidateBlock_(cand, allApps) {
   if (target > 0 && mine.filter(function (a) { return countsAsApplication_(a.Status); }).length >= target) return 'targetMet';
   var limit = parseInt(getConfig_('MAX_APPS_PER_CANDIDATE_PER_DAY') || '15', 10);
   var today = Utilities.formatDate(new Date(), 'GMT', 'yyyy-MM-dd');
-  var todayCount = mine.filter(function (a) {
-    return countsAsApplication_(a.Status) && Utilities.formatDate(new Date(a.CreatedAt), 'GMT', 'yyyy-MM-dd') === today;
-  }).length;
+  var todayCount = mine.filter(function (a) { return countsAsApplication_(a.Status) && createdOn_(a, today); }).length;
   return todayCount >= limit ? 'throttled' : '';
 }
 
@@ -1518,15 +1530,16 @@ function dashDecide(key, taskId, decision, notes) {
   // A double click or a second reviewer: the first decision stands
   if (t.Status !== 'Awaiting Human') return { already: true, decision: t.Decision };
   var who = Session.getActiveUser().getEmail();
-  updateRow_('ReviewQueue', t._row, {
-    Status: 'Decided', Decision: decision, Notes: notes || '',
-    Reviewer: who, DecidedAt: new Date()
-  });
+  // Application first: a waiting tab acts the moment the review says Decided, and its claim needs Approved
   if (t.Type === 'Submission') {
     // The extension submits every approved application: the tab that filled it, or a fresh one
     var app = findRow_('Applications', 'ApplicationID', t.RefID);
     if (app) updateRow_('Applications', app._row, { Status: decision !== 'approve' ? 'Rejected' : 'Approved - Extension' });
   }
+  updateRow_('ReviewQueue', t._row, {
+    Status: 'Decided', Decision: decision, Notes: notes || '',
+    Reviewer: who, DecidedAt: new Date()
+  });
   var revising = false;
   var docTab = REVISABLE_DOCS_[t.Type];
   if (docTab) {

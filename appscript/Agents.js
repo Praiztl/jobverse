@@ -25,7 +25,7 @@ function runResumeAnalyst_(candidateId) {
     '(array of {employer, title, start, end, achievements[]}), education (array of ' +
     '{institution, qualification, year}), skills (array), certifications (array), ' +
     'strengths (array), weaknesses (array), timeline_gaps (array of {from, to, note}).',
-    4000
+    8000
   );
 
   updateRow_('Candidates', cand._row, {
@@ -146,7 +146,7 @@ function runResumeBuilder_(candidateId, jobId, toneName, revision, deferReview) 
     '"location": string, "relevant_study": string}], "cpd": [string], ' +
     '"certifications": [{"name": string, "date": string}], ' +
     '"languages": [{"language": string, "level": string}]}',
-    5000
+    8000
   );
   cv = cvCleanResult_(cv);
   var written = Date.now();

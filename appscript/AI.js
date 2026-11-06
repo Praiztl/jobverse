@@ -4,13 +4,23 @@
  * Key lives in Script Properties as ANTHROPIC_API_KEY, never in the sheet.
  */
 
+/** The text of Claude's reply, given room for one longer try if it ran out of tokens. */
 function callClaude_(systemPrompt, userPrompt, maxTokens) {
+  var limit = maxTokens || 4000;
+  var reply = claudeRequest_(systemPrompt, userPrompt, limit);
+  if (reply.stop === 'max_tokens') reply = claudeRequest_(systemPrompt, userPrompt, Math.min(limit * 2, 16000));
+  if (reply.stop === 'refusal') throw new Error('The AI declined this request.');
+  if (reply.stop === 'max_tokens') throw new Error('The AI reply was too long to finish (limit ' + Math.min(limit * 2, 16000) + ' tokens).');
+  return reply.text;
+}
+
+function claudeRequest_(systemPrompt, userPrompt, maxTokens) {
   var apiKey = PropertiesService.getScriptProperties().getProperty('ANTHROPIC_API_KEY');
   if (!apiKey) throw new Error('Set ANTHROPIC_API_KEY in Script properties.');
 
   var payload = {
     model: getConfig_('ANTHROPIC_MODEL') || 'claude-sonnet-4-6',
-    max_tokens: maxTokens || 4000,
+    max_tokens: maxTokens,
     system: systemPrompt,
     messages: [{ role: 'user', content: userPrompt }]
   };
@@ -38,8 +48,10 @@ function callClaude_(systemPrompt, userPrompt, maxTokens) {
   if (code !== 200) throw new Error('Anthropic API ' + code + ': ' + res.getContentText().slice(0, 500));
 
   var data = JSON.parse(res.getContentText());
-  return data.content.filter(function (b) { return b.type === 'text'; })
-    .map(function (b) { return b.text; }).join('\n');
+  return {
+    stop: data.stop_reason,
+    text: data.content.filter(function (b) { return b.type === 'text'; }).map(function (b) { return b.text; }).join('\n')
+  };
 }
 
 /** Ask for JSON and parse it defensively (strips code fences, finds outer braces). */
