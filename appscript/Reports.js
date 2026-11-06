@@ -53,6 +53,38 @@ function reportJobs_(apps) {
   return Object.keys(jobs).map(function (k) { return jobs[k]; });
 }
 
+/** A reason a filled application was left for a person, as one of a few causes. */
+function personCause_(item) {
+  var label = String(item.label || ''), why = String(item.reason || '');
+  if (/^Screenshot check/.test(label)) return 'Screenshot check raised something';
+  if (/AI was unavailable/i.test(why)) return 'AI service failed';
+  if (/AI could not|AI requested|AI gave/i.test(why)) return 'AI could not answer a required question';
+  if (/box not ticked/i.test(why)) return 'Required box not ticked';
+  if (/required|unanswered|no option/i.test(why)) return 'Required question left blank';
+  if (/upload|attach|document/i.test(why)) return 'CV or letter upload';
+  if (/phone|country code/i.test(why)) return 'Phone number';
+  if (/did not move/i.test(why)) return 'Form would not move to the next step';
+  if (/password/i.test(why)) return 'Site password';
+  if (/invalid/i.test(why)) return 'Form showed an error';
+  return 'Other';
+}
+
+/** Why a job stopped before reaching a filled form. */
+function stoppedCause_(note) {
+  var n = String(note || '');
+  if (/captcha|security check/i.test(n)) return 'CAPTCHA or security check';
+  if (/account|sign.?(in|up)|log.?in|password|verif/i.test(n)) return 'Account or sign-in';
+  if (/vpn|country|region/i.test(n)) return 'Blocked by location';
+  if (/form/i.test(n)) return 'Could not find the application form';
+  return 'Other';
+}
+
+/** { cause: count } as a list, biggest first. */
+function causeList_(counts) {
+  return Object.keys(counts).map(function (k) { return { cause: k, count: counts[k] }; })
+    .sort(function (a, b) { return b.count - a.count; });
+}
+
 function reportMetrics_(fromMs, toMs) {
   var now = Date.now();
   var inPeriod = function (ms) { return ms >= fromMs && ms < toMs; };
@@ -141,7 +173,7 @@ function reportMetrics_(fromMs, toMs) {
   // (the review row was written at the moment of the decision) says nothing about review time.
   var status = {};
   apps.forEach(function (a) { status[a.ApplicationID] = a.Status; });
-  var subs = readRows_('ReviewQueue', ['Type', 'Status', 'RefID', 'CreatedAt', 'DecidedAt']).filter(function (t) { return t.Type === 'Submission'; });
+  var subs = readRows_('ReviewQueue', ['Type', 'Status', 'RefID', 'CreatedAt', 'DecidedAt', 'PersonReasons']).filter(function (t) { return t.Type === 'Submission'; });
   var waits = subs.filter(function (t) { return inPeriod(toEpochMs_(t.DecidedAt)); })
     .map(function (t) { return (toEpochMs_(t.DecidedAt) - toEpochMs_(t.CreatedAt)) / 60000; })
     .filter(function (m) { return m > 0; });
@@ -154,13 +186,36 @@ function reportMetrics_(fromMs, toMs) {
     oldest_waiting_minutes: waiting.length ? Math.round((now - oldest) / 60000) : 0
   };
 
-  var jobsFound = readRows_('Prospects', ['FoundAt', 'Source']).filter(function (p) {
+  var prospects = readRows_('Prospects', ['FoundAt', 'Source', 'Status', 'Notes', 'ClaimedAt']);
+  var jobsFound = prospects.filter(function (p) {
     return inPeriod(toEpochMs_(p.FoundAt)) && p.Source !== 'Retry';
   }).length;
 
+  // Why a person was needed. Filled forms record their reasons at review; older reviews have none and aren't counted.
+  var needed = { filled: 0, with_items: 0, clean_pct: 0, stopped: 0, causes: [], stopped_causes: [] };
+  var causes = {}, stoppedCauses = {};
+  subs.forEach(function (t) {
+    if (!t.PersonReasons || !inPeriod(toEpochMs_(t.CreatedAt))) return;
+    var items;
+    try { items = JSON.parse(t.PersonReasons); } catch (e) { return; }
+    needed.filled++;
+    if (items.length) needed.with_items++;
+    items.forEach(function (i) { var c = personCause_(i); causes[c] = (causes[c] || 0) + 1; });
+  });
+  needed.clean_pct = pct_(needed.filled - needed.with_items, needed.filled);
+  prospects.forEach(function (p) {
+    if (p.Status !== 'Needs Human - Extension' || /need a person before approval/.test(String(p.Notes || ''))) return;
+    if (!inPeriod(toEpochMs_(p.ClaimedAt) || toEpochMs_(p.FoundAt))) return;
+    needed.stopped++;
+    var c = stoppedCause_(p.Notes);
+    stoppedCauses[c] = (stoppedCauses[c] || 0) + 1;
+  });
+  needed.causes = causeList_(causes);
+  needed.stopped_causes = causeList_(stoppedCauses);
+
   return {
     from: day(fromMs), to: day(toMs - 1), generated: now,
-    activity: activity, sent: sent, started: started, reviews: reviews, jobs_found: jobsFound,
+    activity: activity, sent: sent, started: started, reviews: reviews, people: needed, jobs_found: jobsFound,
     candidates: Object.keys(people).map(function (k) { return people[k]; })
       .sort(function (a, b) { return b.submitted - a.submitted || String(a.name).localeCompare(String(b.name)); })
   };
@@ -185,6 +240,7 @@ function buildReport_(period, days) {
       'Jobs found: ' + m.jobs_found,
       'Applications reviewed: ' + r.decided + ', typical wait ' + r.median_minutes + ' min',
       'Waiting for review now: ' + r.waiting_now + (r.waiting_now ? ' (oldest ' + r.oldest_waiting_minutes + ' min)' : ''),
+      'Filled with nothing left for a person: ' + m.people.clean_pct + '% of ' + m.people.filled + '. Stopped before the form: ' + m.people.stopped,
       '',
       'Of the ' + s.jobs + ' sent in this period: ' + s.interviews + ' interview (' + s.interview_rate_pct + '%), ' +
         s.offers + ' offer (' + s.offer_rate_pct + '%), ' + s.rejected + ' rejected, ' + s.no_result_yet + ' no result yet' +

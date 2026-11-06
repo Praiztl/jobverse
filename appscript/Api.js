@@ -128,7 +128,8 @@ function apiGetCandidatePayload_(req) {
       applicationEmail: c.ApplicationEmail, applicationPassword: c.ApplicationPassword
     },
     profile: profile,
-    cvFileId: c.CVFileID
+    cvFileId: c.CVFileID,
+    autoConsent: String(getConfig_('AUTO_TICK_CONSENT') || '').toLowerCase() !== 'off'
   };
 }
  
@@ -331,7 +332,11 @@ function apiAnswerField_(req) {
 
   var decision = callClaudeJSON_(
     prompt + ' Return JSON with this exact structure: {"action": "fill|select|check|uncheck|skip|human", "value": "string", "reason": "string", "confidence": 0.0-1.0}. ' +
-    'Action types: "fill" for text fields, "select" for dropdowns (use option value), "check"/"uncheck" for checkboxes, "skip" to ignore, "human" if you need help.',
+    'Action types: "fill" for text fields, "select" for dropdowns (use option value), "check"/"uncheck" for checkboxes, "skip" to ignore, "human" as a last resort. ' +
+    'Answer from the candidate data and profile whenever they support an answer, including open questions, which get a short honest reply built from the profile. ' +
+    'Questions about the application itself have safe answers: "how did you hear about us" is a job board or "Other", and expected salary comes from minSalary. ' +
+    'Never invent a fact. If the field is optional and the data has no answer, use "skip". ' +
+    'Use "human" only for a required field whose answer is not in the data and could misrepresent the candidate if guessed, such as an ID number, a legal declaration or a date of birth.',
     'SEMANTIC FIELD INFO:\n' + JSON.stringify({
       id: fieldInfo.id,
       label: fieldInfo.label,
@@ -516,13 +521,14 @@ function apiChooseNextStep_(req) {
 
 function apiRequestReview_(req) {
   var taskId = newId_('REV');
-  ensureColumns_('ReviewQueue', ['Answers']);
+  ensureColumns_('ReviewQueue', ['Answers', 'PersonReasons']);
   appendObject_('ReviewQueue', {
     TaskID: taskId, CreatedAt: new Date(), Type: 'Submission',
     CandidateID: req.candidateId, JobID: req.jobId || '', RefID: req.applicationId,
     Summary: req.company + ' - ' + req.jobTitle,
     AIFindings: JSON.stringify(req.snapshot || {}).slice(0, 40000),
     Answers: answersForCell_(req.answers),
+    PersonReasons: JSON.stringify((req.personReasons || []).slice(0, 30)),
     Status: 'Awaiting Human'
   });
   var app = findRow_('Applications', 'ApplicationID', req.applicationId);
@@ -1122,7 +1128,7 @@ function apiListApplicationsByStatus_(req) {
   // The worker is retired: anything still approved for it is the extension's to submit now
   var wanted = req.status === 'Approved - Extension' ? ['Approved - Extension', 'Approved - Submitting'] : [req.status];
   // Every open Chrome asks this every two minutes, and usually nothing matches: stop after one read
-  var rows = readRows_('Applications', ['ApplicationID', 'CandidateID', 'JobID', 'Company', 'JobTitle', 'JobURL', 'ATS', 'Status', 'SubmitClaimedBy', 'CreatedAt']);
+  var rows = readRows_('Applications', ['ApplicationID', 'CandidateID', 'JobID', 'Company', 'JobTitle', 'JobURL', 'ATS', 'Status', 'SubmitClaimedBy', 'CreatedAt', 'NeedsPerson']);
   if (req.status === 'Approved - Extension') failAbandonedApplications_(rows);
   var apps = rows
     .filter(function (a) { return wanted.indexOf(a.Status) > -1 && (!req.candidateId || a.CandidateID === req.candidateId); });
@@ -1138,7 +1144,7 @@ function apiListApplicationsByStatus_(req) {
       id: a.ApplicationID, candidateId: a.CandidateID, jobId: a.JobID, company: a.Company,
       title: a.JobTitle, url: a.JobURL, ats: a.ATS, status: a.Status, submitClaimedBy: a.SubmitClaimedBy || '',
       cvUrl: docs.cv[a.JobID] || '', letterUrl: docs.letter[a.JobID] || '', taskId: taskByApp[a.ApplicationID] || '',
-      approvedMs: approvedAt[a.ApplicationID] || 0
+      approvedMs: approvedAt[a.ApplicationID] || 0, needsPerson: Number(a.NeedsPerson) || 0
     };
   });
 }
@@ -1197,9 +1203,12 @@ function buildDashData_() {
     'CreatedAt', 'DecidedAt', 'Decision', 'Notes', 'Reviewer', 'RevisedAs']);
   // When each application's submission was approved, so the dashboard can tell "submitting" from "stuck",
   // and why it was sent back when it was
-  var approvedAt = {}, reviewOf = {}, sentBack = {};
+  var approvedAt = {}, reviewOf = {}, sentBack = {}, docNotes = {};
   reviewRows.forEach(function (t) {
-    if (t.Type !== 'Submission') return;
+    if (t.Type !== 'Submission') {
+      if (t.Decision === 'revise' && t.Notes) docNotes[t.JobID] = String(t.Notes);
+      return;
+    }
     reviewOf[t.RefID] = t.TaskID; // rows are appended in order, so the newest wins
     if (t.DecidedAt) approvedAt[t.RefID] = toEpochMs_(t.DecidedAt);
     if (t.Decision === 'revise') sentBack[t.RefID] = { notes: String(t.Notes || ''), by: String(t.Reviewer || ''), at: toEpochMs_(t.DecidedAt) };
@@ -1226,7 +1235,7 @@ function buildDashData_() {
                // What a reviewer approves: the documents attached to this application
                cvUrl: docs.cv[a.JobID] || '', letterUrl: docs.letter[a.JobID] || '',
                reviewId: reviewOf[a.ApplicationID] || '', needsPerson: Number(a.NeedsPerson) || 0,
-               sentBack: a.Status === 'Rejected' ? sentBack[a.ApplicationID] || {} : null,
+               sentBack: a.Status === 'Rejected' ? sentBackReason_(sentBack[a.ApplicationID], docNotes[a.JobID]) : null,
                lastError: errors[errors.length - 1].slice(0, 300) };
     }),
     // Last time a Chrome extension checked for approvals to submit / for queued jobs to run (0 = never)
@@ -1255,6 +1264,12 @@ function buildDashData_() {
                status: a.Status, notes: a.Notes, updated: String(a.UpdatedAt || a.CreatedAt) };
     }),
   };
+}
+
+/** Why it was sent back. The notes may have gone on the CV or letter instead, when asking for a new version. */
+function sentBackReason_(decision, docNote) {
+  var s = decision || {};
+  return s.notes || !docNote ? s : { notes: docNote, by: s.by, at: s.at };
 }
 
 /**

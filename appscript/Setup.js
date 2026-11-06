@@ -97,6 +97,7 @@ var JV = {
     ['NHS_TRAC_FOLLOWUP_DEFAULT_DAYS', '14', 'If the vacancy closing date cannot be found on the NHS Jobs page, the Trac follow-up is scheduled this many days out instead.'],
     ['FOLLOWUP_DAYS_AFTER_SUBMIT', '7', 'Every submitted application appears on Follow-ups straight away; the reminder to chase the employer falls due this many days after submission.'],
     ['LOG_AI_STEPS', 'off', 'on = also write every per-field, click and navigation AI answer to the AIOutputs tab (for debugging). off = skip them: faster form filling and a much smaller spreadsheet.'],
+    ['AUTO_TICK_CONSENT', 'on', 'on = the extension ticks required privacy and terms boxes on application forms. Marketing boxes and boxes stating a fact about the candidate are never ticked. off = they go to a person.'],
     ['ACCOUNT_EMAIL_LOOKUP', 'on', 'on = when a job site needs an account, the extension reads its verification code/link or password-reset email from this account\'s Gmail (read-only). Each candidate\'s application inbox must forward to this Gmail. off = a person verifies by hand.']
   ],
 

@@ -351,8 +351,8 @@ const AGENT_QUIET_MS = 10 * MIN;       // the extension checks in every 2-3 min 
 const APP_STATUS = {
   'In Progress':           { label: 'Filling the form', cls: 'c-prog', group: 'flight' },
   'Awaiting Review':       { label: 'Ready for your approval', cls: 'c-wait', group: 'review' },
-  'Approved - Submitting': { label: 'Approved - submitting', cls: 'c-prog', group: 'flight' }, // from the retired worker
-  'Approved - Extension':  { label: 'Approved - submitting', cls: 'c-prog', group: 'flight' },
+  'Approved - Submitting': { label: 'Approved - sending', cls: 'c-prog', group: 'sending' }, // from the retired worker
+  'Approved - Extension':  { label: 'Approved - sending', cls: 'c-prog', group: 'sending' },
   'Submitted':             { label: 'Submitted', cls: 'c-sub', group: 'done' },
   'Rejected':              { label: 'Sent back - not submitted', cls: 'c-wait', group: 'sentback' },
   'Dropped':               { label: 'Sent back - dropped', cls: 'c-mut', group: 'closed' },
@@ -512,7 +512,7 @@ function readyApps(){ return D.applications.filter(a => appInfo(a).group === 're
  * cover letter and final application approved together under Applications.
  */
 function docGroups(){
-  const live = D.applications.filter(a => ['flight', 'review', 'sentback'].includes(appInfo(a).group));
+  const live = D.applications.filter(a => ['flight', 'sending', 'review', 'sentback'].includes(appInfo(a).group));
   const liveJobs = new Set(live.map(a => a.jobId).filter(Boolean));
   const liveKeys = new Set(live.map(a => a.cand + '|' + (a.company + ' - ' + a.title).toLowerCase().trim()));
   return reviewGroups().filter(g => !liveKeys.has(g.key) && !g.items.some(t => t.jobId && liveJobs.has(t.jobId)));
@@ -697,13 +697,14 @@ PAGES.applications = () => {
     (stuck.length ? `<div class="note bad"><b>${stuck.length} approved application${stuck.length > 1 ? 's have' : ' has'} not been submitted.</b> ${esc(stuckReason(stuck[0]))}
       If you submitted one by hand or can see it on the employer's site, use <b>Mark submitted</b>; otherwise <b>Retry</b> runs it again from the start.</div>` : '') +
     (tab === 'review' && count('review') ? `<div class="note"><b>These forms are filled in and waiting in a Chrome tab.</b> View the CV and cover letter (and <b>What was filled in</b>),
-      then press <b>Approve &amp; submit</b> - the extension clicks the employer's Submit button within a few seconds. Something to change? <b>Update CV</b> or <b>Update cover letter</b> writes a new version, and that's the one that gets sent. Keep Chrome open with the extension.</div>` : '') +
+      then press <b>Approve &amp; submit</b> - it moves to <b>Sending</b>, and to <b>Submitted</b> once the employer confirms, usually within a few minutes. Something to change? <b>Update CV</b> or <b>Update cover letter</b> writes a new version, and that's the one that gets sent. Keep Chrome open with the extension.</div>` : '') +
+    (tab === 'sending' && count('sending') ? `<div class="note"><b>Approved, not sent yet.</b> The extension is pressing Submit, or filling the form again first if its tab was closed. Each one moves to <b>Submitted</b> once the employer confirms, usually within a few minutes. Chrome needs to be open with the extension running.</div>` : '') +
     (tab === 'sentback' && count('sentback') ? `<div class="note"><b>These were not submitted.</b> Press <b>Update CV</b> or <b>Update cover letter</b> to fix what was wrong - the Reviewer Agent checks the new version - then <b>Run again</b>: the extension fills the form again with the new documents and it comes back to <b>Ready to approve</b>. <b>Drop</b> clears one nobody will run again.</div>` : '') +
     tabsHtml('appTab', [
       { v: 'review', label: 'Ready to approve', n: count('review') },
       { v: 'sentback', label: 'Sent back', n: count('sentback') },
       { v: 'all', label: 'All', n: all.length }, { v: 'attention', label: 'Needs attention', n: count('attention') },
-      { v: 'flight', label: 'In progress', n: count('flight') }, { v: 'done', label: 'Submitted', n: count('done') },
+      { v: 'flight', label: 'In progress', n: count('flight') }, { v: 'sending', label: 'Sending', n: count('sending') }, { v: 'done', label: 'Submitted', n: count('done') },
       { v: 'closed', label: 'Closed', n: count('closed') }], tab) +
     `<div class="toolbar">
       <div><label>Candidate</label><select onchange="setFilter('appCand',this.value)">${candOpts(F.appCand, 'All candidates')}</select></div>
@@ -968,6 +969,16 @@ PAGES.report = () => {
       ${stat(v.waiting_now, 'Waiting now')}
       ${stat(v.waiting_now ? waitText(v.oldest_waiting_minutes) : '-', 'Longest wait right now')}
     </div>
+    <h2>Why a person was needed</h2>
+    <div class="grid">
+      ${stat(r.people.filled ? r.people.clean_pct + '%' : '-', 'Filled with nothing left for a person', r.people.filled + ' forms filled')}
+      ${stat(r.people.with_items, 'Filled, with items for a person')}
+      ${stat(r.people.stopped, 'Stopped before a filled form')}
+    </div>
+    ${r.people.causes.length || r.people.stopped_causes.length ? `<div class="card flush"><div class="tablewrap"><table><tr><th>Cause</th><th>Times</th></tr>
+      ${r.people.causes.map(c => `<tr><td>${esc(c.cause)}</td><td>${esc(c.count)}</td></tr>`).join('')}
+      ${r.people.stopped_causes.map(c => `<tr><td>${esc(c.cause)} <span class="mut">(stopped the job)</span></td><td>${esc(c.count)}</td></tr>`).join('')}
+    </table></div></div>` : ''}
     <h2>By candidate</h2>
     <div class="card flush"><div class="tablewrap"><table><tr><th>Candidate</th><th>Submitted</th><th>Interviews</th><th>Offers</th></tr>` +
     (r.candidates.length ? r.candidates.map(c => `<tr><td>${esc(c.name)}</td><td>${esc(c.submitted)}</td><td>${esc(c.interviews)}</td><td>${esc(c.offers)}</td></tr>`).join('')
@@ -1127,12 +1138,15 @@ async function decide(id, d){
   let notes = '';
   if(d === 'revise'){
     const isSub = t.type === 'Submission';
-    notes = await dialog(isSub
+    const ask = isSub ? askReason : dialog;
+    notes = await ask(isSub
       ? { title: "Don't submit this application?", body: `<b>${esc(t.summary)}</b> will not be sent. It moves to Applications &rsaquo; Sent back, where you can update its documents and run it again.`,
-          input: 'Reason (optional)', ok: "Don't submit", danger: true }
+          input: "What's wrong?", ok: "Don't submit", danger: true }
       : { title: 'Send back the ' + (DOC_LABEL[t.type] || t.type).toLowerCase() + '?', body: 'A new version is written from your notes plus the Reviewer Agent\'s findings, and comes back here in a minute or two.',
           input: 'What should change? (optional)', placeholder: 'e.g. Lead with the NHS experience; drop the claim about team leadership', ok: 'Send back' });
     if(notes === null) return;
+    const app = isSub && D.applications.find(a => a.id === t.refId);
+    if(app){ app.status = 'Rejected'; app.sentBack = { notes, by: '', at: Date.now() }; }
   } else if(t.type === 'Submission'){
     const ok = await dialog({ title: 'Approve and submit?', body: `<b>${esc(t.summary)}</b> for ${esc(candName(t.cand))} will be submitted to the employer shortly by the Chrome extension.`, ok: 'Approve & submit' });
     if(!ok) return;
@@ -1175,9 +1189,9 @@ async function rejectApp(appId){
   if(!a) return;
   const ticks = docList({ cvUrl: a.cvUrl, letterUrl: a.letterUrl }).map(([k, label]) =>
     `<label class="tog" style="margin-top:8px"><input type="checkbox" id="dlgFix_${k}"> Write a new ${label === 'CV' ? 'CV' : label.toLowerCase()} from my notes</label>`).join('');
-  const r = await dialog({ title: "Don't submit this application?", danger: true, ok: "Don't submit",
+  const r = await askReason({ title: "Don't submit this application?", danger: true, ok: "Don't submit",
     body: `<b>${esc(a.company)}</b> - ${esc(a.title)} will not be sent. It moves to <b>Sent back</b>, where you can see it, update its documents and run it again.` + ticks,
-    input: "What's wrong? (optional)", placeholder: 'e.g. The CV leaves out the NHS placement',
+    input: "What's wrong?", placeholder: 'e.g. The CV leaves out the NHS placement',
     read: () => ({ notes: document.getElementById('dlgInput').value.trim(),
       fix: Object.keys(DOC_KINDS).filter(k => { const c = document.getElementById('dlgFix_' + k); return c && c.checked; }) }) });
   if(r === null) return;
@@ -1228,11 +1242,23 @@ async function dropApp(id){
   if(ok) rpc('dashDropApplication', id).then(() => { toast('Dropped'); load(); }).catch(fail);
 }
 
+/** A dialog that needs a reason, so whoever picks the job up later knows why it was stopped. */
+async function askReason(options){
+  for(;;){
+    const r = await dialog(options);
+    if(r === null) return null;
+    if(typeof r === 'string' ? r : r.notes) return r;
+    toast('Say what is wrong before sending it back', true);
+  }
+}
+
 /** Resolves to true once the server has recorded the decision. */
 function decideApp(a, d, notes){
   const before = a.status, reviews = D.reviews;
   a.status = d === 'approve' ? 'Approved - Extension' : 'Rejected';
   a.approvedMs = Date.now();
+  // Shown straight away: a refresh isn't drawn while a CV preview is open
+  if(d !== 'approve') a.sentBack = { notes, by: '', at: Date.now() };
   if(d === 'approve') D.reviews = D.reviews.filter(t => !(t.refId === a.id || (a.jobId && t.jobId === a.jobId)));
   else D.reviews = D.reviews.filter(t => t.refId !== a.id);
   render();
@@ -1426,7 +1452,7 @@ const HELP_HTML = `
 <tr><td>Submitted after you approve</td><td>Under 1 minute if its tab is open, otherwise 2 - 8 minutes</td><td>Without an open tab, the extension reopens the job and fills it again first. Not picked up within 20 minutes: it moves to <b>Needs attention</b>.</td></tr>
 <tr><td>Abandoned applications marked Failed</td><td>40 minutes</td><td>An application whose tab was closed, or whose computer stopped, moves to Needs attention with a Retry button.</td></tr>
 <tr><td>Stuck jobs put back in line</td><td>45 minutes</td><td>A job claimed by a computer that went offline returns to the queue.</td></tr>
-<tr><td>Wait before another computer submits an approval</td><td>3 to 5 minutes</td><td>The tab that filled the form goes first. If it has been closed, another Chrome fills it again with the approved answers.</td></tr>
+<tr><td>Approved to submitted</td><td>A few seconds to about 5 minutes</td><td>Seconds if the filled tab is open. If it was closed, a Chrome fills it again with the approved answers. With items left for a person, other Chromes first wait 3 minutes for that tab.</td></tr>
 <tr><td>Shows on Follow-ups</td><td>As soon as it is submitted</td><td>It falls due 7 days later. Reminders are emailed at about 7:30am; the daily report at about 7am.</td></tr>
 <tr><td>Update CV / cover letter</td><td>About 1 minute</td><td>Includes the Reviewer Agent's check of the new version.</td></tr>
 </table>
@@ -1461,6 +1487,7 @@ const HELP_HTML = `
 <p class="mut">Follow-ups are reminders for <b>your team</b>, not for the client. Every application appears here as soon as it is submitted, and falls due 7 days later (Config: FOLLOWUP_DAYS_AFTER_SUBMIT). When it's due, check the candidate's application inbox for a reply, then record <b>Interview</b>, <b>Offer</b>, <b>Rejected</b> or <b>No reply</b>. These are saved on the application and counted in Reports. An interview keeps the follow-up open and brings it back in 7 days, so the offer or rejection can be added; the others close it. If it's too early to tell, <b>Check again in 7 days</b> moves it back. Due follow-ups are also emailed each morning to REPORT_EMAILS.</p>
 <p class="mut">NHS Trac follow-ups remind you to claim and verify the application on Trac after the vacancy closes - mark them <b>Done</b> when that's finished.</p>
 <h2>Reports</h2>
+<p class="mut"><b>Why a person was needed</b> counts forms filled since this was added, so older ones aren't included.</p>
 <p class="mut">Pick any period. <b>What happened</b> counts each thing on the day it happened. <b>How far they've got</b> follows the applications sent in that period, so its rates can't pass 100% and they rise as replies are recorded. A job that was retried counts once. Results are dated the day someone records them, not the day of the interview itself.</p>
 </div>
 
