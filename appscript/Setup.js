@@ -43,7 +43,8 @@ var JV = {
       'ApplicationID', 'CreatedAt', 'CandidateID', 'JobID', 'Company', 'JobTitle',
       'JobURL', 'ATS', 'Status', 'DedupeHash', 'CVVersionID', 'LetterID',
       'SubmittedAt', 'ConfirmationScreenshotURL', 'RecruiterEmail', 'Outcome',
-      'InterviewDate', 'ErrorLog', 'FilledBy', 'NeedsPerson', 'SubmitClaimedBy', 'SubmitClaimedAt'
+      'InterviewDate', 'ErrorLog', 'FilledBy', 'NeedsPerson', 'SubmitClaimedBy', 'SubmitClaimedAt',
+      'OfferDate', 'RejectedDate'
     ],
     Prospects: [
       'ProspectID', 'FoundAt', 'CandidateID', 'Company', 'JobTitle', 'JobURL',

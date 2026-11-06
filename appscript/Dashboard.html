@@ -773,7 +773,7 @@ PAGES.followups = () => {
   const pg = paginate(rows, 'fuPage', 25);
   return header('Follow-ups', 'Reminders for your team, not for the client.') +
     `<div class="note"><b>What these are:</b> every application appears here as soon as it is submitted, and ${esc(String(D.followUpDays || 7))} days later it falls due as a reminder to chase the employer.
-      When a reply comes - any time, due or not - look in the candidate's application inbox, then record what happened - <b>Interview</b>, <b>Offer</b> or <b>Rejected</b> is also saved on the application and counted in Reports.
+      When a reply comes - any time, due or not - look in the candidate's application inbox, then record what happened - <b>Interview</b>, <b>Offer</b> or <b>Rejected</b> is also saved on the application and counted in Reports. An interview keeps the follow-up open so you can add the offer or rejection later.
       No reply yet? <b>Check again in 7 days</b> moves it back so it stops nagging. NHS Trac reminders are for claiming and verifying the application on Trac after the vacancy closes.</div>` +
     tabsHtml('fuTab', [{ v: 'open', label: 'All open', n: lists.open.length }, { v: 'due', label: 'Due now', n: lists.due.length }, { v: 'upcoming', label: 'Not due yet', n: lists.upcoming.length }, { v: 'closed', label: 'Closed', n: lists.closed.length }], tab) +
     `<div class="toolbar"><div><label>Candidate</label><select onchange="setFilter('fuCand',this.value)">${candOpts(F.fuCand, 'All candidates')}</select></div></div>
@@ -784,18 +784,20 @@ PAGES.followups = () => {
         : d === 0 ? '<span class="chip c-prog">Today</span>' : `in ${d} day${d > 1 ? 's' : ''}`;
       const lastNote = String(f.notes || '').trim().split('\n').pop();
       const isTrac = /Trac/i.test(f.type);
+      const interviewed = f.outcome === 'Interview'; // a step, so the next result can still be added
+      const replyPicker = `<select style="width:auto;padding:4px 6px;font-size:12.5px" aria-label="Record what happened" onchange="if(this.value){resolveFollowUp('${f.id}',this.value);this.value=''}">
+              <option value="">${interviewed ? 'Record next result…' : 'Record reply…'}</option><option>${interviewed ? 'Offer' : 'Interview'}</option><option>${interviewed ? 'Rejected' : 'Offer'}</option><option>${interviewed ? 'Interview' : 'Rejected'}</option><option value="No reply">No reply - stop chasing</option>${interviewed ? '' : '<option value="Not needed">Not needed</option>'}
+            </select>`;
       return `<tr>
         <td class="nowrap">${when}<div class="mut">${esc(f.due)}</div></td>
         <td><b>${esc(f.company)}</b><br><span class="mut">${esc(f.title)}</span></td>
         <td class="mut">${esc(candName(f.cand))}</td>
-        <td><span class="small"><b>${esc(isTrac ? 'Claim / verify on NHS Trac' : 'Check for a reply')}</b></span><div class="mut" style="max-width:340px">${esc(lastNote)}</div></td>
+        <td><span class="small"><b>${esc(isTrac ? 'Claim / verify on NHS Trac' : interviewed ? 'Interview recorded - check how it went' : 'Check for a reply')}</b></span><div class="mut" style="max-width:340px">${esc(lastNote)}</div></td>
         <td>${f.status === 'Pending' ? `<div class="acts" style="justify-content:flex-end">
             ${isTrac ? `<button class="btn approve tiny" onclick="resolveFollowUp('${f.id}','Done')">Done</button>` : `
-            <select style="width:auto;padding:4px 6px;font-size:12.5px" aria-label="Record what happened" onchange="if(this.value){resolveFollowUp('${f.id}',this.value);this.value=''}">
-              <option value="">Record reply…</option><option>Interview</option><option>Offer</option><option>Rejected</option><option value="No reply">No reply - stop chasing</option><option value="Not needed">Not needed</option>
-            </select>
+            ${interviewed ? chip('Interview') : ''}${replyPicker}
             <button class="btn ghost tiny" onclick="snoozeFollowUp('${f.id}')">Check again in 7 days</button>`}
-          </div>` : chip(f.outcome || f.status)}</td>
+          </div>` : interviewed ? `<div class="acts" style="justify-content:flex-end">${chip('Interview')}${replyPicker}</div>` : chip(f.outcome || f.status)}</td>
       </tr>`;
     }).join('') : `<tr><td colspan="5">${emptyState(tab === 'due' ? 'Nothing due' : 'Nothing here', tab === 'closed' ? '' : 'Every application appears under All open as soon as it is submitted.')}</td></tr>`) +
     '</table></div>' + (pg.total ? pagerHtml(pg, 'fuPage', null, null) : '') + '</div>';
@@ -841,7 +843,7 @@ PAGES.prospects = () => {
       <td><b>${esc(p.company)}</b>${p.url ? ` <a href="${esc(p.url)}" class="small">open</a>` : ''}<br><span class="mut">${esc(p.title)}</span></td>
       <td class="mut">${esc(p.source || '')}</td><td>${prospectChip(p.status)}</td>
       <td><div class="acts" style="justify-content:flex-end">${p.status === 'Queued' ? '<span class="mut">in line</span>' : prospectRunning(p) ? '<span class="mut">running</span>' :
-`<button class="btn ghost tiny" onclick="prospectAction('${p.id}','Queued')">Apply</button>
+        `<button class="btn ghost tiny" onclick="prospectAction('${p.id}','Queued')">Apply</button>
          ${/^Skipped/.test(p.status) ? '' : `<button class="btn ghost tiny" onclick="prospectAction('${p.id}','Skipped')">Skip</button>`}`}</div></td>
       </tr>`).join('') :
     `<tr><td colspan="6">${emptyState('No jobs here yet', one ? 'Press "Find new jobs" above.' : '')}</td></tr>`) +
@@ -900,22 +902,77 @@ PAGES.accounts = () => {
     '</table></div></div>';
 };
 
+/* Worked out on the server for the period picked here, then kept until the period changes or it's 5 minutes old. */
+const REPORT = { key: '', data: null, error: '', at: 0 };
+
+function isoDaysAgo(n){ const d = new Date(todayIso() + 'T12:00:00'); d.setDate(d.getDate() - n); const p = x => String(x).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; }
+function reportRange(){
+  const span = F.repSpan || '30';
+  if(span === 'custom') return { from: F.repFrom || isoDaysAgo(29), to: F.repTo || todayIso() };
+  return { from: isoDaysAgo(Number(span) - 1), to: todayIso() };
+}
+function fetchReport(range, key){
+  REPORT.key = key; REPORT.error = ''; REPORT.at = Date.now();
+  rpc('dashReport', range.from, range.to)
+    .then(r => { if(REPORT.key === key){ REPORT.data = r; if(view === 'report') render(); } })
+    .catch(e => { if(REPORT.key === key){ REPORT.data = null; REPORT.error = e && e.message || String(e); if(view === 'report') render(); } });
+}
+function refreshReport(){ REPORT.key = ''; REPORT.data = null; render(); }
+function waitText(mins){ return mins < 90 ? Math.round(mins) + ' min' : mins < 2880 ? Math.round(mins / 60) + ' h' : Math.round(mins / 1440) + ' days'; }
+
 PAGES.report = () => {
-  const r = D.report;
-  const stat = (v, l) => `<div class="stat"><b>${esc(v)}</b><span>${esc(l)}</span></div>`;
-  return header('Reports', r ? esc(r.period) + ' report · ' + esc(r.summary) : '') + (!r
-    ? `<div class="card">${emptyState('No report yet', 'Run runDailyReport() in Apps Script, or wait for the 07:00 trigger.')}</div>`
-    : `<div class="grid">
-       ${stat(r.metrics.applications_submitted, 'Submitted')}
-       ${stat(r.metrics.applications_started, 'Started')}
-       ${stat(r.metrics.success_rate_pct + '%', 'Started that were submitted')}
-       ${stat(r.metrics.interviews, 'Interviews')}
-       ${stat(r.metrics.interview_rate_pct + '%', 'Interview rate')}
-       ${stat(r.metrics.offers, 'Offers')}
-       ${stat(r.metrics.avg_review_minutes + ' min', 'Average time to review')}
-       ${stat(r.metrics.prospects_found, 'Jobs found')}
+  const range = reportRange(), key = range.from + '|' + range.to;
+  if(REPORT.key !== key){ REPORT.data = null; fetchReport(range, key); }
+  else if(Date.now() - REPORT.at > 5 * MIN) fetchReport(range, key); // keeps showing the last numbers meanwhile
+  const r = REPORT.data, span = F.repSpan || '30';
+  const stat = (v, l, sub) => `<div class="stat"><b>${esc(v)}</b><span>${esc(l)}</span>${sub ? `<span class="mut">${esc(sub)}</span>` : ''}</div>`;
+  const picker = `<div class="toolbar"><div><label>Period</label><select onchange="setFilter('repSpan',this.value)">
+      ${[['7', 'Last 7 days'], ['30', 'Last 30 days'], ['90', 'Last 90 days'], ['custom', 'Choose dates']].map(([v, l]) => `<option value="${v}" ${span === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+    ${span === 'custom' ? `<div><label>From</label><input type="date" value="${esc(range.from)}" max="${todayIso()}" onchange="setFilter('repFrom',this.value)"></div>
+      <div><label>To</label><input type="date" value="${esc(range.to)}" max="${todayIso()}" onchange="setFilter('repTo',this.value)"></div>` : ''}
+    <div style="flex:0"><button class="btn ghost" onclick="refreshReport()">Recalculate</button></div></div>`;
+  const top = header('Reports', r ? `${esc(r.from)} to ${esc(r.to)} · worked out ${esc(ago(r.generated))}` : 'What happened, and how far applications have got');
+  if(REPORT.error) return top + picker + `<div class="note bad"><b>Could not work out this report.</b> ${esc(REPORT.error)}</div>`;
+  if(!r) return top + picker + `<div class="card">${emptyState('Working it out…', 'This reads every application in the sheet.')}</div>`;
+  const a = r.activity, s = r.sent, t = r.started, v = r.reviews;
+  return top + picker +
+    `<h2>What happened in this period</h2>
+    <div class="grid">
+      ${stat(a.submitted, 'Applications submitted')}
+      ${stat(a.interviews, 'Interviews recorded')}
+      ${stat(a.offers, 'Offers recorded')}
+      ${stat(a.rejections, 'Rejections recorded')}
+      ${stat(r.jobs_found, 'Jobs found')}
      </div>
-     <p class="mut">Interviews and offers come from what you record on Follow-ups.</p>`);
+    ${a.undated_results ? `<div class="note warn">${a.undated_results} result${a.undated_results > 1 ? 's have' : ' has'} no date, so ${a.undated_results > 1 ? 'they are' : 'it is'} left out of the counts above. ${a.undated_results > 1 ? 'They still count' : 'It still counts'} below if the application was sent in this period.</div>` : ''}
+    <h2>How far the applications sent in this period have got</h2>
+    <div class="grid">
+      ${stat(s.jobs, 'Sent')}
+      ${stat(s.interviews, 'Got an interview', s.interview_rate_pct + '% of sent')}
+      ${stat(s.offers, 'Got an offer', s.offer_rate_pct + '% of sent')}
+      ${stat(s.rejected, 'Rejected')}
+      ${stat(s.no_result_yet, 'No result yet')}
+    </div>
+    ${s.too_early ? `<div class="note">${s.too_early} of the ${s.jobs} went out under ${s.too_early_days} days ago, so it's too early to expect a reply. The rates will rise as replies are recorded.</div>` : ''}
+    <h2>Jobs started in this period</h2>
+    <div class="grid">
+      ${stat(t.jobs, 'Started', 'A retried job counts once')}
+      ${stat(t.sent, 'Sent so far', t.sent_pct + '% of started')}
+      ${stat(t.in_progress, 'Still in progress')}
+      ${stat(t.not_sent, 'Not sent', 'Failed or sent back')}
+    </div>
+    <h2>Reviews</h2>
+    <div class="grid">
+      ${stat(v.decided, 'Applications decided')}
+      ${stat(v.decided ? waitText(v.median_minutes) : '-', 'Typical wait for a decision')}
+      ${stat(v.waiting_now, 'Waiting now')}
+      ${stat(v.waiting_now ? waitText(v.oldest_waiting_minutes) : '-', 'Longest wait right now')}
+    </div>
+    <h2>By candidate</h2>
+    <div class="card flush"><div class="tablewrap"><table><tr><th>Candidate</th><th>Submitted</th><th>Interviews</th><th>Offers</th></tr>` +
+    (r.candidates.length ? r.candidates.map(c => `<tr><td>${esc(c.name)}</td><td>${esc(c.submitted)}</td><td>${esc(c.interviews)}</td><td>${esc(c.offers)}</td></tr>`).join('')
+      : `<tr><td colspan="4">${emptyState('Nothing in this period', '')}</td></tr>`) + `</table></div></div>
+    <p class="mut">Interviews, offers and rejections come from what you record on Follow-ups, dated the day they were recorded.</p>`;
 };
 
 PAGES.log = () => {
@@ -1228,7 +1285,7 @@ function findJobs(){
   document.getElementById('pMsg').textContent = 'Searching the job boards…';
   rpc('dashFindProspects', candId)
     .then(r => { toast(r.busy ? 'Someone is already searching for this candidate - their results will appear here' : `Found ${r.found} jobs, ${r.added} new`); load(); })
-.catch(e => { document.getElementById('pMsg').textContent = ''; fail(e); });
+    .catch(e => { document.getElementById('pMsg').textContent = ''; fail(e); });
 }
 
 /** Queue the `limit` most recently found prospects for the selected candidate (0 = all of them). */
@@ -1276,11 +1333,12 @@ async function resolveFollowUp(id, outcome){
   const f = D.followUps.find(x => x.id === id);
   if(!f) return;
   const note = await dialog({ title: outcome === 'Done' ? 'Mark this done?' : 'Record "' + outcome + '"?',
-    body: `<b>${esc(f.company)}</b> - ${esc(f.title)} (${esc(candName(f.cand))}). This closes the follow-up` +
-      (/^(Interview|Offer|Rejected)$/.test(outcome) ? ' and saves the result on the application.' : '.'),
+    body: `<b>${esc(f.company)}</b> - ${esc(f.title)} (${esc(candName(f.cand))}). ` + (outcome === 'Interview'
+      ? `This saves the interview on the application. The follow-up stays open, due again in ${esc(String(D.followUpDays || 7))} days, so you can add the offer or rejection.`
+      : 'This closes the follow-up' + (/^(Offer|Rejected)$/.test(outcome) ? ' and saves the result on the application.' : '.')),
     input: 'Note (optional)', placeholder: outcome === 'Interview' ? 'e.g. Phone screen on 12 Nov' : '', ok: 'Save' });
   if(note === null) { render(); return; }
-  rpc('dashResolveFollowUp', id, outcome, note).then(() => { toast('Saved'); load(); }).catch(fail);
+  rpc('dashResolveFollowUp', id, outcome, note).then(r => { toast(r && r.already ? 'Someone has already closed this one' : 'Saved'); load(); }).catch(fail);
 }
 
 function snoozeFollowUp(id){
@@ -1400,8 +1458,10 @@ const HELP_HTML = `
 
 <div class="card">
 <h2>Follow-ups</h2>
-<p class="mut">Follow-ups are reminders for <b>your team</b>, not for the client. Every application appears here as soon as it is submitted, and falls due 7 days later (Config: FOLLOWUP_DAYS_AFTER_SUBMIT). When it's due, check the candidate's application inbox for a reply, then record <b>Interview</b>, <b>Offer</b>, <b>Rejected</b> or <b>No reply</b>. Interviews and offers are saved on the application and counted in Reports. If it's too early to tell, <b>Check again in 7 days</b> moves it back. Due follow-ups are also emailed each morning to REPORT_EMAILS.</p>
+<p class="mut">Follow-ups are reminders for <b>your team</b>, not for the client. Every application appears here as soon as it is submitted, and falls due 7 days later (Config: FOLLOWUP_DAYS_AFTER_SUBMIT). When it's due, check the candidate's application inbox for a reply, then record <b>Interview</b>, <b>Offer</b>, <b>Rejected</b> or <b>No reply</b>. These are saved on the application and counted in Reports. An interview keeps the follow-up open and brings it back in 7 days, so the offer or rejection can be added; the others close it. If it's too early to tell, <b>Check again in 7 days</b> moves it back. Due follow-ups are also emailed each morning to REPORT_EMAILS.</p>
 <p class="mut">NHS Trac follow-ups remind you to claim and verify the application on Trac after the vacancy closes - mark them <b>Done</b> when that's finished.</p>
+<h2>Reports</h2>
+<p class="mut">Pick any period. <b>What happened</b> counts each thing on the day it happened. <b>How far they've got</b> follows the applications sent in that period, so its rates can't pass 100% and they rise as replies are recorded. A job that was retried counts once. Results are dated the day someone records them, not the day of the interview itself.</p>
 </div>
 
 <div class="card">

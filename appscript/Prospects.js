@@ -60,7 +60,7 @@ function findProspectsForCandidate_(candidateId) {
 
 function searchProspects_(candidateId) {
   var cand = findRow_('Candidates', 'CandidateID', candidateId);
-if (!cand) throw new Error('Candidate not found: ' + candidateId);
+  if (!cand) throw new Error('Candidate not found: ' + candidateId);
 
   var what = (cand.PreferredRoles || '').split(',')[0].trim() || 'software engineer';
   var resultsWanted = parseInt(getConfig_('ADZUNA_RESULTS_PER_CANDIDATE') || '15', 10);

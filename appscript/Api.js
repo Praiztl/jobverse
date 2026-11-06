@@ -82,7 +82,7 @@ function doPost(e) {
       recordPlatformAccount: apiRecordPlatformAccount_,
       platformAccount: apiPlatformAccount_,
       approvedAnswers: apiApprovedAnswers_,
-otherCandidateIdentities: apiOtherCandidateIdentities_,
+      otherCandidateIdentities: apiOtherCandidateIdentities_,
       updatePlatformAccount: apiUpdatePlatformAccount_,
       findAccountEmail: apiFindAccountEmail_,
       exportDocumentPdf: apiExportDocumentPdf_,
@@ -205,7 +205,7 @@ function apiPrecheckApplication_(req) {
   var allApps = readRows_('Applications', ['CandidateID', 'Status', 'JobURL', 'Company', 'JobTitle', 'CreatedAt']);
   if (alreadyApplied_(allApps, req)) return { block: 'duplicate' };
 
-var target = parseInt(cand.TargetApplications || getConfig_('DEFAULT_TARGET_APPLICATIONS') || '50', 10);
+  var target = parseInt(cand.TargetApplications || getConfig_('DEFAULT_TARGET_APPLICATIONS') || '50', 10);
   var totalForCand = allApps.filter(function (a) { return a.CandidateID === req.candidateId && countsAsApplication_(a.Status); }).length;
   if (target > 0 && totalForCand >= target) return { block: 'targetMet', target: target };
  
@@ -237,7 +237,7 @@ function alreadyApplied_(apps, req) {
 }
 
 function apiStartApplication_(req) {
-// The worker and the extension can start the same job at once: check-then-append under one lock
+  // The worker and the extension can start the same job at once: check-then-append under one lock
   var lock = LockService.getScriptLock();
   lock.waitLock(20000);
   try { return startApplicationLocked_(req); } finally { lock.releaseLock(); }
@@ -518,7 +518,7 @@ function apiRequestReview_(req) {
   var taskId = newId_('REV');
   ensureColumns_('ReviewQueue', ['Answers']);
   appendObject_('ReviewQueue', {
-TaskID: taskId, CreatedAt: new Date(), Type: 'Submission',
+    TaskID: taskId, CreatedAt: new Date(), Type: 'Submission',
     CandidateID: req.candidateId, JobID: req.jobId || '', RefID: req.applicationId,
     Summary: req.company + ' - ' + req.jobTitle,
     AIFindings: JSON.stringify(req.snapshot || {}).slice(0, 40000),
@@ -789,7 +789,7 @@ function candidateBlock_(cand, allApps) {
   var todayCount = mine.filter(function (a) {
     return countsAsApplication_(a.Status) && Utilities.formatDate(new Date(a.CreatedAt), 'GMT', 'yyyy-MM-dd') === today;
   }).length;
-return todayCount >= limit ? 'throttled' : '';
+  return todayCount >= limit ? 'throttled' : '';
 }
 
 function apiGetCandidateCVText_(req) {
@@ -870,7 +870,7 @@ function apiPlatformAccount_(req) {
 
 function platformAccount_(req) {
   ensureColumns_('PlatformAccounts', ['Email', 'LoginURL']);
-var cand = findRow_('Candidates', 'CandidateID', req.candidateId);
+  var cand = findRow_('Candidates', 'CandidateID', req.candidateId);
   if (!cand) throw new Error('Candidate not found');
   var domain = normaliseDomain_(req.atsDomain || req.jobUrl);
   var email = String(cand.ApplicationEmail || cand.Email || '').trim();
@@ -1133,7 +1133,7 @@ function apiListApplicationsByStatus_(req) {
   readRows_('ReviewQueue', ['TaskID', 'Type', 'RefID', 'DecidedAt']).forEach(function (t) {
     if (t.Type === 'Submission') { taskByApp[t.RefID] = t.TaskID; approvedAt[t.RefID] = toEpochMs_(t.DecidedAt); }
   });
-return apps.map(function (a) {
+  return apps.map(function (a) {
     return {
       id: a.ApplicationID, candidateId: a.CandidateID, jobId: a.JobID, company: a.Company,
       title: a.JobTitle, url: a.JobURL, ats: a.ATS, status: a.Status, submitClaimedBy: a.SubmitClaimedBy || '',
@@ -1254,7 +1254,6 @@ function buildDashData_() {
       return { id: a.AccountID, cand: a.CandidateID, site: a.ATSDomain, email: a.Email || '',
                status: a.Status, notes: a.Notes, updated: String(a.UpdatedAt || a.CreatedAt) };
     }),
-    report: latestReport_()
   };
 }
 
@@ -1623,7 +1622,7 @@ function dashSetProspectStatus(key, prospectId, status) {
     (p.Status === CLAIMED_STATUS_ && p.ClaimedAt && Date.now() - toEpochMs_(p.ClaimedAt) <= CLAIM_STALE_MS_);
   if (status === 'Queued' && running) return { already: true, status: p.Status };
   updateRow_('Prospects', p._row, { Status: status });
-logActivity_(Session.getActiveUser().getEmail() || 'reviewer', 'prospect_' + status, 'prospect', prospectId, '');
+  logActivity_(Session.getActiveUser().getEmail() || 'reviewer', 'prospect_' + status, 'prospect', prospectId, '');
   return true;
 }
  
@@ -1768,36 +1767,48 @@ function dashMarkApplicationSubmitted(key, applicationId) {
   return { submitted: true };
 }
 
-/** What a follow-up can end with. Interview / Offer / Rejected are also recorded on the application (Outcome). */
+/** What a follow-up can record. Interview / Offer / Rejected are also saved on the application, each with its own date. */
 var FOLLOWUP_OUTCOMES_ = ['Interview', 'Offer', 'Rejected', 'No reply', 'Done', 'Not needed'];
 
 /**
- * Closes a follow-up with what actually happened, instead of a bare "done".
- * An interview sets the application's InterviewDate to today when it has none,
- * which is what the reports count interviews by.
+ * Records what actually happened, instead of a bare "done". An interview is
+ * a step, not an ending: the follow-up stays open and falls due again, so the
+ * offer or rejection can be added. Every other result closes it. Each stage
+ * keeps its own date on the application, so a later one never erases an
+ * earlier one; Outcome is just the latest. A follow-up closed by an interview
+ * before this worked can still take its next result.
  */
 function dashResolveFollowUp(key, followUpId, outcome, note) {
   requireDashAccess_(key);
   if (FOLLOWUP_OUTCOMES_.indexOf(outcome) === -1) throw new Error('Unknown follow-up outcome: ' + outcome);
   ensureColumns_('FollowUps', ['Outcome', 'ClosedAt']);
+  ensureColumns_('Applications', ['OfferDate', 'RejectedDate']);
   var f = findRow_('FollowUps', 'FollowUpID', followUpId);
   if (!f) throw new Error('Follow-up not found');
+  // Someone else has just finished it: the page may be a few seconds old
+  if (f.Status !== 'Pending' && f.Outcome !== 'Interview') return { already: true, outcome: f.Outcome || f.Status };
   var who = Session.getActiveUser().getEmail() || 'reviewer';
   var line = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd') + ' ' + outcome + (note ? ': ' + note : '');
-  updateRow_('FollowUps', f._row, {
-    Status: 'Done', Outcome: outcome, ClosedAt: new Date(),
-    Notes: (f.Notes ? f.Notes + '\n' : '') + line
-  });
+  var notes = (f.Notes ? f.Notes + '\n' : '') + line;
+  if (outcome === 'Interview') {
+    var days = parseInt(getConfig_('FOLLOWUP_DAYS_AFTER_SUBMIT') || '7', 10);
+    updateRow_('FollowUps', f._row, { Status: 'Pending', Outcome: outcome, ClosedAt: '', Notes: notes,
+      DueDate: new Date(Date.now() + days * 24 * 60 * 60 * 1000) });
+  } else {
+    updateRow_('FollowUps', f._row, { Status: 'Done', Outcome: outcome, ClosedAt: new Date(), Notes: notes });
+  }
   if (f.ApplicationID && /^(Interview|Offer|Rejected)$/.test(outcome)) {
     var app = findRow_('Applications', 'ApplicationID', f.ApplicationID);
     if (app) {
       var patch = { Outcome: outcome };
       if (outcome === 'Interview' && !app.InterviewDate) patch.InterviewDate = new Date();
+      if (outcome === 'Offer' && !app.OfferDate) patch.OfferDate = new Date();
+      if (outcome === 'Rejected' && !app.RejectedDate) patch.RejectedDate = new Date();
       updateRow_('Applications', app._row, patch);
     }
   }
   logActivity_(who, 'followup_' + outcome.toLowerCase().replace(/\s+/g, '_'), 'followup', followUpId, note || '');
-  return { closed: true };
+  return { closed: outcome !== 'Interview' };
 }
 
 /** "No reply yet": pushes the follow-up `days` days on from today (or from its due date, if that's later). */
@@ -1861,7 +1872,7 @@ function normaliseJobKey_(url, company, title) {
     }).sort().join('&');
     return parts[0].replace(/\/$/, '') + (query ? '?' + query : '');
   }
-return (String(company) + '::' + String(title)).toLowerCase().trim();
+  return (String(company) + '::' + String(title)).toLowerCase().trim();
 }
  
 /** Extracts just the hostname from a URL, or passes a bare domain through unchanged. */
@@ -1880,15 +1891,7 @@ function notifyReviewers_(subject, body) {
   });
 }
  
-function latestReport_() {
-  var sh = sheet_('Reports');
-  if (!sh || sh.getLastRow() < 2) return null;
-  var map = getHeaderMap_(sh);
-  var last = sh.getRange(sh.getLastRow(), 1, 1, sh.getLastColumn()).getValues()[0];
-  try { return { period: last[map.Period - 1], metrics: JSON.parse(last[map.MetricsJSON - 1]), summary: last[map.Summary - 1] }; }
-  catch (e) { return null; }
-}
- 
+
 
 
 
