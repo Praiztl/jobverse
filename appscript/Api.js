@@ -81,6 +81,7 @@ function doPost(e) {
       checkPlatformAccount: apiCheckPlatformAccount_,
       recordPlatformAccount: apiRecordPlatformAccount_,
       platformAccount: apiPlatformAccount_,
+      otherCandidateIdentities: apiOtherCandidateIdentities_,
       updatePlatformAccount: apiUpdatePlatformAccount_,
       findAccountEmail: apiFindAccountEmail_,
       exportDocumentPdf: apiExportDocumentPdf_,
@@ -718,6 +719,9 @@ function apiNextQueuedProspect_(req) {
 
     var queued = prospects.filter(function (p) { return p.Status === 'Queued'; });
     if (!queued.length) return { prospect: null, remaining: 0 };
+    // Jobs this run already put back, e.g. waiting on an open tab, mustn't hold up the rest of the queue
+    var exclude = req.exclude || [];
+    var candidatesToRun = queued.filter(function (p) { return exclude.indexOf(p.ProspectID) === -1; });
 
     var cands = {};
     readRows_('Candidates', ['CandidateID', 'Active', 'TargetApplications', 'Status']).forEach(function (c) { cands[c.CandidateID] = c; });
@@ -729,8 +733,8 @@ function apiNextQueuedProspect_(req) {
     };
 
     var pick = null;
-    for (var i = 0; i < queued.length && !pick; i++) {
-      if (canApply(queued[i].CandidateID)) pick = queued[i];
+    for (var i = 0; i < candidatesToRun.length && !pick; i++) {
+      if (canApply(candidatesToRun[i].CandidateID)) pick = candidatesToRun[i];
     }
     if (!pick) return { prospect: null, remaining: queued.length, waiting: 'All queued jobs belong to candidates who are inactive, at their target or at today\'s cap' };
 
@@ -855,6 +859,13 @@ function apiPlatformAccount_(req) {
   });
   logActivity_('extension', 'platform_account_signup', 'candidate', req.candidateId, domain);
   return { found: true, created: true, accountId: id, status: 'Pending', email: email, password: password };
+}
+
+/** Every other candidate's name and emails, so the extension can spot a site signed in as the wrong person. */
+function apiOtherCandidateIdentities_(req) {
+  return readRows_('Candidates', ['CandidateID', 'FullName', 'Email', 'ApplicationEmail'])
+    .filter(function (c) { return c.CandidateID !== req.candidateId; })
+    .map(function (c) { return { name: c.FullName || '', emails: [c.Email, c.ApplicationEmail].filter(Boolean) }; });
 }
 
 function apiUpdatePlatformAccount_(req) {
