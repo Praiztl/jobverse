@@ -86,13 +86,20 @@ function findProspectsForCandidate_(candidateId) {
     .forEach(function (r) { if (r.CandidateID === candidateId) markSeen(r.JobURL, r.Company, r.JobTitle); });
 
   var added = 0;
+  var adzunaDropped = 0;
   var companyCache = {}; // reused across resolver calls this run
-  allResults.forEach(function (job) {
-    // Adzuna links are geo-blocked redirects. Try to resolve to the
-    // employer's own ATS page so the application isn't blocked by location.
-    if (job.source && job.source.indexOf('Adzuna') === 0) {
+  // Adzuna goes last: when a job also came from another source, that source's working link is the one kept
+  var isAdzunaJob = function (job) { return isAdzunaLink_(job.url); };
+  var ordered = allResults.filter(function (job) { return !isAdzunaJob(job); }).concat(allResults.filter(isAdzunaJob));
+  ordered.forEach(function (job) {
+    // Adzuna's own links can't be applied through: its site turns away connections from some
+    // countries. Only keep the job if it leads to the employer's own application page.
+    if (isAdzunaJob(job)) {
+      if (isSeen(job.url, job.company, job.title)) return;
       var resolved = resolveToATS_(job.company, job.title, companyCache);
-      if (resolved) { job.url = resolved.url; job.source = 'Adzuna→' + resolved.ats; }
+      if (!resolved) { adzunaDropped++; return; }
+      job.url = resolved.url;
+      job.source = 'Adzuna→' + resolved.ats;
     }
     if (!job.url || isSeen(job.url, job.company, job.title)) return;
     markSeen(job.url, job.company, job.title);
@@ -115,8 +122,9 @@ function findProspectsForCandidate_(candidateId) {
   if (sourceErrors.length) {
     logActivity_('system', 'prospect_source_error', 'candidate', candidateId, sourceErrors.join(' | '));
   }
-  logActivity_('system', 'prospects_found', 'candidate', candidateId, added + ' new prospects from ' + enabledSources.join('/'));
-  return { found: allResults.length, added: added, errors: sourceErrors };
+  logActivity_('system', 'prospects_found', 'candidate', candidateId, added + ' new prospects from ' + enabledSources.join('/') +
+    (adzunaDropped ? ' (' + adzunaDropped + ' Adzuna jobs left out: no employer application page found)' : ''));
+  return { found: allResults.length, added: added, adzunaDropped: adzunaDropped, errors: sourceErrors };
 }
 /** Run for every active candidate. Safe to run on a daily trigger - skips inactive/archived candidates and silently skips any source with no key set. */
 function findProspectsForAllCandidates() {
@@ -218,6 +226,10 @@ function sourceJSearch_(what, where, resultsWanted) {
   }
   var data = JSON.parse(res.getContentText());
   return ((data.data || []).slice(0, resultsWanted)).map(function (job) {
+    // Google sometimes lists Adzuna first when the same job has other places to apply
+    var otherLink = (job.apply_options || []).map(function (o) { return o.apply_link; })
+      .filter(function (u) { return u && !isAdzunaLink_(u); })[0];
+    if (otherLink && isAdzunaLink_(job.job_apply_link)) job.job_apply_link = otherLink;
     return {
       // job_publisher is the site Google found the listing on: LinkedIn, Indeed, Glassdoor, Jobberman...
       source: 'JSearch' + (job.job_publisher ? '→' + job.job_publisher : ''), company: job.employer_name || '',
@@ -312,7 +324,7 @@ function sourceMyJobMag_(what, where, resultsWanted) {
    geo-blocked) into a direct application URL on the employer's own
    Greenhouse / Lever / Ashby board. These are free, keyless, public
    JSON APIs. If we can't resolve it, we return null and the caller
-   keeps the job flagged "Found - Manual Review" as before.
+   leaves the job out.
 
    NOTE ON COST: this makes a few extra UrlFetch calls per Adzuna job.
    To stay well within Apps Script's daily UrlFetch quota, resolution is
@@ -468,6 +480,10 @@ function prospectJobKey_(company, title) {
     .replace(/\((remote|hybrid|on-?site|contract|permanent|full[ -]?time|part[ -]?time)\)|[-–|,]\s*(remote|hybrid|on-?site)\s*$/g, '')
     .replace(/[^a-z0-9]+/g, ' ').trim();
   return c && t ? c + '|' + t : '';
+}
+
+function isAdzunaLink_(url) {
+  return /^https?:\/\/([^\/]+\.)?adzuna\.[a-z.]+(\/|$)/i.test(String(url || ''));
 }
 
 function detectATSFromUrl_(url) {

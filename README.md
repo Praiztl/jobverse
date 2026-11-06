@@ -33,7 +33,7 @@ approves the actual submission before anything reaches a real employer.
 | Piece | State |
 |---|---|
 | Prospects.gs multi-location fix | Live, verified |
-| Adzuna geo-block ATS resolver + Remotive source | Live (pre-existing) |
+| Adzuna geo-block ATS resolver + Remotive source | Live (pre-existing). **Changed, not yet deployed:** Adzuna jobs are kept only when they resolve to the employer's own ATS page, and any other source's link for the same job wins. Old Adzuna links in the queue are skipped by the extension as `Skipped - Region Locked`. |
 | `Sync.js` (`onReviewQueueEdit`) | Deployed — confirm the installable trigger is set (Triggers → Add Trigger → `onReviewQueueEdit` → From spreadsheet → On edit) if not done already |
 | `Analytics.js` (`reviewerAccuracyReport`) | Deployed and run once — `ReviewQueue` had zero Decided rows at last check, so there's nothing to measure yet |
 | Config-gated auto-decide (patch 05) | Still not applied — needs real Decided rows in `ReviewQueue` first |
