@@ -81,7 +81,8 @@ function doPost(e) {
       checkPlatformAccount: apiCheckPlatformAccount_,
       recordPlatformAccount: apiRecordPlatformAccount_,
       platformAccount: apiPlatformAccount_,
-      otherCandidateIdentities: apiOtherCandidateIdentities_,
+      approvedAnswers: apiApprovedAnswers_,
+otherCandidateIdentities: apiOtherCandidateIdentities_,
       updatePlatformAccount: apiUpdatePlatformAccount_,
       findAccountEmail: apiFindAccountEmail_,
       exportDocumentPdf: apiExportDocumentPdf_,
@@ -201,29 +202,42 @@ function apiPrecheckApplication_(req) {
   if (!cand) throw new Error('Candidate not found');
   if (String(cand.Active).toUpperCase() === 'FALSE') return { block: 'inactive' };
  
-  var allApps = readRows_('Applications', ['CandidateID', 'Status', 'DedupeHash', 'CreatedAt']);
- 
-  var basis = req.candidateId + '|' + normaliseJobKey_(req.jobUrl, req.company, req.jobTitle);
-  var hash = Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, basis)).slice(0, 24);
-  if (allApps.some(function (a) { return a.DedupeHash === hash && countsAsApplication_(a.Status); })) return { block: 'duplicate' };
- 
-  var target = parseInt(cand.TargetApplications || getConfig_('DEFAULT_TARGET_APPLICATIONS') || '50', 10);
+  var allApps = readRows_('Applications', ['CandidateID', 'Status', 'JobURL', 'Company', 'JobTitle', 'CreatedAt']);
+  if (alreadyApplied_(allApps, req)) return { block: 'duplicate' };
+
+var target = parseInt(cand.TargetApplications || getConfig_('DEFAULT_TARGET_APPLICATIONS') || '50', 10);
   var totalForCand = allApps.filter(function (a) { return a.CandidateID === req.candidateId && countsAsApplication_(a.Status); }).length;
   if (target > 0 && totalForCand >= target) return { block: 'targetMet', target: target };
  
   var limit = parseInt(getConfig_('MAX_APPS_PER_CANDIDATE_PER_DAY') || '15', 10);
   var today = Utilities.formatDate(new Date(), 'GMT', 'yyyy-MM-dd');
   var todayCount = allApps.filter(function (a) {
-    return a.CandidateID === req.candidateId &&
+    return a.CandidateID === req.candidateId && countsAsApplication_(a.Status) &&
       Utilities.formatDate(new Date(a.CreatedAt), 'GMT', 'yyyy-MM-dd') === today;
   }).length;
   if (todayCount >= limit) return { block: 'throttled', limit: limit };
- 
+
   return { block: null, target: target, doneSoFar: totalForCand };
 }
  
+/**
+ * This candidate already has this job: the same link, or the same company and
+ * title under another link. Compared from each row's own link and names rather
+ * than a stored hash, so a change to what counts as the same link applies to
+ * every past application too.
+ */
+function alreadyApplied_(apps, req) {
+  var link = req.jobUrl ? normaliseJobKey_(req.jobUrl) : '';
+  var job = prospectJobKey_(req.company, req.jobTitle);
+  return apps.some(function (a) {
+    if (a.CandidateID !== req.candidateId || !countsAsApplication_(a.Status)) return false;
+    return (link && a.JobURL && normaliseJobKey_(a.JobURL) === link) ||
+      (job && prospectJobKey_(a.Company, a.JobTitle) === job);
+  });
+}
+
 function apiStartApplication_(req) {
-  // The worker and the extension can start the same job at once: check-then-append under one lock
+// The worker and the extension can start the same job at once: check-then-append under one lock
   var lock = LockService.getScriptLock();
   lock.waitLock(20000);
   try { return startApplicationLocked_(req); } finally { lock.releaseLock(); }
@@ -238,10 +252,9 @@ function startApplicationLocked_(req) {
   var basis = req.candidateId + '|' + normaliseJobKey_(req.jobUrl, req.company, req.jobTitle);
   var hash = Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, basis)).slice(0, 24);
  
-  var allApps = readRows_('Applications', ['CandidateID', 'Status', 'DedupeHash', 'CreatedAt']);
-  var dupe = allApps.some(function (a) { return a.DedupeHash === hash && countsAsApplication_(a.Status); });
-  if (dupe) return { duplicate: true };
- 
+  var allApps = readRows_('Applications', ['CandidateID', 'Status', 'JobURL', 'Company', 'JobTitle', 'CreatedAt']);
+  if (alreadyApplied_(allApps, req)) return { duplicate: true };
+
   var target = parseInt(cand.TargetApplications || getConfig_('DEFAULT_TARGET_APPLICATIONS') || '50', 10);
   var totalForCand = allApps.filter(function (a) {
     return a.CandidateID === req.candidateId && countsAsApplication_(a.Status);
@@ -251,11 +264,11 @@ function startApplicationLocked_(req) {
   var limit = parseInt(getConfig_('MAX_APPS_PER_CANDIDATE_PER_DAY') || '15', 10);
   var today = Utilities.formatDate(new Date(), 'GMT', 'yyyy-MM-dd');
   var todayCount = allApps.filter(function (a) {
-    return a.CandidateID === req.candidateId &&
+    return a.CandidateID === req.candidateId && countsAsApplication_(a.Status) &&
       Utilities.formatDate(new Date(a.CreatedAt), 'GMT', 'yyyy-MM-dd') === today;
   }).length;
   if (todayCount >= limit) return { throttled: true, limit: limit };
- 
+
   var appId = newId_('APP');
   appendObject_('Applications', {
     ApplicationID: appId, CreatedAt: new Date(), CandidateID: req.candidateId,
@@ -503,11 +516,13 @@ function apiChooseNextStep_(req) {
 
 function apiRequestReview_(req) {
   var taskId = newId_('REV');
+  ensureColumns_('ReviewQueue', ['Answers']);
   appendObject_('ReviewQueue', {
-    TaskID: taskId, CreatedAt: new Date(), Type: 'Submission',
+TaskID: taskId, CreatedAt: new Date(), Type: 'Submission',
     CandidateID: req.candidateId, JobID: req.jobId || '', RefID: req.applicationId,
     Summary: req.company + ' - ' + req.jobTitle,
     AIFindings: JSON.stringify(req.snapshot || {}).slice(0, 40000),
+    Answers: answersForCell_(req.answers),
     Status: 'Awaiting Human'
   });
   var app = findRow_('Applications', 'ApplicationID', req.applicationId);
@@ -522,6 +537,20 @@ function apiRequestReview_(req) {
   notifyReviewers_('Review needed: ' + req.company + ' - ' + req.jobTitle,
     'A completed application is paused for approval. Open the Jobverse Console review queue. Task ' + taskId);
   return { taskId: taskId };
+}
+
+/** The answers as JSON that fits a sheet cell, dropping the last ones if a form is enormous. */
+function answersForCell_(answers) {
+  var list = (answers || []).slice();
+  var json = JSON.stringify(list);
+  while (json.length > 45000 && list.length) { list.pop(); json = JSON.stringify(list); }
+  return json;
+}
+
+/** What the reviewer approved, so a form filled again after approval gets those answers and not new ones. */
+function apiApprovedAnswers_(req) {
+  var t = findRow_('ReviewQueue', 'TaskID', req.taskId, ['Answers']);
+  try { return JSON.parse((t && t.Answers) || '[]'); } catch (e) { return []; }
 }
 
 /**
@@ -757,8 +786,10 @@ function candidateBlock_(cand, allApps) {
   if (target > 0 && mine.filter(function (a) { return countsAsApplication_(a.Status); }).length >= target) return 'targetMet';
   var limit = parseInt(getConfig_('MAX_APPS_PER_CANDIDATE_PER_DAY') || '15', 10);
   var today = Utilities.formatDate(new Date(), 'GMT', 'yyyy-MM-dd');
-  var todayCount = mine.filter(function (a) { return Utilities.formatDate(new Date(a.CreatedAt), 'GMT', 'yyyy-MM-dd') === today; }).length;
-  return todayCount >= limit ? 'throttled' : '';
+  var todayCount = mine.filter(function (a) {
+    return countsAsApplication_(a.Status) && Utilities.formatDate(new Date(a.CreatedAt), 'GMT', 'yyyy-MM-dd') === today;
+  }).length;
+return todayCount >= limit ? 'throttled' : '';
 }
 
 function apiGetCandidateCVText_(req) {
@@ -830,8 +861,16 @@ var ACCOUNT_PW_PREFIX_ = 'PLATFORM_PW_';
 
 /** Saved account for this candidate + site; with req.create, makes one (password generated here) if none exists. */
 function apiPlatformAccount_(req) {
+  if (!req.create) return platformAccount_(req);
+  // Two Chromes reaching a new site for one candidate must get the same account and password
+  var lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try { return platformAccount_(req); } finally { lock.releaseLock(); }
+}
+
+function platformAccount_(req) {
   ensureColumns_('PlatformAccounts', ['Email', 'LoginURL']);
-  var cand = findRow_('Candidates', 'CandidateID', req.candidateId);
+var cand = findRow_('Candidates', 'CandidateID', req.candidateId);
   if (!cand) throw new Error('Candidate not found');
   var domain = normaliseDomain_(req.atsDomain || req.jobUrl);
   var email = String(cand.ApplicationEmail || cand.Email || '').trim();
@@ -1083,24 +1122,55 @@ function apiListApplicationsByStatus_(req) {
   // The worker is retired: anything still approved for it is the extension's to submit now
   var wanted = req.status === 'Approved - Extension' ? ['Approved - Extension', 'Approved - Submitting'] : [req.status];
   // Every open Chrome asks this every two minutes, and usually nothing matches: stop after one read
-  var apps = readRows_('Applications', ['ApplicationID', 'CandidateID', 'JobID', 'Company', 'JobTitle', 'JobURL', 'ATS', 'Status', 'SubmitClaimedBy'])
+  var rows = readRows_('Applications', ['ApplicationID', 'CandidateID', 'JobID', 'Company', 'JobTitle', 'JobURL', 'ATS', 'Status', 'SubmitClaimedBy', 'CreatedAt']);
+  if (req.status === 'Approved - Extension') failAbandonedApplications_(rows);
+  var apps = rows
     .filter(function (a) { return wanted.indexOf(a.Status) > -1 && (!req.candidateId || a.CandidateID === req.candidateId); });
   if (!apps.length) return [];
 
-  var docs = latestDocsByJob_(), taskByApp = {};
+  var docs = latestDocsByJob_(), taskByApp = {}, approvedAt = {};
   // The approved Submission review, so the extension can submit an approved application whose tab is gone
-  readRows_('ReviewQueue', ['TaskID', 'Type', 'RefID']).forEach(function (t) {
-    if (t.Type === 'Submission') taskByApp[t.RefID] = t.TaskID;
+  readRows_('ReviewQueue', ['TaskID', 'Type', 'RefID', 'DecidedAt']).forEach(function (t) {
+    if (t.Type === 'Submission') { taskByApp[t.RefID] = t.TaskID; approvedAt[t.RefID] = toEpochMs_(t.DecidedAt); }
   });
-  return apps.map(function (a) {
+return apps.map(function (a) {
     return {
       id: a.ApplicationID, candidateId: a.CandidateID, jobId: a.JobID, company: a.Company,
       title: a.JobTitle, url: a.JobURL, ats: a.ATS, status: a.Status, submitClaimedBy: a.SubmitClaimedBy || '',
-      cvUrl: docs.cv[a.JobID] || '', letterUrl: docs.letter[a.JobID] || '', taskId: taskByApp[a.ApplicationID] || ''
+      cvUrl: docs.cv[a.JobID] || '', letterUrl: docs.letter[a.JobID] || '', taskId: taskByApp[a.ApplicationID] || '',
+      approvedMs: approvedAt[a.ApplicationID] || 0
     };
   });
 }
- 
+
+// Past the extension's 20-minute limit, and under the 45 minutes after which a claimed job
+// is queued again, so that job then runs instead of being refused as a duplicate
+var ABANDONED_AFTER_MS_ = 40 * 60 * 1000;
+
+/**
+ * An application still "In Progress" this long lost its run: the tab closed, Chrome
+ * crashed or the computer went off. Failed frees its place in the candidate's limits
+ * and gives it a Retry button. Runs on the check every Chrome makes every two minutes.
+ */
+function failAbandonedApplications_(rows) {
+  var old = rows.filter(function (a) {
+    return a.Status === 'In Progress' && a.CreatedAt && Date.now() - toEpochMs_(a.CreatedAt) > ABANDONED_AFTER_MS_;
+  });
+  if (!old.length) return;
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(3000)) return; // the next check will do it
+  try {
+    var numbers = old.map(function (a) { return a._row; });
+    setColumnForRows_('Applications', 'Status', numbers, 'Failed');
+    setColumnForRows_('Applications', 'ErrorLog', numbers, 'Stopped before finishing: the tab was closed or Chrome stopped. Nothing was submitted.');
+    old.forEach(function (a) { a.Status = 'Failed'; });
+    logActivity_('system', 'applications_abandoned', 'application', '-', old.length + ' unfinished application(s) marked Failed');
+    dashTouch_();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 /* ------------------------- dashboard RPC (google.script.run) ------------------------- */
  
 /**
@@ -1167,9 +1237,10 @@ function buildDashData_() {
     reviews: awaitingReviews_(docs, reviewRows),
     revisions: documentRevisions_(reviewRows),
     prospects: readRows_('Prospects', ['ProspectID', 'CandidateID', 'Company', 'JobTitle', 'JobURL', 'Status',
-      'Source', 'FoundAt']).map(function (p) {
+      'Source', 'FoundAt', 'ClaimedAt']).map(function (p) {
       return { id: p.ProspectID, cand: p.CandidateID, company: p.Company, title: p.JobTitle,
-               url: p.JobURL, status: p.Status, source: p.Source, found: toEpochMs_(p.FoundAt) };
+               url: p.JobURL, status: p.Status, source: p.Source, found: toEpochMs_(p.FoundAt),
+               claimed: p.ClaimedAt ? toEpochMs_(p.ClaimedAt) : 0 };
     }),
     log: recentActivity_(60),
     followUps: followUpRows.map(function (f) {
@@ -1547,8 +1618,12 @@ function dashSetProspectStatus(key, prospectId, status) {
   requireDashAccess_(key);
   var p = findRow_('Prospects', 'ProspectID', prospectId);
   if (!p) throw new Error('Prospect not found');
+  // The page may be a few seconds old: a job another computer has just taken stays with it
+  var running = /^In Review - /.test(p.Status) ||
+    (p.Status === CLAIMED_STATUS_ && p.ClaimedAt && Date.now() - toEpochMs_(p.ClaimedAt) <= CLAIM_STALE_MS_);
+  if (status === 'Queued' && running) return { already: true, status: p.Status };
   updateRow_('Prospects', p._row, { Status: status });
-  logActivity_(Session.getActiveUser().getEmail() || 'reviewer', 'prospect_' + status, 'prospect', prospectId, '');
+logActivity_(Session.getActiveUser().getEmail() || 'reviewer', 'prospect_' + status, 'prospect', prospectId, '');
   return true;
 }
  
@@ -1774,11 +1849,19 @@ function sheetDateIso_(v) {
   return ms ? Utilities.formatDate(new Date(ms), Session.getScriptTimeZone(), 'yyyy-MM-dd') : '';
 }
  
+// Query parts that say how someone arrived, not which job it is
+var TRACKING_PARAM_ = /^(utm_.*|mc_.*|_ga|gclid|fbclid|msclkid|ref|refid|referrer|source|src|gh_src|lever-.*|trk|trackingid|tk|vjs|from|campaign|cmp|ccuid|sid|sessionid|jsessionid|lang|locale|share|shared)$/;
+
+/** Many sites keep the job's ID in the query (?jk=, ?gh_jid=), so only tracking parts are dropped. */
 function normaliseJobKey_(url, company, title) {
   if (url) {
-    return String(url).toLowerCase().replace(/^https?:\/\//, '').replace(/[?#].*$/, '').replace(/\/$/, '');
+    var parts = String(url).toLowerCase().replace(/^https?:\/\//, '').replace(/#.*$/, '').split('?');
+    var query = (parts[1] || '').split('&').filter(function (p) {
+      return p && !TRACKING_PARAM_.test(p.split('=')[0]);
+    }).sort().join('&');
+    return parts[0].replace(/\/$/, '') + (query ? '?' + query : '');
   }
-  return (String(company) + '::' + String(title)).toLowerCase().trim();
+return (String(company) + '::' + String(title)).toLowerCase().trim();
 }
  
 /** Extracts just the hostname from a URL, or passes a bare domain through unchanged. */

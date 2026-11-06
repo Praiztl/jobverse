@@ -396,6 +396,10 @@ function prospectLabel(s){
   const skip = s.match(/^Skipped\s*[-:]\s*(.+)$/);
   return skip ? 'Skipped: ' + skip[1].toLowerCase() : s;
 }
+/** Already being applied to or waiting for approval: a second Apply would only waste a run. A claim left by a dead Chrome doesn't count. */
+function prospectRunning(p){
+  return /^In Review - /.test(p.status) || (p.status === 'In Progress - Extension' && Date.now() - (p.claimed || 0) <= 45 * MIN);
+}
 function prospectChip(s){ return chip(s).replace('>' + esc(s) + '<', '>' + esc(prospectLabel(s)) + '<'); }
 
 function chip(s){
@@ -836,8 +840,8 @@ PAGES.prospects = () => {
       ${one ? '' : `<td class="mut">${esc(candName(p.cand))}</td>`}
       <td><b>${esc(p.company)}</b>${p.url ? ` <a href="${esc(p.url)}" class="small">open</a>` : ''}<br><span class="mut">${esc(p.title)}</span></td>
       <td class="mut">${esc(p.source || '')}</td><td>${prospectChip(p.status)}</td>
-      <td><div class="acts" style="justify-content:flex-end">${p.status === 'Queued' ? '<span class="mut">in line</span>' :
-        `<button class="btn ghost tiny" onclick="prospectAction('${p.id}','Queued')">Apply</button>
+      <td><div class="acts" style="justify-content:flex-end">${p.status === 'Queued' ? '<span class="mut">in line</span>' : prospectRunning(p) ? '<span class="mut">running</span>' :
+`<button class="btn ghost tiny" onclick="prospectAction('${p.id}','Queued')">Apply</button>
          ${/^Skipped/.test(p.status) ? '' : `<button class="btn ghost tiny" onclick="prospectAction('${p.id}','Skipped')">Skip</button>`}`}</div></td>
       </tr>`).join('') :
     `<tr><td colspan="6">${emptyState('No jobs here yet', one ? 'Press "Find new jobs" above.' : '')}</td></tr>`) +
@@ -1223,8 +1227,8 @@ function findJobs(){
   if(!candId) { toast('Pick a candidate first'); return; }
   document.getElementById('pMsg').textContent = 'Searching the job boards…';
   rpc('dashFindProspects', candId)
-    .then(r => { toast(`Found ${r.found} jobs, ${r.added} new`); load(); })
-    .catch(e => { document.getElementById('pMsg').textContent = ''; fail(e); });
+    .then(r => { toast(r.busy ? 'Someone is already searching for this candidate - their results will appear here' : `Found ${r.found} jobs, ${r.added} new`); load(); })
+.catch(e => { document.getElementById('pMsg').textContent = ''; fail(e); });
 }
 
 /** Queue the `limit` most recently found prospects for the selected candidate (0 = all of them). */
@@ -1255,7 +1259,9 @@ function prospectAction(id, status){
   p.status = status; // show it straight away; the sheet is updated in the background
   render();
   toast(status === 'Queued' ? 'In line to apply - the extension picks it up within a few minutes' : 'Skipped');
-  rpc('dashSetProspectStatus', id, status).catch(e => { p.status = before; render(); fail(e); });
+  rpc('dashSetProspectStatus', id, status).then(r => {
+    if(r && r.already){ p.status = r.status; render(); toast('Another computer already has this job'); }
+  }).catch(e => { p.status = before; render(); fail(e); });
 }
 
 function setActive(id, active){
@@ -1360,7 +1366,9 @@ const HELP_HTML = `
 <tr><td><b>Whole application, start to "Ready to approve"</b></td><td><b>5 - 10 minutes</b></td><td>About 6 - 10 jobs an hour per computer. One application is stopped after 20 minutes.</td></tr>
 <tr><td>Waiting for a person (CAPTCHA, a question)</td><td>3 minutes, then it moves on</td><td>Change it under "Wait for a person" in the extension's Connection settings. The tab stays open for you to finish.</td></tr>
 <tr><td>Submitted after you approve</td><td>Under 1 minute if its tab is open, otherwise 2 - 8 minutes</td><td>Without an open tab, the extension reopens the job and fills it again first. Not picked up within 20 minutes: it moves to <b>Needs attention</b>.</td></tr>
+<tr><td>Abandoned applications marked Failed</td><td>40 minutes</td><td>An application whose tab was closed, or whose computer stopped, moves to Needs attention with a Retry button.</td></tr>
 <tr><td>Stuck jobs put back in line</td><td>45 minutes</td><td>A job claimed by a computer that went offline returns to the queue.</td></tr>
+<tr><td>Wait before another computer submits an approval</td><td>3 to 5 minutes</td><td>The tab that filled the form goes first. If it has been closed, another Chrome fills it again with the approved answers.</td></tr>
 <tr><td>Shows on Follow-ups</td><td>As soon as it is submitted</td><td>It falls due 7 days later. Reminders are emailed at about 7:30am; the daily report at about 7am.</td></tr>
 <tr><td>Update CV / cover letter</td><td>About 1 minute</td><td>Includes the Reviewer Agent's check of the new version.</td></tr>
 </table>

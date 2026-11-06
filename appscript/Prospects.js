@@ -38,9 +38,29 @@ var PROSPECT_SOURCES_ONCE_ = {
   myjobmag: ['MyJobMag', function (w, l, n) { return sourceMyJobMag_(w, l, n); }]
 };
 
+var SEARCH_RUNNING_SECONDS_ = 360; // Apps Script stops any run at 6 minutes, so a crashed search can't hold this for longer
+
+/**
+ * One search per candidate at a time, or two people pressing "Find new jobs"
+ * would both add the same jobs. A short flag, not the script lock: a search
+ * takes minutes, and every Chrome needs that lock.
+ */
 function findProspectsForCandidate_(candidateId) {
+  var cache = CacheService.getScriptCache(), key = 'finding:' + candidateId;
+  var lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    if (cache.get(key)) return { found: 0, added: 0, errors: [], busy: true };
+    cache.put(key, '1', SEARCH_RUNNING_SECONDS_);
+  } finally {
+    lock.releaseLock();
+  }
+  try { return searchProspects_(candidateId); } finally { cache.remove(key); }
+}
+
+function searchProspects_(candidateId) {
   var cand = findRow_('Candidates', 'CandidateID', candidateId);
-  if (!cand) throw new Error('Candidate not found: ' + candidateId);
+if (!cand) throw new Error('Candidate not found: ' + candidateId);
 
   var what = (cand.PreferredRoles || '').split(',')[0].trim() || 'software engineer';
   var resultsWanted = parseInt(getConfig_('ADZUNA_RESULTS_PER_CANDIDATE') || '15', 10);
