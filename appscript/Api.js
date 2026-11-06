@@ -81,6 +81,7 @@ function doPost(e) {
       checkPlatformAccount: apiCheckPlatformAccount_,
       recordPlatformAccount: apiRecordPlatformAccount_,
       platformAccount: apiPlatformAccount_,
+      reviewDocument: apiReviewDocument_,
       approvedAnswers: apiApprovedAnswers_,
       otherCandidateIdentities: apiOtherCandidateIdentities_,
       updatePlatformAccount: apiUpdatePlatformAccount_,
@@ -187,15 +188,26 @@ function apiAnalyseJobPosting_(req) {
 function apiBuildTailoredCV_(req) {
   var existing = latestDocForJob_('CVVersions', req.jobId);
   if (existing) return { cvUrl: existing.DocURL };
-  var cvId = runResumeBuilder_(req.candidateId, req.jobId, req.tone);
-  return { cvUrl: findRow_('CVVersions', 'VersionID', cvId).DocURL };
+  var cvId = runResumeBuilder_(req.candidateId, req.jobId, req.tone, null, !!req.deferReview);
+  return { cvUrl: findRow_('CVVersions', 'VersionID', cvId).DocURL, versionId: cvId };
 }
 
 function apiBuildCoverLetter_(req) {
   var existing = latestDocForJob_('CoverLetters', req.jobId);
   if (existing) return { letterUrl: existing.DocURL };
-  var letterId = runCoverLetterBuilder_(req.candidateId, req.jobId, req.tone);
-  return { letterUrl: findRow_('CoverLetters', 'LetterID', letterId).DocURL };
+  var letterId = runCoverLetterBuilder_(req.candidateId, req.jobId, req.tone, null, !!req.deferReview);
+  return { letterUrl: findRow_('CoverLetters', 'LetterID', letterId).DocURL, letterId: letterId };
+}
+
+/** The Reviewer Agent's check of a document built with deferReview. It runs while the form is being filled. */
+function apiReviewDocument_(req) {
+  var isCV = req.type === 'CV';
+  var doc = findRow_(isCV ? 'CVVersions' : 'CoverLetters', isCV ? 'VersionID' : 'LetterID', req.refId, ['DocID']);
+  if (!doc) throw new Error('Document not found: ' + req.refId);
+  var done = readRows_('ReviewQueue', ['Type', 'RefID']).some(function (t) { return t.Type === req.type && t.RefID === req.refId; });
+  if (done) return { reviewed: false };
+  runReviewerAgent_(req.type, req.refId, req.candidateId, req.jobId, DocumentApp.openById(doc.DocID).getBody().getText());
+  return { reviewed: true };
 }
 
 function apiPrecheckApplication_(req) {

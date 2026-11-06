@@ -165,6 +165,21 @@ function parseEmailAndPassword_(raw) {
  * Converts via Drive to a temporary Google Doc, reads the body, deletes the temp.
  * PDF conversion uses Drive OCR so scanned CVs also work.
  */
+/**
+ * The same text, kept for 6 hours. Converting a file through Drive takes many
+ * seconds, and each new CV for a candidate reads the same file. The file's
+ * last-updated time is in the key, so a replaced CV is read afresh.
+ */
+function cachedFileText_(fileId) {
+  var cache = CacheService.getScriptCache();
+  var key = 'filetext:' + fileId + ':' + DriveApp.getFileById(fileId).getLastUpdated().getTime();
+  var saved = cache.get(key);
+  if (saved !== null) return saved;
+  var text = extractFileText_(fileId).slice(0, 40000);
+  try { cache.put(key, text, 21600); } catch (e) { /* too big to keep: read it again next time */ }
+  return text;
+}
+
 function extractFileText_(fileId) {
   var file = DriveApp.getFileById(fileId);
   var mime = file.getMimeType();
