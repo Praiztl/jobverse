@@ -15,7 +15,8 @@
  * it), and email if REPORT_EMAILS is set (best-effort, never blocks).
  */
 function reviewerAccuracyReport() {
-  var rows = readRows_('ReviewQueue').filter(function (r) { return r.Status === 'Decided'; });
+  // 'submitted' = it went out before anyone decided (a person pressed Submit in the tab): not a reviewer's verdict
+  var rows = readRows_('ReviewQueue').filter(function (r) { return r.Status === 'Decided' && r.Decision !== 'submitted'; });
   var byType = {};
 
   rows.forEach(function (r) {

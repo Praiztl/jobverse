@@ -667,7 +667,10 @@ function apiConfirmSubmission_(req) {
   updateRow_('Applications', app._row, {
     Status: 'Submitted', SubmittedAt: submittedAt, ConfirmationScreenshotURL: shotUrl
   });
-  logActivity_('extension', 'application_submitted', 'application', req.applicationId, app.Company);
+  logActivity_('extension', 'application_submitted', 'application', req.applicationId,
+    app.Company + (req.byPerson ? ' (Submit clicked by a person in the tab)' : ''));
+  // A person may have pressed Submit in the tab before anyone approved: the review is over either way
+  closeSubmissionReviews_(req.applicationId, req.byPerson ? 'person in tab' : 'extension', 'Submitted');
   app.SubmittedAt = submittedAt;
   // The submission is recorded either way - a follow-up hiccup mustn't make the caller think it wasn't
   try { createSubmissionFollowUp_(app); }
@@ -675,6 +678,20 @@ function apiConfirmSubmission_(req) {
   return { recorded: true, screenshotUrl: shotUrl };
 }
  
+/**
+ * The application went out without an approval (a person pressed Submit in the
+ * tab, or used Mark submitted): any Submission review still waiting for it is
+ * decided as 'submitted', so it leaves Ready to approve and the tab polling it
+ * stops waiting instead of submitting again.
+ */
+function closeSubmissionReviews_(applicationId, who, notes) {
+  var now = new Date();
+  readRows_('ReviewQueue', ['TaskID', 'Type', 'RefID', 'Status']).forEach(function (t) {
+    if (t.Type !== 'Submission' || t.RefID !== applicationId || t.Status !== 'Awaiting Human') return;
+    updateRow_('ReviewQueue', t._row, { Status: 'Decided', Decision: 'submitted', Notes: notes || '', Reviewer: who, DecidedAt: now });
+  });
+}
+
 /**
  * Logs an error on the application. It becomes Failed only while being filled or
  * waiting to submit: a late error must not undo a submission or a pending review,
@@ -1447,15 +1464,21 @@ function toEpochMs_(v) {
  * ACCOUNT_REVEAL_EMAILS - by default just the account that deployed the script.
  * Every reveal is logged.
  */
-function dashRevealAccountPassword(key, accountId) {
-  requireDashAccess_(key);
+/** The signed-in reviewer, if they may see or change site passwords (Config ACCOUNT_REVEAL_EMAILS); throws otherwise. */
+function requireRevealAccess_() {
   var viewer = String(Session.getActiveUser().getEmail() || '').toLowerCase();
   var allowed = (getConfig_('ACCOUNT_REVEAL_EMAILS') || Session.getEffectiveUser().getEmail())
     .split(',').map(function (s) { return s.trim().toLowerCase(); }).filter(Boolean);
   if (!viewer || allowed.indexOf(viewer) === -1) {
-    throw new Error('Only authorised reviewers can reveal passwords. Open the dashboard while signed in to an ' +
+    throw new Error('Only authorised reviewers can see or change site passwords. Open the dashboard while signed in to an ' +
       'authorised Google account (Config: ACCOUNT_REVEAL_EMAILS).');
   }
+  return viewer;
+}
+
+function dashRevealAccountPassword(key, accountId) {
+  requireDashAccess_(key);
+  var viewer = requireRevealAccess_();
   var acct = findRow_('PlatformAccounts', 'AccountID', accountId);
   if (!acct) throw new Error('Account not found');
   var pw = PropertiesService.getScriptProperties().getProperty(ACCOUNT_PW_PREFIX_ + accountId);
@@ -1465,6 +1488,28 @@ function dashRevealAccountPassword(key, accountId) {
   }
   logActivity_(viewer, 'account_password_revealed', 'account', accountId, acct.ATSDomain);
   return { site: acct.ATSDomain, email: acct.Email || '', password: pw || '(no password saved)' };
+}
+
+/**
+ * A person finished the site account themselves (signed up by hand, verified
+ * the email, solved the CAPTCHA...): marks it Created so the extension signs
+ * in with it instead of trying to sign up again. If they chose their own
+ * password, it replaces the saved one - otherwise the extension's next sign-in
+ * fails and it resets the password.
+ */
+function dashMarkAccountCreated(key, accountId, password) {
+  requireDashAccess_(key);
+  password = String(password || '');
+  var who = password ? requireRevealAccess_() : (Session.getActiveUser().getEmail() || 'reviewer');
+  var acct = findRow_('PlatformAccounts', 'AccountID', accountId);
+  if (!acct) throw new Error('Account not found');
+  if (password) PropertiesService.getScriptProperties().setProperty(ACCOUNT_PW_PREFIX_ + accountId, password);
+  updateRow_('PlatformAccounts', acct._row, {
+    Status: 'Created', UpdatedAt: new Date(),
+    Notes: 'Finished by hand by ' + who + (password ? ' (password updated)' : '')
+  });
+  logActivity_(who, 'platform_account_marked_created', 'candidate', acct.CandidateID, acct.ATSDomain);
+  return { updated: true };
 }
 
 /**
@@ -1797,10 +1842,12 @@ function dashMarkApplicationSubmitted(key, applicationId) {
   var app = findRow_('Applications', 'ApplicationID', applicationId);
   if (!app) throw new Error('Application not found');
   if (app.Status === 'Submitted') return { already: true };
+  var who = Session.getActiveUser().getEmail() || 'reviewer';
   var submittedAt = new Date();
   updateRow_('Applications', app._row, { Status: 'Submitted', SubmittedAt: submittedAt });
   app.SubmittedAt = submittedAt;
-  logActivity_(Session.getActiveUser().getEmail() || 'reviewer', 'application_marked_submitted', 'application', applicationId,
+  closeSubmissionReviews_(applicationId, who, 'Marked submitted by hand');
+  logActivity_(who, 'application_marked_submitted', 'application', applicationId,
     app.Company + ' (was ' + app.Status + ')');
   try { createSubmissionFollowUp_(app); }
   catch (e) { logActivity_('system', 'followup_error', 'application', applicationId, e.message); }

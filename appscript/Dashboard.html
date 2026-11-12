@@ -723,7 +723,8 @@ function appRowHtml(a){
   const ready = s.group === 'review';
   const revising = isRevising(a);
   // Failed includes an approved application the extension could not re-submit - it may have gone by hand
-  const canMark = s.stuck || s.unconfirmed || (s.approved && !s.stuck) || a.status === 'Failed' || a.status === 'Error';
+  // Ready too: a person may have finished the form and pressed the employer's Submit in the tab themselves
+  const canMark = ready || s.stuck || s.unconfirmed || (s.approved && !s.stuck) || a.status === 'Failed' || a.status === 'Error';
   const hint = s.stuck ? stuckReason(a) : s.unconfirmed ? 'Submit was clicked but no confirmation was seen. Check the employer\'s site or the candidate\'s inbox.'
     : /^Check Before Submit/.test(a.status) ? 'Not submitted yet: the last screenshot check before Submit found problems. The open tab lists them (bottom right) - fix them and press "check again", or "submit" if they are fine.'
     : /^Form Incomplete/.test(a.status) ? 'Not submitted: required fields were still empty or invalid. Finish them in the open tab (marked red) and it submits by itself. If the tab is gone, use Retry.'
@@ -745,7 +746,7 @@ function appRowHtml(a){
       ${ready || sentBack ? docStatusHtml(a) : ''}
       ${sub ? `<button class="linkbtn" style="margin-top:6px" onclick="toggleFindings('${sub.id}')" aria-expanded="${OPEN_FINDINGS.has(sub.id)}">${OPEN_FINDINGS.has(sub.id) ? 'Hide what was filled in' : 'What was filled in'}</button>` : ''}</td>
     <td class="mut">${esc(candName(a.cand))}</td>
-    <td>${appChip(a)}${rail(a.status)}${ready && a.needsPerson ? `<div class="err" style="max-width:360px"><b>${a.needsPerson} thing${a.needsPerson > 1 ? 's' : ''} the extension couldn't do</b> - see the red lines in What was filled in, and fix them in the waiting tab. It won't submit while required fields are empty.</div>` : ''}${hint ? `<div class="${s.group === 'attention' ? 'err' : 'mut'}" style="max-width:360px">${esc(hint)}</div>` : ''}
+    <td>${appChip(a)}${rail(a.status)}${ready && a.needsPerson ? `<div class="err" style="max-width:360px"><b>${a.needsPerson} thing${a.needsPerson > 1 ? 's' : ''} the extension couldn't do</b> - see the red lines in What was filled in, and fix them in the waiting tab, then press Approve &amp; submit here. If you press the site's own Submit instead, the extension records it when the employer confirms; if this row is still here afterwards, use Mark submitted.</div>` : ''}${hint ? `<div class="${s.group === 'attention' ? 'err' : 'mut'}" style="max-width:360px">${esc(hint)}</div>` : ''}
       ${a.outcome ? `<div style="margin-top:4px">${chip(a.outcome)}</div>` : ''}</td>
     <td class="mut nowrap" title="${a.createdMs ? esc(new Date(a.createdMs).toLocaleString('en-GB')) : ''}">${esc(shortDate(a.createdMs))}${a.submittedMs ? `<br>sent ${esc(shortDate(a.submittedMs))}` : ''}</td>
     <td>${a.shot ? `<a href="${esc(a.shot)}">screenshot</a>` : '<span class="mut">-</span>'}</td>
@@ -898,7 +899,9 @@ PAGES.accounts = () => {
     (accts.length ? accts.map(a => `<tr>
       <td><b>${esc(a.site)}</b></td><td class="mut">${esc(candName(a.cand))}</td><td>${esc(a.email)}</td>
       <td>${chip(a.status)}</td><td class="mut">${esc(a.notes || '')}</td>
-      <td><button class="btn ghost tiny" onclick="revealPassword('${esc(a.id)}')">Show password</button></td>
+      <td><div class="acts" style="justify-content:flex-end">
+        ${a.status !== 'Created' ? `<button class="btn ghost tiny" onclick="markAccountCreated('${esc(a.id)}')">Mark created</button>` : ''}
+        <button class="btn ghost tiny" onclick="revealPassword('${esc(a.id)}')">Show password</button></div></td>
     </tr>`).join('') : `<tr><td colspan="6">${emptyState('No site accounts yet', 'They appear when the extension meets a sign-up or sign-in page.')}</td></tr>`) +
     '</table></div></div>';
 };
@@ -1406,6 +1409,19 @@ async function clearLog(){
     body: 'Every entry in the ActivityLog sheet is removed. Candidates, applications and everything else stay as they are.' });
   if(!ok) return;
   rpc('dashClearActivityLog').then(() => { toast('Log cleared'); load(); }).catch(fail);
+}
+
+/* A person finished the sign-up by hand: Created, so the extension signs in instead of signing up again. */
+async function markAccountCreated(id){
+  const a = (D.accounts || []).find(x => x.id === id);
+  if(!a) return;
+  const pw = await dialog({ title: 'Mark the ' + a.site + ' account as created?', ok: 'Mark created',
+    body: `Do this once the account for <b>${esc(candName(a.cand))}</b> (login <b>${esc(a.email)}</b>) works on the site - signed up, email verified. ` +
+      'The extension will then sign in with it instead of trying to sign up again.<br><br>' +
+      'If you signed up with the password from <b>Show password</b>, leave the box empty. If you chose a different password, enter it so the extension can sign in.',
+    input: 'Password you used (only if different)', placeholder: 'Leave empty to keep the saved password' });
+  if(pw === null) return;
+  rpc('dashMarkAccountCreated', id, pw).then(() => { toast('Marked created'); load(); }).catch(fail);
 }
 
 function revealPassword(id){
