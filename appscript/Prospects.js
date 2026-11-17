@@ -397,8 +397,14 @@ function resolveToATS_(companyName, jobTitle, companyCache) {
   var slugs = companySlugCandidates_(companyName);
   var wantTitle = normaliseTitle_(jobTitle);
 
+  if (!wantTitle) return null;
+  var nameWords = String(companyName).trim().split(/\s+/).length;
+
   for (var i = 0; i < slugs.length; i++) {
     var slug = slugs[i];
+    // Just the first word of a longer name ("software" for Software Business Solutions) is usually
+    // another company's board, where the same common job title would send the candidate to the wrong employer
+    if (nameWords > 1 && i > 0 && slug.indexOf('-') < 0 && slugs.length > 2 && i === slugs.length - 1) continue;
     var cacheKey = slug;
     var jobs = companyCache[cacheKey];
     if (jobs === undefined) {
@@ -410,9 +416,10 @@ function resolveToATS_(companyName, jobTitle, companyCache) {
     // Exact-ish title match first, then loose contains match.
     var exact = jobs.find(function (j) { return normaliseTitle_(j.title) === wantTitle; });
     if (exact) return { url: exact.url, ats: exact.ats };
+    // A loose match needs titles of two words or more: "engineer" fits any engineering job
     var loose = jobs.find(function (j) {
       var t = normaliseTitle_(j.title);
-      return t.indexOf(wantTitle) > -1 || wantTitle.indexOf(t) > -1;
+      return t.split(' ').length >= 2 && wantTitle.split(' ').length >= 2 && (t.indexOf(wantTitle) > -1 || wantTitle.indexOf(t) > -1);
     });
     if (loose) return { url: loose.url, ats: loose.ats };
   }

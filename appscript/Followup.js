@@ -104,9 +104,7 @@ function sendDueFollowUpReminders() {
         ', due ' + Utilities.formatDate(new Date(f.DueDate), 'GMT', 'yyyy-MM-dd') + ')';
     }).join('\n') + '\n\nCheck the candidate\'s inbox for a reply from each employer, then record what happened ' +
       '(interview, offer, rejected, no reply) in the dashboard\'s Follow-ups tab. "No reply yet" pushes it back a week.';
-    emails.split(',').map(function (s) { return s.trim(); }).filter(Boolean).forEach(function (to) {
-      try { MailApp.sendEmail(to, '[Jobverse] ' + due.length + ' follow-up(s) due', body); } catch (ignored) {}
-    });
+    sendMailToList_(emails, '[Jobverse] ' + due.length + ' follow-up(s) due', body);
   }
   logActivity_('system', 'followup_reminders_sent', 'system', '-', due.length + ' due');
   return due.length + ' reminder(s) sent.';

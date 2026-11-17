@@ -191,16 +191,7 @@ function sendUserLink_(name, email, role, link) {
     'Bookmark it. The link signs you in, so do not share it - anyone with it can act as you. ' +
     'If it leaks, ask an admin for a new one and the old one stops working.\n\n' +
     'Jobverse';
-  var mime = [
-    'To: ' + email,
-    'Subject: =?UTF-8?B?' + Utilities.base64Encode(subject, Utilities.Charset.UTF_8) + '?=',
-    'MIME-Version: 1.0',
-    'Content-Type: text/plain; charset=UTF-8',
-    'Content-Transfer-Encoding: base64',
-    '',
-    Utilities.base64Encode(body, Utilities.Charset.UTF_8)
-  ].join('\r\n');
-  Gmail.Users.Messages.send({ raw: Utilities.base64EncodeWebSafe(mime, Utilities.Charset.UTF_8) }, 'me');
+  if (!sendMail_(email, subject, body)) throw new Error('Gmail would not send it - see the Activity log (email_failed)');
 }
 
 /* ------------------------------ dashboard RPC ------------------------------ */

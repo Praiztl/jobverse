@@ -251,9 +251,7 @@ function buildReport_(period, days) {
       '', 'By candidate:'].concat(m.candidates.map(function (c) {
         return '- ' + c.name + ': ' + c.submitted + ' submitted, ' + c.interviews + ' interviews, ' + c.offers + ' offers';
       })).concat(['', 'Any other period: the Reports page in the dashboard.', 'Full data: ' + SpreadsheetApp.getActiveSpreadsheet().getUrl()]).join('\n');
-    emails.split(',').forEach(function (to) {
-      if (to.trim()) try { MailApp.sendEmail(to.trim(), '[Jobverse] ' + period + ' report', body); } catch (ignored) {}
-    });
+    sendMailToList_(emails, '[Jobverse] ' + period + ' report', body);
   }
   logActivity_('system', 'report_generated', 'report', period, summary);
   return m;

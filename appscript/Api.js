@@ -2028,7 +2028,8 @@ function agentsByUser_(props) {
  * Retried ones have been re-queued as a fresh prospect (dashRetryApplication).
  */
 function countsAsApplication_(status) {
-  return status !== 'Failed' && status !== 'Retried';
+  // 'Error' is the older spelling of Failed (the console shows both as Failed): never sent either
+  return status !== 'Failed' && status !== 'Error' && status !== 'Retried';
 }
 
 /** A sheet date cell as yyyy-MM-dd in the script's time zone, or '' if blank/unreadable. */
@@ -2063,9 +2064,7 @@ function normaliseDomain_(urlOrDomain) {
 function notifyReviewers_(subject, body) {
   var emails = getConfig_('REPORT_EMAILS');
   if (!emails) return;
-  emails.split(',').map(function (s) { return s.trim(); }).filter(Boolean).forEach(function (to) {
-    try { MailApp.sendEmail(to, '[Jobverse] ' + subject, body); } catch (ignored) {}
-  });
+  sendMailToList_(emails, '[Jobverse] ' + subject, body);
 }
  
 

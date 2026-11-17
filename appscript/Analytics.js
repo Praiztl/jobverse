@@ -77,13 +77,7 @@ function reviewerAccuracyReport() {
   // report from completing.
   var emails = getConfig_('REPORT_EMAILS');
   if (emails) {
-    emails.split(',').map(function (s) { return s.trim(); }).filter(Boolean).forEach(function (to) {
-      try {
-        MailApp.sendEmail(to, '[Jobverse] Reviewer Agent accuracy report', report);
-      } catch (err) {
-        Logger.log('Could not email report to ' + to + ': ' + err.message);
-      }
-    });
+    sendMailToList_(emails, '[Jobverse] Reviewer Agent accuracy report', report);
   }
   return report;
 }

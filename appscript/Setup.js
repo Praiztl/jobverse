@@ -265,6 +265,39 @@ function setConfig_(key, value) {
   sh.appendRow([key, value, '']);
 }
 
+/**
+ * Sends a plain-text email from the deploying account through the Gmail API.
+ * MailApp needs the script.send_mail permission, which appsscript.json doesn't
+ * list, so every MailApp call failed - and was silently ignored. Failures are
+ * logged here instead of swallowed. Returns true when it was sent.
+ */
+function sendMail_(to, subject, body) {
+  to = String(to || '').trim();
+  if (!to) return false;
+  try {
+    var mime = [
+      'To: ' + to,
+      'Subject: =?UTF-8?B?' + Utilities.base64Encode(subject, Utilities.Charset.UTF_8) + '?=',
+      'MIME-Version: 1.0',
+      'Content-Type: text/plain; charset=UTF-8',
+      'Content-Transfer-Encoding: base64',
+      '',
+      Utilities.base64Encode(body, Utilities.Charset.UTF_8)
+    ].join('\r\n');
+    Gmail.Users.Messages.send({ raw: Utilities.base64EncodeWebSafe(mime, Utilities.Charset.UTF_8) }, 'me');
+    return true;
+  } catch (e) {
+    try { logActivity_('system', 'email_failed', 'email', to, subject + ': ' + e.message); } catch (ignored) {}
+    return false;
+  }
+}
+
+/** The same email to each address in a comma-separated list. Returns how many went. */
+function sendMailToList_(list, subject, body) {
+  return String(list || '').split(',').map(function (s) { return s.trim(); }).filter(Boolean)
+    .filter(function (to) { return sendMail_(to, subject, body); }).length;
+}
+
 function newId_(prefix) {
   return prefix + '-' + Utilities.formatDate(new Date(), 'GMT', 'yyMMdd') + '-' +
     Math.random().toString(36).slice(2, 8).toUpperCase();
