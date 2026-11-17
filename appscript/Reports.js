@@ -48,7 +48,9 @@ function reportJobs_(apps) {
     var key = a.CandidateID + '|' + (prospectJobKey_(a.Company, a.JobTitle) || normaliseJobKey_(a.JobURL, a.Company, a.JobTitle));
     var job = jobs[key] || (jobs[key] = { candidateId: a.CandidateID, startedMs: toEpochMs_(a.CreatedAt), latest: a, sent: null });
     if (a.Status !== 'Retried') job.latest = a;
-    if (a.Status === 'Submitted') job.sent = a;
+    // SubmittedAt is only ever written when the employer got it, so it counts even if the
+    // status was later overwritten (a page after the submission re-requesting review, a late decision)
+    if (a.Status === 'Submitted' || toEpochMs_(a.SubmittedAt)) job.sent = a;
   });
   return Object.keys(jobs).map(function (k) { return jobs[k]; });
 }
@@ -72,6 +74,7 @@ function personCause_(item) {
 /** Why a job stopped before reaching a filled form. */
 function stoppedCause_(note) {
   var n = String(note || '');
+  if (/^apply by email/i.test(n)) return 'Applies by email - send it by hand';
   if (/captcha|security check/i.test(n)) return 'CAPTCHA or security check';
   if (/account|sign.?(in|up)|log.?in|password|verif/i.test(n)) return 'Account or sign-in';
   if (/vpn|country|region/i.test(n)) return 'Blocked by location';

@@ -9,40 +9,43 @@
  * The deployment has to stay "Anyone, even anonymous" so the extension and
  * worker can POST without a Google login, which means anyone holding the
  * /exec URL can GET it too. The dashboard is therefore only served to a
- * signed-in account listed in DASHBOARD_EMAILS (default: the deploying
- * account) or with ?key=<DASHBOARD_KEY>, and every dash* RPC re-checks the
- * key. Everything else server-side is private (trailing underscore), so
- * google.script.run can't reach it.
+ * known person (Users.gs): their personal ?key= link, the deploying account,
+ * or the old shared DASHBOARD_KEY link (as the Owner). Every dash* RPC
+ * re-checks the key and the person's role. Everything else server-side is
+ * private (trailing underscore), so google.script.run can't reach it.
  */
 
 function doGet(e) {
   var key = (e && e.parameter && e.parameter.key) || '';
-  if (!dashAccessAllowed_(key)) {
+  var user = dashUser_(key);
+  if (!user) {
     // Plain text, not HtmlService: an HtmlService page would carry google.script.run
-    return ContentService.createTextOutput('Access denied. Open the Jobverse Console with its ?key= link, ' +
-      'or while signed in to an authorised Google account.');
+    return ContentService.createTextOutput('Access denied. Open the Jobverse Console with your personal sign-in link ' +
+      '(ask an admin for a new one if it stopped working).');
   }
+  try { noteUserSeen_(user); } catch (ignored) {}
   var t = HtmlService.createTemplateFromFile('Dashboard');
   t.dashKey = key;
+  t.me = { id: user.id, name: user.name, email: user.email, role: user.role, perms: ROLE_PERMS_[user.role] || [] };
   return t.evaluate()
     .setTitle('Jobverse Console')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
 }
 
-/** True for the dashboard key, or a signed-in account in DASHBOARD_EMAILS (default: the deployer). */
-function dashAccessAllowed_(key) {
-  var expected = getConfig_('DASHBOARD_KEY');
-  if (expected && key && key === expected) return true;
-  var viewer = String(Session.getActiveUser().getEmail() || '').toLowerCase();
-  if (!viewer) return false;
-  var allowed = (getConfig_('DASHBOARD_EMAILS') || Session.getEffectiveUser().getEmail())
-    .split(',').map(function (s) { return s.trim().toLowerCase(); }).filter(Boolean);
-  return allowed.indexOf(viewer) > -1;
-}
-
-/** First line of every dash* RPC: google.script.run calls are reachable by anyone who has the page. */
-function requireDashAccess_(key) {
-  if (!dashAccessAllowed_(key)) throw new Error('Access denied - reopen the Jobverse Console with its ?key= link.');
+/**
+ * First line of every dash* RPC: google.script.run calls are reachable by anyone
+ * who has the page. perm: 'view' (default), 'work' or 'admin' - see ROLE_PERMS_.
+ * Returns the person, who is also what the log records (dashActor_).
+ */
+function requireDashAccess_(key, perm) {
+  var user = dashUser_(key);
+  if (!user) throw new Error('Access denied - reopen the Jobverse Console with your personal sign-in link.');
+  if (!userCan_(user, perm || 'view')) {
+    throw new Error('Your role (' + user.role + ') cannot do this' +
+      (perm === 'admin' ? ' - only an Admin can.' : ' - ask an Admin to change your role.'));
+  }
+  DASH_USER_ = user;
+  return user;
 }
 
 function doPost(e) {
@@ -51,6 +54,7 @@ function doPost(e) {
     var req = JSON.parse(e.postData.contents);
     var token = getConfig_('API_TOKEN');
     if (!token || req.token !== token) throw new Error('Unauthorised');
+    setCaller_(req.userKey, req.ext);
     var handlers = {
       listCandidates: apiListCandidates_,
       getCandidatePayload: apiGetCandidatePayload_,
@@ -87,7 +91,8 @@ function doPost(e) {
       updatePlatformAccount: apiUpdatePlatformAccount_,
       findAccountEmail: apiFindAccountEmail_,
       exportDocumentPdf: apiExportDocumentPdf_,
-      listApplicationsByStatus: apiListApplicationsByStatus_
+      listApplicationsByStatus: apiListApplicationsByStatus_,
+      whoAmI: apiWhoAmI_
     };
     if (!handlers[req.action]) throw new Error('Unknown action: ' + req.action);
     out = { ok: true, data: handlers[req.action](req) };
@@ -287,7 +292,9 @@ function startApplicationLocked_(req) {
   if (todayCount >= limit) return { throttled: true, limit: limit };
 
   var appId = newId_('APP');
+  ensureColumns_('Applications', ['Owner']);
   appendObject_('Applications', {
+    Owner: callerId_(),
     ApplicationID: appId, CreatedAt: new Date(), CandidateID: req.candidateId,
     JobID: req.jobId || '', Company: req.company || '', JobTitle: req.jobTitle || '',
     JobURL: req.jobUrl || '', ATS: req.ats || '', Status: 'In Progress', DedupeHash: hash
@@ -477,7 +484,9 @@ function apiVisualCheck_(req) {
     '\n\nList only real problems a careful person would fix before submitting: required questions (marked * or "required") left ' +
     'unanswered; fields showing an error or warning message; dropdowns still on a placeholder like "Select..."; required consent ' +
     'boxes not ticked; values that are wrong for this candidate (a phone country code that does not match their number or country, ' +
-    'a name or email that is not theirs, an answer that contradicts their profile). Ignore optional fields left blank, ' +
+    'a name or email that is not theirs, an answer that contradicts their profile). A question is required ONLY when the page ' +
+    'marks it (an asterisk *, the word "required", or an error saying it is needed). Anything labelled "optional", "if applicable" ' +
+    'or with no required marker is optional: never list it just for being blank, and never call it required. Ignore optional fields left blank, ' +
     'coloured highlight boxes and outlines (the bot adds those), and anything outside the form. If you cannot tell, do not list it. ' +
     'Return JSON: {"issues": [{"field": "the question or field as shown on the page", "problem": "what is wrong, in a short sentence"}]} ' +
     '- an empty list when the form looks complete and correct.' });
@@ -513,10 +522,15 @@ function apiChooseNextStep_(req) {
     'link the instructions point to IS the way to apply, whatever its own text says. Pages may be in any language (e.g. German "Jetzt bewerben", "Weiter", "Registrieren"). ' +
     'If the page says the job is closed or expired, answer "closed". If the page still looks like it is ' +
     'loading (spinner, "Loading...", skeleton placeholders, almost no text or elements) answer "wait". ' +
-    'A site requiring an account or sign-in is NEVER a reason to answer "human". Answer "human" only ' +
+    'A site requiring an account or sign-in is NEVER a reason to answer "human". If the current page IS itself a ' +
+    'sign-up, registration, "create account" or sign-in form (boxes for name/email/password and a Create account / ' +
+    'Sign up / Register / Sign in button), answer "account" - the browser fills and submits it. But when the job post tells ' +
+    'applicants to apply by EMAIL (e.g. "send your CV and cover letter to jobs@acme.com", "apply by email") and no link ' +
+    'leads to an employer application form, answer "human" with a reason starting "Apply by email:" and the address - ' +
+    'never choose the job board\'s Apply/Sign up/Register button then, as it only creates a job-board account. Answer "human" only ' +
     'for things the browser cannot do (payment, identity documents, an assessment to sit) or when no ' +
     'element plausibly leads towards the application. ' +
-    'Return JSON: {"action": "click|closed|wait|human", "index": number|null, "reason": "short string"}',
+    'Return JSON: {"action": "click|closed|wait|account|human", "index": number|null, "reason": "short string"}',
     'TARGET JOB: ' + (req.jobTitle || 'unknown') + ' at ' + (req.company || 'unknown') +
     '\nCURRENT URL: ' + (req.url || '') +
     '\nPAGE TITLE: ' + (req.title || '') +
@@ -529,13 +543,17 @@ function apiChooseNextStep_(req) {
   );
   saveAIOutput_('NextStepChooser', req.candidateId || '', '', { url: req.url, candidates: candidates, decision: decision });
 
-  var action = ['click', 'closed', 'wait', 'human'].indexOf(decision.action) > -1 ? decision.action : 'human';
+  var action = ['click', 'closed', 'wait', 'account', 'human'].indexOf(decision.action) > -1 ? decision.action : 'human';
   var index = action === 'click' ? Number(decision.index) : null;
   if (action === 'click' && !candidates.some(function (c) { return c.index === index; })) action = 'human';
   return { action: action, index: action === 'click' ? index : null, reason: decision.reason || '' };
 }
 
 function apiRequestReview_(req) {
+  // A page after the submission (a confirmation with a job-alert form, say) must not put a
+  // sent application back to "Awaiting Review" - that took it out of the Submitted count
+  var sent = req.applicationId ? findRow_('Applications', 'ApplicationID', req.applicationId, ['Status']) : null;
+  if (sent && sent.Status === 'Submitted') return { taskId: '', alreadySubmitted: true };
   var taskId = newId_('REV');
   ensureColumns_('ReviewQueue', ['Answers', 'PersonReasons']);
   appendObject_('ReviewQueue', {
@@ -616,8 +634,10 @@ function apiClaimSubmission_(req) {
   lock.waitLock(20000);
   try {
     ensureColumns_('Applications', ['SubmitClaimedBy', 'SubmitClaimedAt']);
-    var app = findRow_('Applications', 'ApplicationID', req.applicationId, ['Status', 'SubmitClaimedBy']);
+    ensureColumns_('Applications', ['Owner']);
+    var app = findRow_('Applications', 'ApplicationID', req.applicationId, ['Status', 'SubmitClaimedBy', 'Owner']);
     if (!app) throw new Error('Application not found');
+    if (!ownedByCaller_(app.Owner)) return { claimed: false, by: 'owner', owner: app.Owner };
     if (!/^Approved - /.test(String(app.Status))) return { claimed: false, status: app.Status };
     if (app.SubmitClaimedBy && app.SubmitClaimedBy !== req.deviceId) return { claimed: false, by: app.SubmitClaimedBy };
     if (!app.SubmitClaimedBy) {
@@ -655,13 +675,19 @@ function apiConfirmSubmission_(req) {
   // The tab and the page-load check can both report it, and a failed report is sent again
   if (app.Status === 'Submitted') return { recorded: true, already: true, screenshotUrl: app.ConfirmationScreenshotURL || '' };
  
+  // The screenshot is a nice-to-have: a Drive problem (folder renamed or missing, quota) must never
+  // stop the submission being recorded, or it never reaches Submitted and the Reports
   var shotUrl = '';
   if (req.screenshotBase64) {
-    var blob = Utilities.newBlob(Utilities.base64Decode(req.screenshotBase64), 'image/png',
-      req.applicationId + '-confirmation.png');
-    var f = DriveApp.getFolderById(getConfig_('ROOT_FOLDER_ID'))
-      .getFoldersByName('Screenshots').next().createFile(blob);
-    shotUrl = f.getUrl();
+    try {
+      var blob = Utilities.newBlob(Utilities.base64Decode(req.screenshotBase64), 'image/png',
+        req.applicationId + '-confirmation.png');
+      var root = DriveApp.getFolderById(getConfig_('ROOT_FOLDER_ID'));
+      var shots = root.getFoldersByName('Screenshots');
+      shotUrl = (shots.hasNext() ? shots.next() : root.createFolder('Screenshots')).createFile(blob).getUrl();
+    } catch (e) {
+      logActivity_('system', 'screenshot_error', 'application', req.applicationId, e.message);
+    }
   }
   var submittedAt = new Date();
   updateRow_('Applications', app._row, {
@@ -715,8 +741,11 @@ function apiReportError_(req) {
  * this had nothing to give the worker until now.
  */
 function apiListProspects_(req) {
-  return readRows_('Prospects', ['ProspectID', 'CandidateID', 'Status', 'JobURL', 'Company', 'JobTitle'])
-    .filter(function (p) { return p.CandidateID === req.candidateId && (!req.status || p.Status === req.status); })
+  return readRows_('Prospects', ['ProspectID', 'CandidateID', 'Status', 'JobURL', 'Company', 'JobTitle', 'QueuedBy'])
+    .filter(function (p) {
+      return p.CandidateID === req.candidateId && (!req.status || p.Status === req.status) &&
+        (p.Status !== 'Queued' || ownedByCaller_(p.QueuedBy));
+    })
     .map(function (p) {
       return { id: p.ProspectID, url: p.JobURL, company: p.Company, title: p.JobTitle, ats: detectATSName_(p.JobURL) };
     });
@@ -759,6 +788,7 @@ function apiClaimProspect_(req) {
     var p = findRow_('Prospects', 'ProspectID', req.prospectId);
     if (!p) throw new Error('Prospect not found');
     if (p.Status !== 'Queued') return { claimed: false, status: p.Status };
+    if (!ownedByCaller_(p.QueuedBy)) return { claimed: false, status: 'Queued by someone else' };
     updateRow_('Prospects', p._row, { Status: CLAIMED_STATUS_, ClaimedAt: new Date(), ClaimedBy: req.deviceId || 'extension' });
     return { claimed: true };
   } finally {
@@ -775,8 +805,8 @@ function apiClaimProspect_(req) {
 function apiNextQueuedProspect_(req) {
   noteAgentSeen_('autorun');
   // Most checks find nothing to do: answer those without queueing for the lock every Chrome shares
-  var anything = readRows_('Prospects', ['Status', 'ClaimedAt']).some(function (p) {
-    return p.Status === 'Queued' ||
+  var anything = readRows_('Prospects', ['Status', 'ClaimedAt', 'QueuedBy']).some(function (p) {
+    return (p.Status === 'Queued' && ownedByCaller_(p.QueuedBy)) ||
       (p.Status === CLAIMED_STATUS_ && p.ClaimedAt && Date.now() - toEpochMs_(p.ClaimedAt) > CLAIM_STALE_MS_);
   });
   if (!anything) return { prospect: null, remaining: 0 };
@@ -784,7 +814,7 @@ function apiNextQueuedProspect_(req) {
   lock.waitLock(20000);
   try {
     ensureColumns_('Prospects', ['ClaimedAt', 'ClaimedBy']);
-    var prospects = readRows_('Prospects', ['ProspectID', 'CandidateID', 'Status', 'JobURL', 'Company', 'JobTitle', 'ClaimedAt']);
+    var prospects = readRows_('Prospects', ['ProspectID', 'CandidateID', 'Status', 'JobURL', 'Company', 'JobTitle', 'ClaimedAt', 'QueuedBy']);
 
     var stale = prospects.filter(function (p) {
       return p.Status === CLAIMED_STATUS_ && p.ClaimedAt && Date.now() - toEpochMs_(p.ClaimedAt) > CLAIM_STALE_MS_;
@@ -795,7 +825,8 @@ function apiNextQueuedProspect_(req) {
       logActivity_('system', 'prospects_reclaimed', 'prospect', '-', stale.length + ' unfinished claim(s) put back in the queue');
     }
 
-    var queued = prospects.filter(function (p) { return p.Status === 'Queued'; });
+    // Each person's Chrome runs only the jobs they queued; jobs from before queues had owners go to anyone
+    var queued = prospects.filter(function (p) { return p.Status === 'Queued' && ownedByCaller_(p.QueuedBy); });
     if (!queued.length) return { prospect: null, remaining: 0 };
     // Jobs this run already put back, e.g. waiting on an open tab, mustn't hold up the rest of the queue
     var exclude = req.exclude || [];
@@ -1169,10 +1200,12 @@ function apiListApplicationsByStatus_(req) {
   // The worker is retired: anything still approved for it is the extension's to submit now
   var wanted = req.status === 'Approved - Extension' ? ['Approved - Extension', 'Approved - Submitting'] : [req.status];
   // Every open Chrome asks this every two minutes, and usually nothing matches: stop after one read
-  var rows = readRows_('Applications', ['ApplicationID', 'CandidateID', 'JobID', 'Company', 'JobTitle', 'JobURL', 'ATS', 'Status', 'SubmitClaimedBy', 'CreatedAt', 'NeedsPerson']);
+  var rows = readRows_('Applications', ['ApplicationID', 'CandidateID', 'JobID', 'Company', 'JobTitle', 'JobURL', 'ATS', 'Status', 'SubmitClaimedBy', 'CreatedAt', 'NeedsPerson', 'Owner', 'SubmitRetryAt']);
   if (req.status === 'Approved - Extension') failAbandonedApplications_(rows);
   var apps = rows
-    .filter(function (a) { return wanted.indexOf(a.Status) > -1 && (!req.candidateId || a.CandidateID === req.candidateId); });
+    .filter(function (a) {
+      return wanted.indexOf(a.Status) > -1 && (!req.candidateId || a.CandidateID === req.candidateId) && ownedByCaller_(a.Owner);
+    });
   if (!apps.length) return [];
 
   var docs = latestDocsByJob_(), taskByApp = {}, approvedAt = {};
@@ -1185,7 +1218,8 @@ function apiListApplicationsByStatus_(req) {
       id: a.ApplicationID, candidateId: a.CandidateID, jobId: a.JobID, company: a.Company,
       title: a.JobTitle, url: a.JobURL, ats: a.ATS, status: a.Status, submitClaimedBy: a.SubmitClaimedBy || '',
       cvUrl: docs.cv[a.JobID] || '', letterUrl: docs.letter[a.JobID] || '', taskId: taskByApp[a.ApplicationID] || '',
-      approvedMs: approvedAt[a.ApplicationID] || 0, needsPerson: Number(a.NeedsPerson) || 0
+      approvedMs: approvedAt[a.ApplicationID] || 0, needsPerson: Number(a.NeedsPerson) || 0,
+      retryMs: toEpochMs_(a.SubmitRetryAt) // "Retry submit" pressed: a fresh automatic attempt
     };
   });
 }
@@ -1235,7 +1269,7 @@ function buildDashData_() {
   // Only the columns the dashboard shows - Candidates.AIProfileJSON and
   // ReviewQueue.AIFindings alone can be tens of KB per row.
   var apps = readRows_('Applications', ['ApplicationID', 'CandidateID', 'JobID', 'Company', 'JobTitle', 'ATS', 'Status',
-    'JobURL', 'CreatedAt', 'SubmittedAt', 'ConfirmationScreenshotURL', 'Outcome', 'FilledBy', 'ErrorLog', 'NeedsPerson']);
+    'JobURL', 'CreatedAt', 'SubmittedAt', 'ConfirmationScreenshotURL', 'Outcome', 'FilledBy', 'ErrorLog', 'NeedsPerson', 'Owner']);
   var countByCand = {};
   apps.forEach(function (a) {
     if (countsAsApplication_(a.Status)) countByCand[a.CandidateID] = (countByCand[a.CandidateID] || 0) + 1;
@@ -1269,7 +1303,7 @@ function buildDashData_() {
     applications: apps.map(function (a) {
       var errors = String(a.ErrorLog || '').trim().split('\n');
       return { id: a.ApplicationID, cand: a.CandidateID, jobId: a.JobID, company: a.Company, title: a.JobTitle,
-               ats: a.ATS, status: a.Status, url: a.JobURL, submitted: String(a.SubmittedAt || ''),
+               ats: a.ATS, status: a.Status, url: a.JobURL, submitted: String(a.SubmittedAt || ''), owner: String(a.Owner || ''),
                shot: a.ConfirmationScreenshotURL, outcome: a.Outcome, filledBy: a.FilledBy || '',
                createdMs: toEpochMs_(a.CreatedAt), submittedMs: toEpochMs_(a.SubmittedAt),
                approvedMs: approvedAt[a.ApplicationID] || 0,
@@ -1284,12 +1318,16 @@ function buildDashData_() {
       extension: Number(props.getProperty(AGENT_SEEN_PREFIX_ + 'extension') || 0),
       autorun: Number(props.getProperty(AGENT_SEEN_PREFIX_ + 'autorun') || 0)
     },
+    agentsByUser: agentsByUser_(props),
+    extensionVersion: CURRENT_EXTENSION_VERSION_,
+    people: peopleNames_(),
     reviews: awaitingReviews_(docs, reviewRows),
     revisions: documentRevisions_(reviewRows),
     prospects: readRows_('Prospects', ['ProspectID', 'CandidateID', 'Company', 'JobTitle', 'JobURL', 'Status',
-      'Source', 'FoundAt', 'ClaimedAt']).map(function (p) {
+      'Source', 'FoundAt', 'ClaimedAt', 'QueuedBy', 'QueuedAt', 'Notes']).map(function (p) {
       return { id: p.ProspectID, cand: p.CandidateID, company: p.Company, title: p.JobTitle,
-               url: p.JobURL, status: p.Status, source: p.Source, found: toEpochMs_(p.FoundAt),
+               url: p.JobURL, status: p.Status, source: p.Source, found: toEpochMs_(p.FoundAt), queuedBy: String(p.QueuedBy || ''),
+               queuedAt: toEpochMs_(p.QueuedAt), notes: String(p.Notes || '').slice(0, 200),
                claimed: p.ClaimedAt ? toEpochMs_(p.ClaimedAt) : 0 };
     }),
     log: recentActivity_(60),
@@ -1458,27 +1496,13 @@ function toEpochMs_(v) {
 }
 
 /**
- * Shows a saved site password so a reviewer can log in by hand (e.g. to click
- * an email-verification link and finish an account). The web app is reachable
- * anonymously, so this only answers signed-in Google accounts listed in Config
- * ACCOUNT_REVEAL_EMAILS - by default just the account that deployed the script.
- * Every reveal is logged.
+ * Shows a saved site password so a person can log in by hand (e.g. to click
+ * an email-verification link and finish an account). Admins only, and every
+ * reveal is logged with who did it.
  */
-/** The signed-in reviewer, if they may see or change site passwords (Config ACCOUNT_REVEAL_EMAILS); throws otherwise. */
-function requireRevealAccess_() {
-  var viewer = String(Session.getActiveUser().getEmail() || '').toLowerCase();
-  var allowed = (getConfig_('ACCOUNT_REVEAL_EMAILS') || Session.getEffectiveUser().getEmail())
-    .split(',').map(function (s) { return s.trim().toLowerCase(); }).filter(Boolean);
-  if (!viewer || allowed.indexOf(viewer) === -1) {
-    throw new Error('Only authorised reviewers can see or change site passwords. Open the dashboard while signed in to an ' +
-      'authorised Google account (Config: ACCOUNT_REVEAL_EMAILS).');
-  }
-  return viewer;
-}
-
 function dashRevealAccountPassword(key, accountId) {
-  requireDashAccess_(key);
-  var viewer = requireRevealAccess_();
+  requireDashAccess_(key, 'admin');
+  var viewer = dashActor_();
   var acct = findRow_('PlatformAccounts', 'AccountID', accountId);
   if (!acct) throw new Error('Account not found');
   var pw = PropertiesService.getScriptProperties().getProperty(ACCOUNT_PW_PREFIX_ + accountId);
@@ -1498,9 +1522,9 @@ function dashRevealAccountPassword(key, accountId) {
  * fails and it resets the password.
  */
 function dashMarkAccountCreated(key, accountId, password) {
-  requireDashAccess_(key);
   password = String(password || '');
-  var who = password ? requireRevealAccess_() : (Session.getActiveUser().getEmail() || 'reviewer');
+  requireDashAccess_(key, password ? 'admin' : 'work'); // setting a password is a password change: admins only
+  var who = dashActor_();
   var acct = findRow_('PlatformAccounts', 'AccountID', accountId);
   if (!acct) throw new Error('Account not found');
   if (password) PropertiesService.getScriptProperties().setProperty(ACCOUNT_PW_PREFIX_ + accountId, password);
@@ -1522,12 +1546,12 @@ function dashMarkAccountCreated(key, accountId, password) {
  * found is logged.
  */
 function dashDecideApplication(key, applicationId, decision, notes) {
-  requireDashAccess_(key);
+  requireDashAccess_(key, 'work');
   decision = decision === 'approve' ? 'approve' : 'revise';
   var app = findRow_('Applications', 'ApplicationID', applicationId);
   if (!app) throw new Error('Application not found');
   if (app.Status !== 'Awaiting Review') return { already: true, status: app.Status };
-  var who = Session.getActiveUser().getEmail();
+  var who = dashActor_();
 
   var rows = readRows_('ReviewQueue', ['TaskID', 'Type', 'JobID', 'RefID', 'Status', 'Decision', 'RevisedAs']);
   // Approving now would send the version being replaced
@@ -1569,17 +1593,18 @@ function dashDecideApplication(key, applicationId, decision, notes) {
  *    can be re-queued from Applications with Retry.
  */
 function dashDecide(key, taskId, decision, notes) {
-  requireDashAccess_(key);
+  requireDashAccess_(key, 'work');
   var t = findRow_('ReviewQueue', 'TaskID', taskId);
   if (!t) throw new Error('Task not found');
   // A double click or a second reviewer: the first decision stands
   if (t.Status !== 'Awaiting Human') return { already: true, decision: t.Decision };
-  var who = Session.getActiveUser().getEmail();
+  var who = dashActor_();
   // Application first: a waiting tab acts the moment the review says Decided, and its claim needs Approved
   if (t.Type === 'Submission') {
     // The extension submits every approved application: the tab that filled it, or a fresh one
     var app = findRow_('Applications', 'ApplicationID', t.RefID);
-    if (app) updateRow_('Applications', app._row, { Status: decision !== 'approve' ? 'Rejected' : 'Approved - Extension' });
+    // Already sent (a person pressed the site's Submit): a late decision must not undo that
+    if (app && app.Status !== 'Submitted') updateRow_('Applications', app._row, { Status: decision !== 'approve' ? 'Rejected' : 'Approved - Extension' });
   }
   updateRow_('ReviewQueue', t._row, {
     Status: 'Decided', Decision: decision, Notes: notes || '',
@@ -1607,10 +1632,10 @@ function dashDecide(key, taskId, decision, notes) {
  * the Reviewer Agent's own findings are the brief.
  */
 function dashReviseDocument(key, applicationId, kind, notes, keywords) {
-  requireDashAccess_(key);
+  requireDashAccess_(key, 'work');
   var type = kind === 'letter' ? 'CoverLetter' : 'CV';
   var docTab = REVISABLE_DOCS_[type];
-  var who = Session.getActiveUser().getEmail();
+  var who = dashActor_();
   notes = String(notes || '').trim();
   keywords = String(keywords || '').trim();
   var brief = [notes, keywords ? 'Keywords to add - the reviewer confirms these are true of the candidate, so use each one exactly as ' +
@@ -1660,7 +1685,7 @@ function dashReviseDocument(key, applicationId, kind, notes, keywords) {
 
 /** Tries a failed rewrite again, with the same request. */
 function dashRetryRevision(key, taskId) {
-  requireDashAccess_(key);
+  requireDashAccess_(key, 'work');
   var lock = LockService.getScriptLock();
   lock.waitLock(20000);
   try {
@@ -1684,7 +1709,7 @@ function finishRevision_(taskId) {
 }
 
 function dashGenerate(key, candidateId, jdText, jobUrl, tone) {
-  requireDashAccess_(key);
+  requireDashAccess_(key, 'work');
   var jobId = runJobAnalyst_(candidateId, jobUrl || '', jdText, '');
   var cvId = runResumeBuilder_(candidateId, jobId, tone);
   var clId = runCoverLetterBuilder_(candidateId, jobId, tone);
@@ -1694,54 +1719,59 @@ function dashGenerate(key, candidateId, jdText, jobUrl, tone) {
 }
  
 function dashFindProspects(key, candidateId) {
-  requireDashAccess_(key);
+  requireDashAccess_(key, 'work');
   return findProspectsForCandidate_(candidateId);
 }
  
 function dashSetProspectStatus(key, prospectId, status) {
-  requireDashAccess_(key);
+  requireDashAccess_(key, 'work');
   var p = findRow_('Prospects', 'ProspectID', prospectId);
   if (!p) throw new Error('Prospect not found');
   // The page may be a few seconds old: a job another computer has just taken stays with it
   var running = /^In Review - /.test(p.Status) ||
     (p.Status === CLAIMED_STATUS_ && p.ClaimedAt && Date.now() - toEpochMs_(p.ClaimedAt) <= CLAIM_STALE_MS_);
   if (status === 'Queued' && running) return { already: true, status: p.Status };
-  updateRow_('Prospects', p._row, { Status: status });
-  logActivity_(Session.getActiveUser().getEmail() || 'reviewer', 'prospect_' + status, 'prospect', prospectId, '');
+  var patch = { Status: status };
+  if (status === 'Queued') {
+    ensureColumns_('Prospects', ['QueuedBy', 'QueuedAt']);
+    patch.QueuedBy = DASH_USER_.id; patch.QueuedAt = new Date();
+  }
+  updateRow_('Prospects', p._row, patch);
+  logActivity_(dashActor_(), 'prospect_' + status, 'prospect', prospectId, '');
   return true;
 }
  
 function dashSetCandidateActive(key, candidateId, active) {
-  requireDashAccess_(key);
+  requireDashAccess_(key, 'work');
   var c = findRow_('Candidates', 'CandidateID', candidateId);
   if (!c) throw new Error('Candidate not found');
   updateRow_('Candidates', c._row, { Active: active ? 'TRUE' : 'FALSE' });
-  logActivity_(Session.getActiveUser().getEmail() || 'reviewer', active ? 'candidate_activated' : 'candidate_deactivated', 'candidate', candidateId, '');
+  logActivity_(dashActor_(), active ? 'candidate_activated' : 'candidate_deactivated', 'candidate', candidateId, '');
   return true;
 }
  
 function dashSetCandidateTarget(key, candidateId, target) {
-  requireDashAccess_(key);
+  requireDashAccess_(key, 'work');
   var c = findRow_('Candidates', 'CandidateID', candidateId);
   if (!c) throw new Error('Candidate not found');
   var n = parseInt(target, 10);
   if (isNaN(n) || n < 0) throw new Error('Target must be a non-negative number');
   updateRow_('Candidates', c._row, { TargetApplications: n });
-  logActivity_(Session.getActiveUser().getEmail() || 'reviewer', 'candidate_target_set', 'candidate', candidateId, String(n));
+  logActivity_(dashActor_(), 'candidate_target_set', 'candidate', candidateId, String(n));
   return true;
 }
  
 function dashMarkFollowUpDone(key, followUpId) {
-  requireDashAccess_(key);
+  requireDashAccess_(key, 'work');
   var f = findRow_('FollowUps', 'FollowUpID', followUpId);
   if (!f) throw new Error('Follow-up not found');
   updateRow_('FollowUps', f._row, { Status: 'Done' });
-  logActivity_(Session.getActiveUser().getEmail() || 'reviewer', 'followup_done', 'followup', followUpId, '');
+  logActivity_(dashActor_(), 'followup_done', 'followup', followUpId, '');
   return true;
 }
  
 function dashDeleteCandidate(key, candidateId) {
-  requireDashAccess_(key);
+  requireDashAccess_(key, 'admin');
   var cand = findRow_('Candidates', 'CandidateID', candidateId);
   if (!cand) throw new Error('Candidate not found');
  
@@ -1757,17 +1787,17 @@ function dashDeleteCandidate(key, candidateId) {
  
   deleteRowsWhere_('Candidates', 'CandidateID', candidateId);
  
-  logActivity_(Session.getActiveUser().getEmail() || 'reviewer', 'candidate_deleted', 'candidate', candidateId,
+  logActivity_(dashActor_(), 'candidate_deleted', 'candidate', candidateId,
     cand.FullName + ' | removed: ' + JSON.stringify(removed));
   return { deleted: true, related: removed };
 }
  
 function dashClearActivityLog(key) {
-  requireDashAccess_(key);
+  requireDashAccess_(key, 'admin');
   var sh = sheet_('ActivityLog');
   var last = sh.getLastRow();
   if (last > 1) sh.deleteRows(2, last - 1);
-  logActivity_(Session.getActiveUser().getEmail() || 'reviewer', 'activity_log_cleared', 'system', '-', 'Log cleared');
+  logActivity_(dashActor_(), 'activity_log_cleared', 'system', '-', 'Log cleared');
   return true;
 }
  
@@ -1780,7 +1810,7 @@ function dashClearActivityLog(key) {
  * exactly those rows, and how many found ones are left.
  */
 function dashQueueAllFound(key, candidateId, limit) {
-  requireDashAccess_(key);
+  requireDashAccess_(key, 'work');
   var lock = LockService.getScriptLock(); // a double click must not queue the next batch as well
   lock.waitLock(20000);
   try {
@@ -1791,9 +1821,13 @@ function dashQueueAllFound(key, candidateId, limit) {
     var n = parseInt(limit, 10);
     var pick = n > 0 ? found.slice(0, n) : found;
 
-    setColumnForRows_('Prospects', 'Status', pick.map(function (p) { return p._row; }), 'Queued');
+    var rowNums = pick.map(function (p) { return p._row; });
+    ensureColumns_('Prospects', ['QueuedBy', 'QueuedAt']);
+    setColumnForRows_('Prospects', 'Status', rowNums, 'Queued');
+    setColumnForRows_('Prospects', 'QueuedBy', rowNums, DASH_USER_.id);
+    setColumnForRows_('Prospects', 'QueuedAt', rowNums, new Date());
     SpreadsheetApp.flush();
-    logActivity_(Session.getActiveUser().getEmail() || 'reviewer', 'prospects_bulk_queued', 'candidate', candidateId,
+    logActivity_(dashActor_(), 'prospects_bulk_queued', 'candidate', candidateId,
       pick.length + ' queued' + (n > 0 ? ' (newest ' + n + ')' : '') + ', ' + (found.length - pick.length) + ' still found');
     return {
       queued: pick.length, remaining: found.length - pick.length,
@@ -1805,30 +1839,64 @@ function dashQueueAllFound(key, candidateId, limit) {
 }
 
 function dashRetryApplication(key, applicationId) {
-  requireDashAccess_(key);
+  requireDashAccess_(key, 'work');
   var app = findRow_('Applications', 'ApplicationID', applicationId);
   if (!app) throw new Error('Application not found');
+  if (app.Status === 'Submitted') return { already: true, status: app.Status }; // sent: retrying would apply twice
   // Running it now would pick up the version being replaced
   if (app.JobID && jobHasRevisionRunning_(readRows_('ReviewQueue', ['Type', 'JobID', 'Decision', 'RevisedAs']), app.JobID)) return { busy: true };
 
+  ensureColumns_('Prospects', ['QueuedBy', 'QueuedAt']);
   appendObject_('Prospects', {
+    QueuedBy: DASH_USER_.id, QueuedAt: new Date(),
     ProspectID: newId_('PROS'), FoundAt: new Date(), CandidateID: app.CandidateID,
     Company: app.Company, JobTitle: app.JobTitle, JobURL: app.JobURL,
     Source: 'Retry', Status: 'Queued', Notes: 'Re-queued from failed application ' + applicationId
   });
   updateRow_('Applications', app._row, { Status: 'Retried' });
-  logActivity_(Session.getActiveUser().getEmail() || 'reviewer', 'application_retried', 'application', applicationId, app.Company);
+  logActivity_(dashActor_(), 'application_retried', 'application', applicationId, app.Company);
   return { requeued: true };
+}
+
+/**
+ * "Retry submit": an application someone approved that never got sent (stuck on
+ * Approved, the form had empty fields, the screenshot check stopped it, or the
+ * submit wasn't confirmed). Puts it back to approved for its owner's Chrome,
+ * which fills the form again and submits without asking for another review.
+ * SubmitRetryAt tells that Chrome to forget its one automatic attempt.
+ */
+function dashRetrySubmit(key, applicationId) {
+  requireDashAccess_(key, 'work');
+  var lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    ensureColumns_('Applications', ['SubmitRetryAt', 'SubmitClaimedBy', 'SubmitClaimedAt']);
+    var app = findRow_('Applications', 'ApplicationID', applicationId, ['Status', 'Company', 'JobID']);
+    if (!app) throw new Error('Application not found');
+    if (app.Status === 'Submitted') return { already: true, status: app.Status };
+    var approved = readRows_('ReviewQueue', ['Type', 'RefID', 'Decision']).some(function (t) {
+      return t.Type === 'Submission' && t.RefID === applicationId && t.Decision === 'approve';
+    });
+    if (!approved) throw new Error('This application was never approved, so there is nothing to re-submit. Use Retry to run it again.');
+    if (app.JobID && jobHasRevisionRunning_(readRows_('ReviewQueue', ['Type', 'JobID', 'Decision', 'RevisedAs']), app.JobID)) return { busy: true };
+    updateRow_('Applications', app._row, {
+      Status: 'Approved - Extension', SubmitClaimedBy: '', SubmitClaimedAt: '', SubmitRetryAt: new Date()
+    });
+    logActivity_(dashActor_(), 'application_submit_retried', 'application', applicationId, app.Company + ' (was ' + app.Status + ')');
+  } finally {
+    lock.releaseLock();
+  }
+  return { retried: true };
 }
 
 /** A sent-back application nobody will run again: moves it out of Sent back. Still counts as applied, like any other closed one. */
 function dashDropApplication(key, applicationId) {
-  requireDashAccess_(key);
+  requireDashAccess_(key, 'work');
   var app = findRow_('Applications', 'ApplicationID', applicationId, ['Status', 'Company']);
   if (!app) throw new Error('Application not found');
   if (app.Status !== 'Rejected') return { already: true, status: app.Status };
   updateRow_('Applications', app._row, { Status: 'Dropped' });
-  logActivity_(Session.getActiveUser().getEmail() || 'reviewer', 'application_dropped', 'application', applicationId, app.Company);
+  logActivity_(dashActor_(), 'application_dropped', 'application', applicationId, app.Company);
   return { dropped: true };
 }
 
@@ -1838,11 +1906,11 @@ function dashDropApplication(key, applicationId) {
  * like any other submission, follow-up included.
  */
 function dashMarkApplicationSubmitted(key, applicationId) {
-  requireDashAccess_(key);
+  requireDashAccess_(key, 'work');
   var app = findRow_('Applications', 'ApplicationID', applicationId);
   if (!app) throw new Error('Application not found');
   if (app.Status === 'Submitted') return { already: true };
-  var who = Session.getActiveUser().getEmail() || 'reviewer';
+  var who = dashActor_();
   var submittedAt = new Date();
   updateRow_('Applications', app._row, { Status: 'Submitted', SubmittedAt: submittedAt });
   app.SubmittedAt = submittedAt;
@@ -1866,7 +1934,7 @@ var FOLLOWUP_OUTCOMES_ = ['Interview', 'Offer', 'Rejected', 'No reply', 'Done', 
  * before this worked can still take its next result.
  */
 function dashResolveFollowUp(key, followUpId, outcome, note) {
-  requireDashAccess_(key);
+  requireDashAccess_(key, 'work');
   if (FOLLOWUP_OUTCOMES_.indexOf(outcome) === -1) throw new Error('Unknown follow-up outcome: ' + outcome);
   ensureColumns_('FollowUps', ['Outcome', 'ClosedAt']);
   ensureColumns_('Applications', ['OfferDate', 'RejectedDate']);
@@ -1874,7 +1942,7 @@ function dashResolveFollowUp(key, followUpId, outcome, note) {
   if (!f) throw new Error('Follow-up not found');
   // Someone else has just finished it: the page may be a few seconds old
   if (f.Status !== 'Pending' && f.Outcome !== 'Interview') return { already: true, outcome: f.Outcome || f.Status };
-  var who = Session.getActiveUser().getEmail() || 'reviewer';
+  var who = dashActor_();
   var line = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd') + ' ' + outcome + (note ? ': ' + note : '');
   var notes = (f.Notes ? f.Notes + '\n' : '') + line;
   if (outcome === 'Interview') {
@@ -1900,7 +1968,7 @@ function dashResolveFollowUp(key, followUpId, outcome, note) {
 
 /** "No reply yet": pushes the follow-up `days` days on from today (or from its due date, if that's later). */
 function dashSnoozeFollowUp(key, followUpId, days) {
-  requireDashAccess_(key);
+  requireDashAccess_(key, 'work');
   var n = parseInt(days, 10);
   if (!(n > 0 && n <= 60)) throw new Error('Snooze must be between 1 and 60 days');
   var f = findRow_('FollowUps', 'FollowUpID', followUpId);
@@ -1912,7 +1980,7 @@ function dashSnoozeFollowUp(key, followUpId, days) {
     Notes: (f.Notes ? f.Notes + '\n' : '') + Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd') +
       ' No reply yet - checking again in ' + n + ' days'
   });
-  logActivity_(Session.getActiveUser().getEmail() || 'reviewer', 'followup_snoozed', 'followup', followUpId, n + ' days');
+  logActivity_(dashActor_(), 'followup_snoozed', 'followup', followUpId, n + ' days');
   return { due: sheetDateIso_(due) };
 }
 
@@ -1926,8 +1994,26 @@ var AGENT_SEEN_PREFIX_ = 'AGENT_SEEN_';
 
 function noteAgentSeen_(agent) {
   var props = PropertiesService.getScriptProperties();
-  var last = Number(props.getProperty(AGENT_SEEN_PREFIX_ + agent) || 0);
-  if (Date.now() - last > 60000) props.setProperty(AGENT_SEEN_PREFIX_ + agent, String(Date.now())); // spares the property quota
+  // Anyone's Chrome, and this person's own (the console tells each person whether theirs is running)
+  [AGENT_SEEN_PREFIX_ + agent].concat(callerId_() ? [AGENT_SEEN_PREFIX_ + agent + '|' + callerId_()] : []).forEach(function (k) {
+    var last = Number(props.getProperty(k) || 0);
+    if (Date.now() - last > 60000) props.setProperty(k, String(Date.now())); // spares the property quota
+  });
+  // Which extension version this person's Chrome runs, so the console can say when it's out of date
+  var verKey = AGENT_SEEN_PREFIX_ + 'ext|' + callerId_();
+  if (callerId_() && CALLER_EXT_ && props.getProperty(verKey) !== CALLER_EXT_) props.setProperty(verKey, CALLER_EXT_);
+}
+
+/** { userId: { extension: ms, autorun: ms } } from the per-person heartbeats. */
+function agentsByUser_(props) {
+  var all = props.getProperties(), out = {};
+  Object.keys(all).forEach(function (k) {
+    var m = k.match(/^AGENT_SEEN_(extension|autorun|ext)\|(.+)$/);
+    if (!m) return;
+    out[m[2]] = out[m[2]] || { extension: 0, autorun: 0, ext: '' };
+    out[m[2]][m[1]] = m[1] === 'ext' ? all[k] : Number(all[k]) || 0;
+  });
+  return out;
 }
  
 /* ------------------------------- helpers -------------------------------- */

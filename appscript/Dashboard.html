@@ -28,6 +28,11 @@
     .count:empty,.count[data-n="0"]{display:none}
     .navsec.more{margin-top:auto;padding-top:18px}
     nav .minor{font-size:13px;padding:6px 20px}
+    nav button[hidden]{display:none}
+    .whoami{font-size:12px;color:#B9C6BC;padding:12px 20px 0;margin-top:8px;border-top:1px solid rgba(255,255,255,.08);line-height:1.4;overflow-wrap:anywhere}
+    .whoami b{color:#fff;font-weight:600;display:block}
+    .role{display:inline-block;font-size:10.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;border-radius:4px;padding:1px 6px;margin-top:3px;background:var(--mint);color:var(--pine)}
+    @media (max-width:820px){ .whoami{display:none} }
 
     /* ---- auto-apply status line, top of every page ---- */
     .runbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px;border-radius:8px;padding:8px 12px;margin-bottom:14px;border:1px solid var(--line);background:var(--card)}
@@ -216,7 +221,9 @@
     <button data-v="accounts" class="minor">Site accounts</button>
     <button data-v="report" class="minor">Reports</button>
     <button data-v="log" class="minor">Activity</button>
+    <button data-v="users" class="minor" id="navUsers" hidden>Team &amp; access</button>
     <button data-v="help" class="minor">Help &amp; guide</button>
+    <div class="whoami" id="whoami"></div>
   </nav>
   <main id="main"><h1>Loading…</h1></main>
   <div id="toast" role="status" aria-live="polite"></div>
@@ -229,6 +236,30 @@
 <script>
 // Passed back on every server call - each dash* function re-checks it (see doGet in Api.gs)
 const DASH_KEY = <?!= JSON.stringify(dashKey) ?>;
+// Who is signed in and what their role allows (Users.gs). The server checks every action again.
+const ME = <?!= JSON.stringify(me) ?>;
+function can(perm){ return (ME.perms || []).includes(perm); }
+
+/* What each role sees: buttons for actions it can't take are hidden (inputs greyed out). */
+const ACTIONS_BY_PERM = {
+  work: ['approveApp', 'approveGroup', 'retrySubmit', 'decide', 'rejectApp', 'dropApp', 'findJobs', 'gen', 'markAccountCreated', 'markSubmitted',
+         'prospectAction', 'queueAll', 'resolveFollowUp', 'retryApp', 'retryRevision', 'snoozeFollowUp', 'updateDoc'],
+  admin: ['clearLog', 'delCandidate', 'revealPassword']
+};
+(function applyRole(){
+  const hide = [], lock = [];
+  Object.keys(ACTIONS_BY_PERM).forEach(p => {
+    if(can(p)) return;
+    ACTIONS_BY_PERM[p].forEach(fn => hide.push(`[onclick*="${fn}("]`, `select[onchange*="${fn}("]`));
+  });
+  if(!can('work')) lock.push('[onchange*="setTarget("]', '[onchange*="setActive("]', '.tog:has([onchange*="setActive("])');
+  if(!can('work')) hide.push('nav button[data-v="generate"]');
+  const css = (hide.length ? hide.join(',') + '{display:none!important}' : '') + (lock.length ? lock.join(',') + '{pointer-events:none;opacity:.5}' : '');
+  if(css){ const s = document.createElement('style'); s.textContent = css; document.head.appendChild(s); }
+  document.getElementById('navUsers').hidden = !can('admin');
+  document.getElementById('whoami').innerHTML = `Signed in as<b>${esc(ME.name || ME.email)}</b><span class="role">${esc(ME.role)}</span>`;
+})();
+
 let D = null, view = 'home', loadedAt = 0;
 let dataVersion = '', loadsInFlight = 0, writeSeq = 0; // see load()
 const F = {}; // per-view filter state
@@ -265,8 +296,11 @@ function load(background, shared){
       if(d.unchanged) return;
       if(shared && seq !== writeSeq) return; // something changed while this was on its way - it would undo that on screen
       D = d; dataVersion = d.version || '';
+      REPORT.at = 0; // the sheet changed (a submission, say): the Reports page works its numbers out again
       updateBadges();
-      if(background && userIsEditing()) return;
+      // Not redrawn under someone typing, a dialog or an open CV preview: say there's news, and show it once they're done
+      if(background && userIsEditing()) { pendingRedraw = true; showNewPill(); return; }
+      pendingRedraw = false;
       render();
     })
     .catch(e => {
@@ -284,6 +318,16 @@ setInterval(() => load(true, true), 30000);
 document.addEventListener('visibilitychange', () => { if(!document.hidden && Date.now() - loadedAt > 30000) load(true, true); });
 setInterval(() => { const s = document.getElementById('syncAge'); if(s) s.textContent = ago(loadedAt); }, 15000);
 
+let pendingRedraw = false;
+function showNewPill(){
+  const el = document.getElementById('newPill');
+  if(el) el.innerHTML = pendingRedraw ? '<button class="btn primary tiny" onclick="showNews()">New updates - show</button>' : '';
+}
+function showNews(){ pendingRedraw = false; render(); }
+/** Draws a withheld refresh as soon as nothing is being typed or read in a dialog (an open CV preview keeps the button instead). */
+function flushPending(){ if(pendingRedraw && !userIsEditing()) showNews(); }
+document.addEventListener('focusout', () => setTimeout(flushPending, 300));
+
 /** True while redrawing would lose the user's input: the Generate form, an open dialog, or any focused field. */
 function userIsEditing(){
   if(view === 'generate' || DLG.open || PREVIEW.size) return true;
@@ -294,6 +338,7 @@ function userIsEditing(){
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => go(b.dataset.v));
 function go(v, filters){
   view = v;
+  if(v === 'users') TEAM.data = null; // always fresh when opened
   Object.assign(F, filters || {});
   document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x.dataset.v === v));
   render();
@@ -339,6 +384,18 @@ function shortDate(ts){
   return d.toLocaleDateString('en-GB', o);
 }
 const foundDay = shortDate;
+/**
+ * The Reviewer Agent's ATS score: 0-100, how well the document would pass an
+ * applicant-tracking system for this job - its keywords and requirements covered,
+ * claims backed by the candidate's profile, wording and dates sound.
+ */
+const SCORE_HELP = 'ATS match, 0-100: how well this document covers the keywords and requirements of the job, with every claim backed by the candidate profile. 80+ good, 60-79 worth a look, under 60 check the AI findings before sending.';
+function scoreHtml(v){
+  const n = parseFloat(v);
+  if(isNaN(n)) return '';
+  return `<span class="score ${n < 60 ? 'lo' : n >= 80 ? 'hi' : ''}" title="${esc(SCORE_HELP)}">ATS match ${esc(Math.round(n))}/100</span>`;
+}
+function startOfToday(){ const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); }
 function todayIso(){ const n = new Date(), p = x => String(x).padStart(2, '0'); return `${n.getFullYear()}-${p(n.getMonth() + 1)}-${p(n.getDate())}`; }
 /** Whole days from today to a yyyy-MM-dd date (negative = overdue). */
 function daysUntil(iso){ if(!iso) return null; return Math.round((new Date(iso + 'T00:00:00') - new Date(todayIso() + 'T00:00:00')) / DAY); }
@@ -410,16 +467,22 @@ function chip(s){
   return `<span class="chip ${cls}">${esc(s)}</span>`;
 }
 /** 'extension': any Chrome with the extension open; 'autorun': a Chrome with Auto-run the queue switched on. */
-function agentState(which){
-  const seen = D.agents ? D.agents[which] : 0;
+function agentState(which, userId){
+  const seen = userId ? (((D.agentsByUser || {})[userId] || {})[which] || 0) : (D.agents ? D.agents[which] : 0);
   return { seen, ok: !!seen && Date.now() - seen < AGENT_QUIET_MS };
 }
 
+/* Each queued job and application belongs to the person who queued it: only their Chrome runs and submits it. */
+function personName(id){ return !id ? '' : id === ME.id ? 'you' : ((D.people || {})[id] || 'someone who no longer has access'); }
+function whoseChrome(id){ const n = personName(id); return !n ? 'any Chrome' : n === 'you' ? 'your Chrome' : n + '\'s Chrome'; }
+function isMine(ownerId){ return ownerId === ME.id; }
+
 /** Why an approved application hasn't gone yet, in words someone can act on. */
 function stuckReason(a){
-  const x = agentState('extension');
+  const x = agentState('extension', a.owner);
   return x.ok ? 'The Chrome extension is running but hasn\'t confirmed this - Submit may have been clicked without a confirmation being seen.'
-    : 'Waiting for the Chrome extension, which ' + (x.seen ? 'last checked in ' + ago(x.seen) : 'has never checked in') + '. Open Chrome with the extension signed in.';
+    : 'Waiting for ' + whoseChrome(a.owner) + ', which ' + (x.seen ? 'last checked in ' + ago(x.seen) : 'has never checked in') + '. ' +
+      (isMine(a.owner) || !a.owner ? 'Open Chrome with the Jobverse extension signed in with your console link.' : 'Ask them to open Chrome with the Jobverse extension.');
 }
 
 /* ------------------------------- documents ------------------------------ */
@@ -468,7 +531,7 @@ function docStatusHtml(a){
   return Object.keys(DOC_KINDS).map(kind => {
     const label = DOC_KINDS[kind].label, cap = label === 'CV' ? 'CV' : 'Cover letter', r = docRevision(a, kind), t = docReview(a, kind);
     const open = t && OPEN_FINDINGS.has(t.id);
-    const check = t ? ` <button class="linkbtn" onclick="toggleFindings('${t.id}')" aria-expanded="${!!open}">${open ? 'Hide' : 'AI check of the'} ${label}${open || t.score === '' ? '' : ': score ' + esc(t.score)}</button>` : '';
+    const check = t ? ` <button class="linkbtn" onclick="toggleFindings('${t.id}')" aria-expanded="${!!open}">${open ? 'Hide' : 'AI check of the'} ${label}${open || t.score === '' ? '' : ': ' + scoreHtml(t.score)}</button>` : '';
     if(r && r.state === 'working') return `<div class="mut" style="margin-top:4px">Rewriting the ${label} - usually about a minute…</div>`;
     if(r && r.state === 'error') return `<div class="err">The ${label} rewrite failed: ${esc(r.error)}
       ${r.id ? `<button class="linkbtn" onclick="retryRevision('${r.id}')">Try again</button>` : ''}</div>`;
@@ -534,6 +597,7 @@ function updateBadges(){
 /** One line saying whether queued jobs are being applied to right now, and how to fix it if not. */
 function runBar(){
   if(!D) return '';
+  if(can('work')) return myRunBar();
   const run = agentState('autorun'), x = agentState('extension');
   const queued = D.prospects.filter(p => p.status === 'Queued').length;
   const line = queued ? `${queued} job${queued > 1 ? 's' : ''} in line` : 'nothing in line';
@@ -542,9 +606,34 @@ function runBar(){
     <button class="btn ghost tiny" onclick="go('help')">How?</button></div>`;
 }
 
+/** 1.2.0 < 1.10.0 */
+function olderVersion(a, b){
+  const pa = String(a).split('.').map(Number), pb = String(b).split('.').map(Number);
+  for(let i = 0; i < Math.max(pa.length, pb.length); i++){ if((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) < (pb[i] || 0); }
+  return false;
+}
+/** This person's extension version, if their Chrome has checked in with their sign-in link. */
+function extVersionOf(userId){ return ((D.agentsByUser || {})[userId] || {}).ext || ''; }
+function extOutdated(userId){ const v = extVersionOf(userId); return !!v && !!D.extensionVersion && olderVersion(v, D.extensionVersion); }
+
+/** Staff and admins: their own queue, run by their own Chrome. Teammates' jobs are counted separately. */
+function myRunBar(){
+  return (extOutdated(ME.id) ? `<div class="runbar off"><span class="dot bad"></span><b>Your Chrome extension is out of date</b><span>· you have v${esc(extVersionOf(ME.id))}, the current one is v${esc(D.extensionVersion)}. Pull the latest from the repo, then press the reload arrow on Jobverse in chrome://extensions.</span></div>` : '') + myRunBarInner();
+}
+function myRunBarInner(){
+  const run = agentState('autorun', ME.id), x = agentState('extension', ME.id);
+  const queued = D.prospects.filter(p => p.status === 'Queued');
+  const mine = queued.filter(p => isMine(p.queuedBy)).length, others = queued.length - mine;
+  const line = (mine ? `${mine} of your jobs in line` : 'none of your jobs in line') +
+    (others ? ` · ${others} queued by teammates (their own Chrome runs those)` : '');
+  if(run.ok) return `<div class="runbar"><span class="dot ok"></span><b>Your auto-apply is on</b><span class="mut">· ${line}</span></div>`;
+  return `<div class="runbar ${mine ? 'off' : ''}"><span class="dot ${mine ? 'bad' : 'idle'}"></span><b>Your auto-apply is off</b><span>· ${line}.${mine ? ' Open Chrome and tick <b>Auto-run the queue</b> in the Jobverse extension, signed in with your console link.' : ''}${x.ok ? ' Your approved applications still get submitted.' : ''}</span>
+    <button class="btn ghost tiny" onclick="go('help')">How?</button></div>`;
+}
+
 function header(title, sub, right){
   return runBar() + `<div class="top"><div><h1>${title}</h1>${sub ? `<p class="sub">${sub}</p>` : ''}</div>
-    <div class="sync">${right || ''}<span>Updated <span id="syncAge">${ago(loadedAt)}</span></span>
+    <div class="sync"><span id="newPill"></span>${right || ''}<span>Updated <span id="syncAge">${ago(loadedAt)}</span></span>
     <button class="btn ghost tiny" onclick="load()" title="Reload data from the sheet">Refresh</button></div></div>`;
 }
 function emptyState(title, text){ return `<div class="empty"><b>${title}</b>${text || ''}</div>`; }
@@ -557,6 +646,7 @@ const PAGES = {};
 
 function render(){
   if(!D) return;
+  pendingRedraw = false;
   updateBadges();
   document.getElementById('main').innerHTML = (PAGES[view] || PAGES.home)();
 }
@@ -664,8 +754,7 @@ function reviewGroupHtml(g){
 
 function reviewItemHtml(t, docCount){
   const isSub = t.type === 'Submission';
-  const n = parseFloat(t.score);
-  const score = isNaN(n) ? '' : `<span class="score ${n < 60 ? 'lo' : n >= 80 ? 'hi' : ''}" title="Reviewer Agent ATS score">score ${esc(t.score)}</span>`;
+  const score = scoreHtml(t.score);
   const open = OPEN_FINDINGS.has(t.id);
   return `<div class="ritem ${isSub ? 'sub' : ''}">
     <div class="row">
@@ -690,12 +779,18 @@ PAGES.applications = () => {
   const tab = F.appTab || (count('review') ? 'review' : 'all');
   let rows = tab === 'all' ? all : all.filter(a => appInfo(a).group === tab);
   if(F.appCand) rows = rows.filter(a => a.cand === F.appCand);
+  if(F.mine) rows = rows.filter(a => isMine(a.owner));
   if(F.appQ) rows = rows.filter(a => matches(F.appQ, a.company, a.title, a.ats, candName(a.cand)));
   const pg = paginate(rows, 'appPage', F.appSize || 25);
   const stuck = all.filter(a => appInfo(a).stuck);
+  const queuedToday = can('work') ? D.prospects.filter(p => isMine(p.queuedBy) && p.queuedAt >= startOfToday()) : [];
+  const noApp = queuedToday.filter(p => !String(p.status).startsWith('In ') && !['Queued', 'Applied', 'Needs Human - Extension'].includes(p.status));
+  const waiting = queuedToday.filter(p => p.status === 'Queued' || prospectRunning(p)).length;
   return header('Applications', 'Every job the extension applies to. Filled forms wait under <b>Ready to approve</b> until you say yes.') +
     (stuck.length ? `<div class="note bad"><b>${stuck.length} approved application${stuck.length > 1 ? 's have' : ' has'} not been submitted.</b> ${esc(stuckReason(stuck[0]))}
       If you submitted one by hand or can see it on the employer's site, use <b>Mark submitted</b>; otherwise <b>Retry</b> runs it again from the start.</div>` : '') +
+    (noApp.length ? `<div class="note warn">You queued <b>${queuedToday.length}</b> job${queuedToday.length > 1 ? 's' : ''} today${waiting ? ` (${waiting} still in line or running)` : ''}. <b>${noApp.length}</b> didn't become an application - skipped as a duplicate, closed, over the daily cap, or the extension couldn't apply.
+      <button class="linkbtn" onclick="go('prospects',{prosToday:'1',pCand:'',prosStatus:''})">See why</button></div>` : '') +
     (tab === 'review' && count('review') ? `<div class="note"><b>These forms are filled in and waiting in a Chrome tab.</b> View the CV and cover letter (and <b>What was filled in</b>),
       then press <b>Approve &amp; submit</b> - it moves to <b>Sending</b>, and to <b>Submitted</b> once the employer confirms, usually within a few minutes. Something to change? <b>Update CV</b> or <b>Update cover letter</b> writes a new version, and that's the one that gets sent. Keep Chrome open with the extension.</div>` : '') +
     (tab === 'sending' && count('sending') ? `<div class="note"><b>Approved, not sent yet.</b> The extension is pressing Submit, or filling the form again first if its tab was closed. Each one moves to <b>Submitted</b> once the employer confirms, usually within a few minutes. Chrome needs to be open with the extension running.</div>` : '') +
@@ -709,6 +804,7 @@ PAGES.applications = () => {
     `<div class="toolbar">
       <div><label>Candidate</label><select onchange="setFilter('appCand',this.value)">${candOpts(F.appCand, 'All candidates')}</select></div>
       <div class="grow"><label>Search</label><input type="search" placeholder="Company, role or ATS" value="${esc(F.appQ || '')}" oninput="setSearch('appQ',this)"></div>
+      ${mineToggle()}
     </div>
     <div class="card flush"><div class="tablewrap"><table><tr><th>Company / role</th><th>Candidate</th><th>Status</th><th>Started</th><th>Proof</th><th></th></tr>` +
     (pg.rows.length ? pg.rows.map(appRowHtml).join('')
@@ -747,14 +843,16 @@ function appRowHtml(a){
       ${sub ? `<button class="linkbtn" style="margin-top:6px" onclick="toggleFindings('${sub.id}')" aria-expanded="${OPEN_FINDINGS.has(sub.id)}">${OPEN_FINDINGS.has(sub.id) ? 'Hide what was filled in' : 'What was filled in'}</button>` : ''}</td>
     <td class="mut">${esc(candName(a.cand))}</td>
     <td>${appChip(a)}${rail(a.status)}${ready && a.needsPerson ? `<div class="err" style="max-width:360px"><b>${a.needsPerson} thing${a.needsPerson > 1 ? 's' : ''} the extension couldn't do</b> - see the red lines in What was filled in, and fix them in the waiting tab, then press Approve &amp; submit here. If you press the site's own Submit instead, the extension records it when the employer confirms; if this row is still here afterwards, use Mark submitted.</div>` : ''}${hint ? `<div class="${s.group === 'attention' ? 'err' : 'mut'}" style="max-width:360px">${esc(hint)}</div>` : ''}
-      ${a.outcome ? `<div style="margin-top:4px">${chip(a.outcome)}</div>` : ''}</td>
+      ${a.outcome ? `<div style="margin-top:4px">${chip(a.outcome)}</div>` : ''}
+      ${a.owner ? `<div class="mut small" style="margin-top:4px">${esc(whoseChrome(a.owner).replace(/^./, c => c.toUpperCase()))}</div>` : ''}</td>
     <td class="mut nowrap" title="${a.createdMs ? esc(new Date(a.createdMs).toLocaleString('en-GB')) : ''}">${esc(shortDate(a.createdMs))}${a.submittedMs ? `<br>sent ${esc(shortDate(a.submittedMs))}` : ''}</td>
     <td>${a.shot ? `<a href="${esc(a.shot)}">screenshot</a>` : '<span class="mut">-</span>'}</td>
     <td><div class="acts" style="justify-content:flex-end">
       ${ready ? `<button class="btn approve tiny" ${revising ? 'disabled title="Wait for the new version"' : ''} onclick="approveApp('${a.id}')">Approve &amp; submit</button>
         <button class="btn reject tiny" onclick="rejectApp('${a.id}')">Don't submit</button>` : ''}
       ${canMark ? `<button class="btn ghost tiny" onclick="markSubmitted('${a.id}')">Mark submitted</button>` : ''}
-      ${canRetry ? `<button class="btn ghost tiny" ${revising ? 'disabled title="Wait for the new version"' : ''} onclick="retryApp('${a.id}')">${sentBack ? 'Run again' : 'Retry'}</button>` : ''}
+      ${canRetrySubmit(a, s) ? `<button class="btn primary tiny" ${revising ? 'disabled title="Wait for the new version"' : ''} onclick="retrySubmit('${a.id}')" title="Fill the form again and submit it - it was already approved">Retry submit</button>` : ''}
+      ${canRetry ? `<button class="btn ghost tiny" ${revising ? 'disabled title="Wait for the new version"' : ''} onclick="retryApp('${a.id}')" title="Start over: a fresh form fill that comes back for approval">${sentBack ? 'Run again' : 'Retry'}</button>` : ''}
       ${sentBack ? `<button class="btn ghost tiny" onclick="dropApp('${a.id}')">Drop</button>` : ''}
     </div></td></tr>` + (extra ? `<tr class="pvrow"><td colspan="6">${extra}</td></tr>` : '');
 }
@@ -814,6 +912,8 @@ PAGES.prospects = () => {
   const statuses = uniq(rows.map(p => p.status)).sort();
   if(F.prosStatus) rows = rows.filter(p => p.status === F.prosStatus);
   if(F.prosQ) rows = rows.filter(p => matches(F.prosQ, p.company, p.title, p.source));
+  if(F.mine) rows = rows.filter(p => isMine(p.queuedBy));
+  if(F.prosToday) rows = rows.filter(p => isMine(p.queuedBy) && p.queuedAt >= startOfToday());
   const dir = (F.prosSort || 'newest') === 'oldest' ? 1 : -1;
   rows = rows.slice().sort((a, b) => (!a.found !== !b.found) ? (a.found ? -1 : 1) : (a.found - b.found) * dir); // undated last
   const pg = paginate(rows, 'prosPage', F.prosSize || 25);
@@ -832,19 +932,21 @@ PAGES.prospects = () => {
         <span class="mut" id="pMsg"></span>
       </div>
     </div>
+    ${F.prosToday ? `<div class="note">Showing the jobs <b>you queued today</b>, for every candidate, with what happened to each. <button class="linkbtn" onclick="setFilter('prosToday','')">Show all jobs</button></div>` : ''}
     <div class="toolbar">
       <div><label>Status</label><select onchange="setFilter('prosStatus',this.value)"><option value="">Any status</option>${statuses.map(v => `<option value="${esc(v)}" ${v === F.prosStatus ? 'selected' : ''}>${esc(prospectLabel(v))}</option>`).join('')}</select></div>
       <div><label>Sort</label><select onchange="setFilter('prosSort',this.value)">
         <option value="newest" ${dir < 0 ? 'selected' : ''}>Newest found first</option><option value="oldest" ${dir > 0 ? 'selected' : ''}>Oldest found first</option></select></div>
       <div class="grow"><label>Search</label><input type="search" placeholder="Company, role or source" value="${esc(F.prosQ || '')}" oninput="setSearch('prosQ',this)"></div>
+      ${mineToggle('Only jobs I queued')}
     </div>
     <div class="card flush"><div class="tablewrap"><table><tr><th>Found</th>${one ? '' : '<th>Candidate</th>'}<th>Company / role</th><th>Source</th><th>Status</th><th></th></tr>` +
     (pg.rows.length ? pg.rows.map(p => `<tr>
       <td class="mut nowrap" title="${esc(p.found ? new Date(p.found).toLocaleString('en-GB') : 'No date recorded')}">${esc(foundDay(p.found))}</td>
       ${one ? '' : `<td class="mut">${esc(candName(p.cand))}</td>`}
       <td><b>${esc(p.company)}</b>${p.url ? ` <a href="${esc(p.url)}" class="small">open</a>` : ''}<br><span class="mut">${esc(p.title)}</span></td>
-      <td class="mut">${esc(p.source || '')}</td><td>${prospectChip(p.status)}</td>
-      <td><div class="acts" style="justify-content:flex-end">${p.status === 'Queued' ? '<span class="mut">in line</span>' : prospectRunning(p) ? '<span class="mut">running</span>' :
+      <td class="mut">${esc(p.source || '')}</td><td>${prospectChip(p.status)}${p.notes && !FOUND_STATUSES.includes(p.status) && p.status !== 'Queued' && !prospectRunning(p) ? `<div class="mut small" style="margin-top:3px;max-width:320px">${esc(p.notes)}</div>` : ''}${p.queuedBy && (p.status === 'Queued' || prospectRunning(p)) ? `<div class="mut small" style="margin-top:3px">Queued by ${esc(personName(p.queuedBy))}</div>` : ''}</td>
+      <td><div class="acts" style="justify-content:flex-end">${p.status === 'Queued' ? `<span class="mut">${p.queuedBy && !isMine(p.queuedBy) ? 'on ' + esc(whoseChrome(p.queuedBy)) : 'in line'}</span>` : prospectRunning(p) ? '<span class="mut">running</span>' :
         `<button class="btn ghost tiny" onclick="prospectAction('${p.id}','Queued')">Apply</button>
          ${/^Skipped/.test(p.status) ? '' : `<button class="btn ghost tiny" onclick="prospectAction('${p.id}','Skipped')">Skip</button>`}`}</div></td>
       </tr>`).join('') :
@@ -893,7 +995,7 @@ PAGES.candidates = () => {
 
 PAGES.accounts = () => {
   const accts = (D.accounts || []).slice().reverse().filter(a => matches(F.accQ, a.site, a.email, candName(a.cand)));
-  return header('Site accounts', 'Accounts the extension created on job sites that need one - one per candidate per site, reused on later applications there. Passwords are random and only shown to authorised reviewers.') +
+  return header('Site accounts', 'Accounts the extension created on job sites that need one - one per candidate per site, reused on later applications there. Passwords are random and only shown to Admins.') +
     `<div class="toolbar"><div class="grow"><label>Search</label><input type="search" placeholder="Site, email or candidate" value="${esc(F.accQ || '')}" oninput="setSearch('accQ',this)"></div></div>
     <div class="card flush"><div class="tablewrap"><table><tr><th>Site</th><th>Candidate</th><th>Login email</th><th>Status</th><th>Notes</th><th></th></tr>` +
     (accts.length ? accts.map(a => `<tr>
@@ -931,7 +1033,7 @@ PAGES.report = () => {
   const r = REPORT.data, span = F.repSpan || '30';
   const stat = (v, l, sub) => `<div class="stat"><b>${esc(v)}</b><span>${esc(l)}</span>${sub ? `<span class="mut">${esc(sub)}</span>` : ''}</div>`;
   const picker = `<div class="toolbar"><div><label>Period</label><select onchange="setFilter('repSpan',this.value)">
-      ${[['7', 'Last 7 days'], ['30', 'Last 30 days'], ['90', 'Last 90 days'], ['custom', 'Choose dates']].map(([v, l]) => `<option value="${v}" ${span === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+      ${[['1', 'Today'], ['7', 'Last 7 days'], ['30', 'Last 30 days'], ['90', 'Last 90 days'], ['custom', 'Choose dates']].map(([v, l]) => `<option value="${v}" ${span === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
     ${span === 'custom' ? `<div><label>From</label><input type="date" value="${esc(range.from)}" max="${todayIso()}" onchange="setFilter('repFrom',this.value)"></div>
       <div><label>To</label><input type="date" value="${esc(range.to)}" max="${todayIso()}" onchange="setFilter('repTo',this.value)"></div>` : ''}
     <div style="flex:0"><button class="btn ghost" onclick="refreshReport()">Recalculate</button></div></div>`;
@@ -1012,6 +1114,118 @@ PAGES.log = () => {
 
 PAGES.help = () => HELP_HTML;
 
+/* ----------------------------- team & access ----------------------------- */
+
+// Loaded on its own (admins only), not with the shared console data
+const TEAM = { data: null, error: '', loading: false };
+const ROLE_INFO = {
+  Admin: 'Everything, plus adding and removing people, deleting candidates, clearing the activity log and seeing saved site passwords.',
+  Staff: 'Day-to-day work: approve or send back applications, update CVs and letters, find and queue jobs, follow-ups, candidate targets.',
+  Viewer: 'Read only: every page and report, but no buttons that change anything.'
+};
+
+function loadTeam(){
+  TEAM.loading = true; TEAM.error = '';
+  rpc('dashUsers')
+    .then(r => { TEAM.data = r; })
+    .catch(e => { TEAM.error = e && e.message || String(e); })
+    .finally(() => { TEAM.loading = false; if(view === 'users') render(); });
+}
+
+PAGES.users = () => {
+  if(!can('admin')) return header('Team & access') + `<div class="note bad">Only an Admin can manage who has access.</div>`;
+  if(!TEAM.data && !TEAM.loading && !TEAM.error) loadTeam();
+  const roleOpts = sel => Object.keys(ROLE_INFO).map(r => `<option ${r === sel ? 'selected' : ''}>${r}</option>`).join('');
+  let list;
+  if(TEAM.error) list = `<div class="note bad">${esc(TEAM.error)} <button class="linkbtn" onclick="loadTeam()">Try again</button></div>`;
+  else if(!TEAM.data) list = `<div class="card mut">Loading…</div>`;
+  else {
+    const t = TEAM.data, users = t.users.slice().sort((a, b) => (a.status > b.status ? 1 : a.status < b.status ? -1 : 0) || a.name.localeCompare(b.name));
+    list = `<div class="card flush"><div class="tablewrap"><table><tr><th>Person</th><th>Role</th><th>Status</th><th>Last opened · extension</th><th></th></tr>
+      <tr><td><b>Owner</b><div class="mut">${esc(t.owner)}</div></td><td><span class="chip c-sub">Admin</span></td><td>${chip('Active')}</td>
+        <td class="mut">-</td><td class="mut small">The account that runs Jobverse. Always an Admin.</td></tr>` +
+      users.map(u => {
+        const self = u.id === t.me, off = u.status === 'Disabled';
+        return `<tr>
+          <td><b>${esc(u.name)}</b>${self ? ' <span class="mut">(you)</span>' : ''}<div class="mut">${esc(u.email)}</div></td>
+          <td><select style="width:auto;padding:4px 6px" aria-label="Role for ${esc(u.name)}" ${self ? 'disabled title="Ask another admin to change your role"' : ''}
+               onchange="setUserRole('${esc(u.id)}', this.value)">${roleOpts(u.role)}</select></td>
+          <td>${off ? '<span class="chip c-fail">Disabled</span>' : chip('Active')}</td>
+          <td class="mut nowrap">${u.lastSeenMs ? esc(ago(u.lastSeenMs)) : 'Never'}${D && extVersionOf(u.id) ? `<div class="small" style="${extOutdated(u.id) ? 'color:var(--red);font-weight:600' : ''}">Extension v${esc(extVersionOf(u.id))}${extOutdated(u.id) ? ' - out of date' : ''}</div>` : `<div class="small">Extension not linked yet</div>`}${u.linkSentMs ? `<div class="small">Link emailed ${esc(shortDate(u.linkSentMs))}</div>` : ''}</td>
+          <td><div class="acts" style="justify-content:flex-end">
+            <button class="btn ghost tiny" onclick="newUserLink('${esc(u.id)}')">New sign-in link</button>
+            ${self ? '' : `<button class="btn ghost tiny" onclick="setUserStatus('${esc(u.id)}', ${off})">${off ? 'Enable' : 'Disable'}</button>
+            <button class="btn danger tiny" onclick="removeUser('${esc(u.id)}')">Remove</button>`}
+          </div></td></tr>`;
+      }).join('') +
+      (users.length ? '' : `<tr><td colspan="5">${emptyState('No staff added yet', 'Add someone above and they get their own sign-in link.')}</td></tr>`) +
+      '</table></div></div>';
+  }
+  return header('Team & access', 'Everyone who can open this console, and what their role lets them do. Each person signs in with their own private link; disabling them or making a new link stops the old one working at once.') +
+    `<div class="card"><h2>Roles</h2><table>${Object.keys(ROLE_INFO).map(r => `<tr><td style="width:90px"><b>${r}</b></td><td class="mut">${ROLE_INFO[r]}</td></tr>`).join('')}</table></div>
+    <div class="card"><h2>Add a person</h2>
+      <div class="toolbar" style="margin-bottom:0">
+        <div class="grow"><label for="uName">Name</label><input id="uName" autocomplete="off" placeholder="e.g. Ada Obi"></div>
+        <div class="grow"><label for="uEmail">Email</label><input id="uEmail" type="email" autocomplete="off" placeholder="name@example.com"></div>
+        <div><label for="uRole">Role</label><select id="uRole">${roleOpts('Staff')}</select></div>
+        <div style="min-width:0"><label class="tog" style="margin-bottom:9px"><input type="checkbox" id="uSend" checked> Email them the link</label></div>
+        <div style="min-width:0"><button class="btn primary" id="uAdd" onclick="addUser()">Add</button></div>
+      </div></div>` + list;
+};
+
+async function addUser(){
+  const name = document.getElementById('uName').value.trim(), email = document.getElementById('uEmail').value.trim();
+  const role = document.getElementById('uRole').value, send = document.getElementById('uSend').checked;
+  if(!name || !email){ toast('Enter their name and email', true); return; }
+  const btn = document.getElementById('uAdd'); btn.disabled = true;
+  try {
+    const r = await rpc('dashSaveUser', { name, email, role }, send);
+    loadTeam();
+    await showUserLink(name, r, send);
+  } catch(e){ fail(e); btn.disabled = false; }
+}
+
+function showUserLink(name, r, send){
+  const how = r.emailed ? `Emailed to them. You can also copy it here.`
+    : send ? `<b>The email could not be sent</b> (${esc(r.emailError)}). Copy the link and send it to them yourself.`
+    : 'Copy the link and send it to them privately.';
+  return dialog({ title: 'Sign-in link for ' + name, ok: 'Close', readonly: true, value: r.link, input: 'Their personal link (selected - copy it)',
+    body: how + ' Anyone with this link can act as them, so treat it like a password. It won\'t be shown again - make a new one if it\'s lost.' });
+}
+
+async function newUserLink(id){
+  const u = TEAM.data.users.find(x => x.id === id);
+  if(!u) return;
+  const ok = await dialog({ title: 'New sign-in link for ' + u.name + '?', ok: 'Make new link',
+    body: `Their current link stops working straight away. The new one is emailed to <b>${esc(u.email)}</b> and shown to you.` });
+  if(!ok) return;
+  try { const r = await rpc('dashNewUserLink', id, true); loadTeam(); await showUserLink(u.name, r, true); } catch(e){ fail(e); }
+}
+
+function setUserRole(id, role){
+  const u = TEAM.data.users.find(x => x.id === id);
+  if(!u) return;
+  rpc('dashSaveUser', { id, name: u.name, email: u.email, role }, false)
+    .then(() => { toast(u.name + ' is now ' + role); loadTeam(); })
+    .catch(e => { fail(e); loadTeam(); });
+}
+
+async function setUserStatus(id, active){
+  const u = TEAM.data.users.find(x => x.id === id);
+  if(!u) return;
+  if(!active && !await dialog({ title: 'Disable ' + u.name + '?', ok: 'Disable', danger: true,
+    body: 'Their link stops working straight away. You can enable them again later with the same link.' })) return;
+  rpc('dashSetUserStatus', id, active).then(() => { toast(u.name + (active ? ' enabled' : ' disabled')); loadTeam(); }).catch(fail);
+}
+
+async function removeUser(id){
+  const u = TEAM.data.users.find(x => x.id === id);
+  if(!u) return;
+  if(!await dialog({ title: 'Remove ' + u.name + '?', ok: 'Remove', danger: true,
+    body: 'They lose access and are taken off this list. Their past actions stay in the activity log. To bring them back you would add them again.' })) return;
+  rpc('dashRemoveUser', id).then(() => { toast(u.name + ' removed'); loadTeam(); }).catch(fail);
+}
+
 /* ------------------------------ pagination ------------------------------ */
 
 /** One page of `rows`. The page is clamped so a filter, decision or refresh can't strand you on an empty page. */
@@ -1037,6 +1251,14 @@ function pagerHtml(pg, pageKey, sizeKey, sizes){
       </div>
     </div>`;
 }
+
+/** "Mine only": the jobs I queued and the applications my Chrome runs. */
+function mineToggle(label){
+  if(!can('work')) return '';
+  return `<div style="flex:0;min-width:max-content"><label class="tog" style="margin-bottom:9px"><input type="checkbox" ${F.mine ? 'checked' : ''}
+    onchange="F.mine=this.checked;store('jobverse_mine',this.checked?'1':null);setFilter('mineSet',1)"> ${label || 'Only mine'}</label></div>`;
+}
+F.mine = !!store('jobverse_mine');
 
 function setFilter(key, val){
   F[key] = val;
@@ -1076,7 +1298,7 @@ function dialog({ title, body, input, placeholder, ok = 'OK', danger = false, va
   setTimeout(() => (input && !readonly ? ta : okBtn).focus(), 30);
   if(readonly) setTimeout(() => ta.select(), 40);
   return new Promise(resolve => {
-    const close = v => { el.classList.remove('on'); DLG.open = false; okBtn.onclick = cancel.onclick = el.onclick = document.onkeydown = null; resolve(v); };
+    const close = v => { el.classList.remove('on'); DLG.open = false; setTimeout(flushPending, 300); okBtn.onclick = cancel.onclick = el.onclick = document.onkeydown = null; resolve(v); };
     okBtn.onclick = () => close(read ? read() : input ? ta.value.trim() : true);
     cancel.onclick = () => close(null);
     el.onclick = e => { if(e.target === el) close(null); };
@@ -1384,6 +1606,26 @@ async function markSubmitted(id){
   rpc('dashMarkApplicationSubmitted', id).then(() => { toast('Marked submitted'); load(); }).catch(fail);
 }
 
+/** Approved but never sent: stuck, unconfirmed, stopped before Submit, or failed after approval. */
+function canRetrySubmit(a, s){
+  return s.stuck || s.unconfirmed || /^(Form Incomplete|Check Before Submit)/.test(a.status || '') ||
+    ((a.status === 'Failed' || a.status === 'Error') && a.approvedMs > 0 && !a.sentBack);
+}
+
+async function retrySubmit(id){
+  const a = D.applications.find(x => x.id === id);
+  if(!a) return;
+  const s = appInfo(a);
+  const ok = await dialog({ title: 'Submit this application again?', ok: 'Retry submit',
+    body: `<b>${esc(a.company)}</b> - ${esc(a.title)} was approved but hasn't been sent. ${esc(whoseChrome(a.owner).replace(/^./, c => c.toUpperCase()))} fills the form again with the latest CV and cover letter and submits it straight away - no second approval.` +
+      (s.unconfirmed || s.stuck ? '<br><br><b>Check the employer site or the candidate inbox first</b> - if it did go through, use Mark submitted instead, or the candidate applies twice.' : '') });
+  if(!ok) return;
+  rpc('dashRetrySubmit', id).then(r => {
+    toast(r && r.busy ? 'A new document is still being written - try once it is ready' : r && r.already ? 'Already submitted' : 'Back in line to submit - usually within a few minutes while Chrome is open');
+    load();
+  }).catch(fail);
+}
+
 async function retryApp(id){
   const a = D.applications.find(x => x.id === id);
   if(!a) return;
@@ -1392,7 +1634,7 @@ async function retryApp(id){
     body: `<b>${esc(a.company)}</b> - ${esc(a.title)} goes back in the queue as a new job: fresh form fill with the latest CV and cover letter, then back to Ready to approve.` +
       (approved ? '<br><br><b>Check the employer\'s site first</b> - if it already went through, use Mark submitted instead, or the candidate applies twice.' : '') });
   if(!ok) return;
-  rpc('dashRetryApplication', id).then(r => { toast(r && r.busy ? 'A new document is still being written - run it again once it is ready' : 'Re-queued'); load(); }).catch(fail);
+  rpc('dashRetryApplication', id).then(r => { toast(r && r.busy ? 'A new document is still being written - run it again once it is ready' : r && r.already ? 'Already submitted - not re-queued' : 'Re-queued'); load(); }).catch(fail);
 }
 
 async function delCandidate(id){

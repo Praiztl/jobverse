@@ -58,6 +58,8 @@ var JV = {
     AIOutputs: ['OutputID', 'CreatedAt', 'Agent', 'CandidateID', 'JobID', 'Model', 'OutputJSON'],
     ActivityLog: ['Timestamp', 'Actor', 'Action', 'RefType', 'RefID', 'Detail'],
     Reports: ['GeneratedAt', 'Period', 'MetricsJSON', 'Summary'],
+    // Console users and roles (Users.gs). KeyHash is a SHA-256 of the person's sign-in link key, never the key.
+    Users: ['UserID', 'CreatedAt', 'Name', 'Email', 'Role', 'Status', 'KeyHash', 'LinkSentAt', 'LastSeenAt', 'CreatedBy'],
     Config: ['Key', 'Value', 'Notes'],
     // Per-candidate, per-site accounts created for sign-in walls (Workday,
     // iCIMS, career portals...). ATSDomain is the actual site hostname (e.g.
@@ -75,8 +77,9 @@ var JV = {
     ['FORM_ID', '', 'ID of the client Google Form. Then run installFormTrigger().'],
     ['ROOT_FOLDER_ID', '', 'Filled automatically by setup.'],
     ['API_TOKEN', '', 'Filled automatically. Shared secret for the Chrome extension.'],
-    ['DASHBOARD_KEY', '', 'Filled automatically. Open the console as <web app URL>?key=<this value>. Change it to revoke old links.'],
-    ['DASHBOARD_EMAILS', '', 'Comma separated Google accounts that can open the console without the key (Workspace accounts only - Google hides the email of other viewers). Blank = only the deploying account.'],
+    ['DASHBOARD_KEY', '', 'Filled automatically. Owner (Admin) link: <web app URL>?key=<this value>. Staff get their own links from the console\'s Users page. Change it to revoke old links.'],
+    ['DASHBOARD_EMAILS', '', 'Comma separated Google accounts that open the console as Admin without a link (Workspace accounts only - Google hides the email of other viewers). Blank = only the deploying account. Prefer the Users page.'],
+    ['CONSOLE_URL', '', 'The console\'s /exec address, used in sign-in links emailed from the Users page. Blank = worked out automatically.'],
     ['ANTHROPIC_MODEL', 'claude-sonnet-4-6', 'Model used by all agents.'],
     ['DEFAULT_TONE', 'Jobverse Standard', 'Tone profile applied unless overridden.'],
     ['CV_TEMPLATE', 'Classic', 'CV layout: Classic (the agency format - black serif, centred header, ruled sections; used for any value except ATS Simple) or ATS Simple (plain single column).'],
@@ -84,7 +87,6 @@ var JV = {
     ['CV_ACCENT_COLOR', '#1F4E79', 'Hex accent colour for the ATS Simple CV layout. Classic is black and white.'],
     ['REPORT_EMAILS', '', 'Comma separated emails for daily report.'],
     ['MAX_APPS_PER_CANDIDATE_PER_DAY', '15', 'Safety throttle: max applications started per candidate per day.'],
-    ['ACCOUNT_REVEAL_EMAILS', '', 'Comma separated Google accounts allowed to reveal saved job-site passwords in the dashboard. Blank = only the deploying account.'],
     ['DEFAULT_TARGET_APPLICATIONS', '50', 'Default total application goal assigned to each new candidate. Editable per candidate in the dashboard.'],
     ['REVIEW_REQUIRED', 'TRUE', 'If TRUE, extension will not submit without an approved review task.'],
     ['ADZUNA_APP_ID', '', 'Free at developer.adzuna.com. Needed for the Prospect Finder (Prospects.gs).'],
