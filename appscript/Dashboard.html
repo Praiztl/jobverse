@@ -623,9 +623,12 @@ function myRunBar(){
 function myRunBarInner(){
   const run = agentState('autorun', ME.id), x = agentState('extension', ME.id);
   const queued = D.prospects.filter(p => p.status === 'Queued');
-  const mine = queued.filter(p => isMine(p.queuedBy)).length, others = queued.length - mine;
+  // Jobs queued before queues had owners belong to nobody: any linked Chrome runs them, this one included
+  const mine = queued.filter(p => isMine(p.queuedBy)).length, unowned = queued.filter(p => !p.queuedBy).length;
+  const others = queued.length - mine - unowned;
   const line = (mine ? `${mine} of your jobs in line` : 'none of your jobs in line') +
-    (others ? ` · ${others} queued by teammates (their own Chrome runs those)` : '');
+    (others ? ` · ${others} queued by teammates (their own Chrome runs those)` : '') +
+    (unowned ? ` · ${unowned} older job${unowned > 1 ? 's' : ''} with no owner (any Chrome runs ${unowned > 1 ? 'those' : 'it'}, yours included)` : '');
   if(run.ok) return `<div class="runbar"><span class="dot ok"></span><b>Your auto-apply is on</b><span class="mut">· ${line}</span></div>`;
   return `<div class="runbar ${mine ? 'off' : ''}"><span class="dot ${mine ? 'bad' : 'idle'}"></span><b>Your auto-apply is off</b><span>· ${line}.${mine ? ' Open Chrome and tick <b>Auto-run the queue</b> in the Jobverse extension, signed in with your console link.' : ''}${x.ok ? ' Your approved applications still get submitted.' : ''}</span>
     <button class="btn ghost tiny" onclick="go('help')">How?</button></div>`;
@@ -1657,13 +1660,16 @@ async function clearLog(){
 async function markAccountCreated(id){
   const a = (D.accounts || []).find(x => x.id === id);
   if(!a) return;
+  // Changing a saved password is for Admins only (the server refuses it otherwise), so Staff get no password box
+  const admin = can('admin');
   const pw = await dialog({ title: 'Mark the ' + a.site + ' account as created?', ok: 'Mark created',
     body: `Do this once the account for <b>${esc(candName(a.cand))}</b> (login <b>${esc(a.email)}</b>) works on the site - signed up, email verified. ` +
       'The extension will then sign in with it instead of trying to sign up again.<br><br>' +
-      'If you signed up with the password from <b>Show password</b>, leave the box empty. If you chose a different password, enter it so the extension can sign in.',
-    input: 'Password you used (only if different)', placeholder: 'Leave empty to keep the saved password' });
+      (admin ? 'If you signed up with the password from <b>Show password</b>, leave the box empty. If you chose a different password, enter it so the extension can sign in.'
+        : 'Signed up with a password of your own? Ask an Admin to save it here, or the extension will not be able to sign in.'),
+    input: admin ? 'Password you used (only if different)' : '', placeholder: 'Leave empty to keep the saved password' });
   if(pw === null) return;
-  rpc('dashMarkAccountCreated', id, pw).then(() => { toast('Marked created'); load(); }).catch(fail);
+  rpc('dashMarkAccountCreated', id, admin && typeof pw === 'string' ? pw : '').then(() => { toast('Marked created'); load(); }).catch(fail);
 }
 
 function revealPassword(id){
