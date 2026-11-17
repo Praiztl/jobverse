@@ -41,8 +41,45 @@ function runResumeAnalyst_(candidateId) {
 
 /* ----------------------------- Job Analyst ------------------------------ */
 
+/**
+ * Greenhouse and Lever often serve the application form on its own page, with
+ * no job description on it - and then the analysis (and the CV tailored from it)
+ * had nothing to go on ("Unknown (Application Form Only)"). Both publish each
+ * job through a public API, so the real title, location and description are
+ * fetched from there. '' when the link isn't one of theirs or the fetch fails.
+ */
+function atsJobText_(jobUrl) {
+  var u = String(jobUrl || ''), api = null, board = '', m;
+  if ((m = u.match(/greenhouse\.io\/([\w-]+)\/jobs\/(\d+)/i))) { board = m[1]; api = 'https://boards-api.greenhouse.io/v1/boards/' + m[1] + '/jobs/' + m[2]; }
+  else if ((m = u.match(/greenhouse\.io\/embed\/job_app\?(?=.*\bfor=([\w-]+))(?=.*\btoken=(\d+))/i))) { board = m[1]; api = 'https://boards-api.greenhouse.io/v1/boards/' + m[1] + '/jobs/' + m[2]; }
+  else if ((m = u.match(/jobs\.(?:eu\.)?lever\.co\/([\w-]+)\/([0-9a-f-]{36})/i))) { board = m[1]; api = 'https://api.lever.co/v0/postings/' + m[1] + '/' + m[2]; }
+  if (!api) return '';
+  var strip = function (h) {
+    return String(h || '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&')
+      .replace(/<\/(p|li|h\d|div)>|<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ')
+      .replace(/[ \t]+/g, ' ').replace(/\n\s*\n+/g, '\n').trim();
+  };
+  try {
+    var res = UrlFetchApp.fetch(api, { muteHttpExceptions: true });
+    if (res.getResponseCode() !== 200) return '';
+    var d = JSON.parse(res.getContentText());
+    if (d.content !== undefined) { // Greenhouse
+      return 'JOB TITLE: ' + (d.title || '') + '\nCOMPANY: ' + (d.company_name || board) +
+        '\nLOCATION: ' + ((d.location || {}).name || '') + '\n\n' + strip(d.content);
+    }
+    var lists = (d.lists || []).map(function (l) { return l.text + ':\n' + strip(l.content); }).join('\n\n');
+    return 'JOB TITLE: ' + (d.text || '') + '\nCOMPANY: ' + board + '\nLOCATION: ' + ((d.categories || {}).location || '') +
+      '\n\n' + (d.descriptionPlain || strip(d.description)) + '\n\n' + lists + '\n\n' + (d.additionalPlain || strip(d.additional));
+  } catch (e) {
+    return '';
+  }
+}
+
 /** jdText can be a pasted JD or text scraped by the extension. */
 function runJobAnalyst_(candidateId, jobUrl, jdText, atsName) {
+  // The ATS's own copy of the job ad goes first: the page may be the form alone
+  var published = atsJobText_(jobUrl);
+  if (published) jdText = 'JOB AD (published by the employer ATS):\n' + published.slice(0, 15000) + '\n\nTHE PAGE THE FORM IS ON:\n' + jdText;
   // Scored in the same call: a second one here would hold up the CV behind it
   var cand = findRow_('Candidates', 'CandidateID', candidateId);
   var profile = cand && cand.AIProfileJSON;
