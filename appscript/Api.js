@@ -362,6 +362,9 @@ function apiAnswerField_(req) {
     'currency or has no currency at all ("1.5m"): when its currency is missing, or differs from the currency of the job\'s country, ' +
     'do not put that number on the form - answer "Negotiable" in a text box, or the closest "open/negotiable" option; never convert it yourself. ' +
     'Never invent a fact. If the field is optional and the data has no answer, use "skip". ' +
+    'Education questions are about the degree in the candidate profile: "school"/"university" is the institution\'s name alone ' +
+    '(e.g. "Obafemi Awolowo University", no city or abbreviation), "degree" is its level (e.g. "Bachelor\'s Degree"), and ' +
+    '"discipline", "field of study" or "major" is the subject studied (e.g. "Engineering Physics") - never the candidate\'s job. ' +
     'Address fields (street, address line, city, state, county, zip/postcode) take only the candidate\'s own home address: ' +
     'use "address" (and the city or country in "location" when it names one place). "preferredLocations" and any list of ' +
     'several countries or cities is where they would like to work, never an address - do not put it in an address field. ' +
