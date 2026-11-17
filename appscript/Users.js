@@ -94,7 +94,7 @@ var CALLER_ = null, CALLER_EXT_ = '';
 
 // The extension version in the repo's main branch. Bump with manifest.json, so the console can tell
 // people whose Chrome runs an older copy to update it.
-var CURRENT_EXTENSION_VERSION_ = '1.3.15';
+var CURRENT_EXTENSION_VERSION_ = '1.3.16';
 
 function setCaller_(userKey, ext) {
   CALLER_ = null;
