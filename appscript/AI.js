@@ -64,7 +64,29 @@ function callClaudeJSON_(systemPrompt, userPrompt, maxTokens) {
   var start = clean.indexOf('{');
   var end = clean.lastIndexOf('}');
   if (start > -1 && end > start) clean = clean.slice(start, end + 1);
-  return JSON.parse(clean);
+  try {
+    return JSON.parse(clean);
+  } catch (e) {
+    // Sometimes two JSON objects come back one after the other (an answer, then a corrected
+    // one): first-brace-to-last-brace then isn't valid JSON. Take the first complete object.
+    var first = firstJsonObject_(clean);
+    if (first) return JSON.parse(first);
+    throw e;
+  }
+}
+
+/** The first balanced {...} in text (braces inside strings ignored), or ''. */
+function firstJsonObject_(text) {
+  var s = String(text), depth = 0, inStr = false, esc = false, from = s.indexOf('{');
+  if (from < 0) return '';
+  for (var i = from; i < s.length; i++) {
+    var ch = s.charAt(i);
+    if (inStr) { if (esc) esc = false; else if (ch === '\\') esc = true; else if (ch === '"') inStr = false; continue; }
+    if (ch === '"') inStr = true;
+    else if (ch === '{') depth++;
+    else if (ch === '}' && --depth === 0) return s.slice(from, i + 1);
+  }
+  return '';
 }
 
 /** Written once per form field or click: nothing reads them, so they stay out of the sheet unless debugging. */

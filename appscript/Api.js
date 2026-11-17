@@ -121,7 +121,7 @@ function apiGetCandidatePayload_(req) {
   return {
     id: c.CandidateID,
     fields: {
-      fullName: c.FullName, email: c.Email, phone: c.Phone, location: c.Location,
+      fullName: c.FullName, email: c.Email, phone: c.Phone, location: c.Location, address: c.Address, preferredLocations: c.PreferredLocations,
       rightToWork: c.RightToWork, visa: c.VisaStatus, licence: c.DrivingLicence,
       minSalary: c.MinSalary, noticePeriod: c.NoticePeriod, linkedin: c.LinkedIn,
       github: c.GitHub, portfolio: c.Portfolio, relocate: c.WillingToRelocate,
@@ -359,7 +359,11 @@ function apiAnswerField_(req) {
     'Answer from the candidate data and profile whenever they support an answer, including open questions, which get a short honest reply built from the profile. ' +
     'Questions about the application itself have safe answers: "how did you hear about us" is a job board or "Other", and expected salary comes from minSalary. ' +
     'Never invent a fact. If the field is optional and the data has no answer, use "skip". ' +
-    'Use "human" only for a required field whose answer is not in the data and could misrepresent the candidate if guessed, such as an ID number, a legal declaration or a date of birth.',
+    'Address fields (street, address line, city, state, county, zip/postcode) take only the candidate\'s own home address: ' +
+    'use "address" (and the city or country in "location" when it names one place). "preferredLocations" and any list of ' +
+    'several countries or cities is where they would like to work, never an address - do not put it in an address field. ' +
+    'When the address data does not give the part a field asks for, use "human" if the field is required, else "skip". ' +
+    'Use "human" only for a required field whose answer is not in the data and could misrepresent the candidate if guessed, such as an ID number, a legal declaration, a home address or a date of birth.',
     'SEMANTIC FIELD INFO:\n' + JSON.stringify({
       id: fieldInfo.id,
       label: fieldInfo.label,
@@ -382,7 +386,7 @@ function apiAnswerField_(req) {
     '\nTODAY: ' + today +
     contextInfo +
     '\n\nCANDIDATE STRUCTURED FIELDS:\n' + JSON.stringify({
-      fullName: cand.FullName, email: cand.Email, phone: cand.Phone, location: cand.Location,
+      fullName: cand.FullName, email: cand.Email, phone: cand.Phone, location: cand.Location, address: cand.Address, preferredLocations: cand.PreferredLocations,
       rightToWork: cand.RightToWork, visa: cand.VisaStatus, licence: cand.DrivingLicence,
       minSalary: cand.MinSalary, noticePeriod: cand.NoticePeriod, linkedin: cand.LinkedIn,
       github: cand.GitHub, portfolio: cand.Portfolio, relocate: cand.WillingToRelocate,
@@ -476,7 +480,7 @@ function apiVisualCheck_(req) {
     'These are screenshots of one online job application form, top to bottom, filled in by a bot for this candidate. ' +
     (req.stage === 'submit' ? 'A reviewer has approved it and Submit is about to be pressed.' : 'It is about to go to a human reviewer.') +
     '\n\nCANDIDATE: ' + JSON.stringify({
-      fullName: cand.FullName, email: cand.ApplicationEmail || cand.Email, phone: cand.Phone, location: cand.Location,
+      fullName: cand.FullName, email: cand.ApplicationEmail || cand.Email, phone: cand.Phone, location: cand.Location, address: cand.Address, preferredLocations: cand.PreferredLocations,
       nationality: cand.Nationality, rightToWork: cand.RightToWork, noticePeriod: cand.NoticePeriod
     }) +
     '\n\nCANDIDATE PROFILE (summary): ' + String(cand.AIProfileJSON || '').slice(0, 3000) +

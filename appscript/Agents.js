@@ -863,7 +863,7 @@ function answerScreeningQuestion_(candidateId, jobId, questionText) {
     'their profile and structured fields. If the profile does not contain the answer, ' +
     'reply exactly NEEDS_HUMAN. Be concise and truthful. British English. Style: ' + getTone_(),
     'CANDIDATE STRUCTURED FIELDS:\n' + JSON.stringify({
-      name: cand.FullName, email: cand.Email, phone: cand.Phone, location: cand.Location,
+      name: cand.FullName, email: cand.Email, phone: cand.Phone, location: cand.Location, address: cand.Address, preferredLocations: cand.PreferredLocations,
       rightToWork: cand.RightToWork, visa: cand.VisaStatus, licence: cand.DrivingLicence,
       salary: cand.MinSalary, notice: cand.NoticePeriod, registrations: cand.Registrations,
       relocate: cand.WillingToRelocate, workModel: cand.WorkModel
