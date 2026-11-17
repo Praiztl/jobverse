@@ -24,7 +24,16 @@ function dashReport(key, from, to) {
   var start = reportDay_(from), end = reportDay_(to);
   if (!start || !end || end < start) throw new Error('Pick a start date on or before the end date');
   end.setDate(end.getDate() + 1);
-  return reportMetrics_(start.getTime(), end.getTime());
+  // Working a period out reads every application (often 15-20 seconds). The answer is kept for
+  // everyone until the data changes (dash:gen moves on every logged action, see Cache.js) or 10 minutes pass.
+  var cache = CacheService.getScriptCache(), gen = '', ckey = '';
+  try { gen = cache.get('dash:gen') || ''; ckey = 'report:' + from + ':' + to + ':' + gen; } catch (ignored) {}
+  if (ckey) {
+    try { var hit = cache.get(ckey); if (hit) return JSON.parse(hit); } catch (ignored) {}
+  }
+  var metrics = reportMetrics_(start.getTime(), end.getTime());
+  if (ckey) { try { cache.put(ckey, JSON.stringify(metrics), 600); } catch (ignored) { /* too big to keep */ } }
+  return metrics;
 }
 
 /** Midnight of a yyyy-MM-dd day in the script's time zone, or null. */
