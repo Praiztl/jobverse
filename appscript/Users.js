@@ -94,7 +94,7 @@ var CALLER_ = null, CALLER_EXT_ = '';
 
 // The extension version in the repo's main branch. Bump with manifest.json, so the console can tell
 // people whose Chrome runs an older copy to update it.
-var CURRENT_EXTENSION_VERSION_ = '1.3.13';
+var CURRENT_EXTENSION_VERSION_ = '1.3.14';
 
 function setCaller_(userKey, ext) {
   CALLER_ = null;
@@ -115,6 +115,47 @@ function ownedByCaller_(owner) {
 
 function apiWhoAmI_() {
   return CALLER_ ? { name: CALLER_.name, email: CALLER_.email, role: CALLER_.role } : null;
+}
+
+/**
+ * Who has jobs in line for a candidate, for the popup to explain an empty "Run my jobs":
+ * { me: name or null (extension not linked), mine, unowned, others: [{ name, count }] }.
+ */
+function apiQueueSummary_(req) {
+  var names = peopleNames_(), counts = {}, mine = 0, unowned = 0;
+  readRows_('Prospects', ['CandidateID', 'Status', 'QueuedBy']).forEach(function (p) {
+    if (p.CandidateID !== req.candidateId || p.Status !== 'Queued') return;
+    var by = String(p.QueuedBy || '');
+    if (!by) unowned++;
+    else if (by === callerId_()) mine++;
+    else counts[by] = (counts[by] || 0) + 1;
+  });
+  return {
+    me: CALLER_ ? CALLER_.name : null, mine: mine, unowned: unowned,
+    others: Object.keys(counts).map(function (id) { return { name: names[id] || 'someone who no longer has access', count: counts[id] }; })
+  };
+}
+
+/**
+ * "Run them here instead": this person takes over a candidate's jobs in line that belong to someone
+ * else (or nobody), so their Chrome runs them. Only jobs still waiting - never one being applied to.
+ */
+function apiTakeOverQueue_(req) {
+  if (!CALLER_) throw new Error('Link this Chrome to yourself first: paste your console sign-in link under Connection settings.');
+  if (!userCan_(CALLER_, 'work')) throw new Error('Your role (' + CALLER_.role + ') cannot run jobs.');
+  var lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    ensureColumns_('Prospects', ['QueuedBy', 'QueuedAt']);
+    var rows = readRows_('Prospects', ['ProspectID', 'CandidateID', 'Status', 'QueuedBy']).filter(function (p) {
+      return p.CandidateID === req.candidateId && p.Status === 'Queued' && String(p.QueuedBy || '') !== CALLER_.id;
+    });
+    setColumnForRows_('Prospects', 'QueuedBy', rows.map(function (p) { return p._row; }), CALLER_.id);
+    if (rows.length) logActivity_(CALLER_.email || CALLER_.name, 'queue_taken_over', 'candidate', req.candidateId, rows.length + ' job(s) now run by ' + CALLER_.name);
+    return { taken: rows.length };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 /** Names for the console to show next to queued jobs and applications: { userId: name }. */

@@ -92,7 +92,9 @@ function doPost(e) {
       findAccountEmail: apiFindAccountEmail_,
       exportDocumentPdf: apiExportDocumentPdf_,
       listApplicationsByStatus: apiListApplicationsByStatus_,
-      whoAmI: apiWhoAmI_
+      whoAmI: apiWhoAmI_,
+      queueSummary: apiQueueSummary_,
+      takeOverQueue: apiTakeOverQueue_
     };
     if (!handlers[req.action]) throw new Error('Unknown action: ' + req.action);
     out = { ok: true, data: handlers[req.action](req) };
@@ -1281,7 +1283,7 @@ function buildDashData_() {
   // Only the columns the dashboard shows - Candidates.AIProfileJSON and
   // ReviewQueue.AIFindings alone can be tens of KB per row.
   var apps = readRows_('Applications', ['ApplicationID', 'CandidateID', 'JobID', 'Company', 'JobTitle', 'ATS', 'Status',
-    'JobURL', 'CreatedAt', 'SubmittedAt', 'ConfirmationScreenshotURL', 'Outcome', 'FilledBy', 'ErrorLog', 'NeedsPerson', 'Owner']);
+    'JobURL', 'CreatedAt', 'SubmittedAt', 'ConfirmationScreenshotURL', 'Outcome', 'FilledBy', 'ErrorLog', 'NeedsPerson', 'Owner', 'SubmitClaimedAt']);
   var countByCand = {};
   apps.forEach(function (a) {
     if (countsAsApplication_(a.Status)) countByCand[a.CandidateID] = (countByCand[a.CandidateID] || 0) + 1;
@@ -1316,6 +1318,7 @@ function buildDashData_() {
       var errors = String(a.ErrorLog || '').trim().split('\n');
       return { id: a.ApplicationID, cand: a.CandidateID, jobId: a.JobID, company: a.Company, title: a.JobTitle,
                ats: a.ATS, status: a.Status, url: a.JobURL, submitted: String(a.SubmittedAt || ''), owner: String(a.Owner || ''),
+               claimedMs: toEpochMs_(a.SubmitClaimedAt), // a Chrome has taken it to submit
                shot: a.ConfirmationScreenshotURL, outcome: a.Outcome, filledBy: a.FilledBy || '',
                createdMs: toEpochMs_(a.CreatedAt), submittedMs: toEpochMs_(a.SubmittedAt),
                approvedMs: approvedAt[a.ApplicationID] || 0,

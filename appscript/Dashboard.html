@@ -435,6 +435,12 @@ function appInfo(a){
     const since = a.approvedMs || a.createdMs;
     s.stuck = !!since && Date.now() - since > STUCK_AFTER_MS;
     if(s.stuck){ s.group = 'attention'; s.label = 'Approved ' + ago(since) + ' - not submitted yet'; s.cls = 'c-fail'; }
+    else if(D){
+      // Only the Chrome of the person it belongs to submits it: say whether that Chrome is on it
+      const chromeOk = agentState('extension', a.owner).ok;
+      s.label = a.claimedMs ? 'Approved - submitting now' : chromeOk ? 'Approved - sending shortly' : 'Approved - waiting for ' + whoseChrome(a.owner);
+      s.waitingOnChrome = !a.claimedMs && !chromeOk;
+    }
   }
   return s;
 }
@@ -826,7 +832,10 @@ function appRowHtml(a){
   // Failed includes an approved application the extension could not re-submit - it may have gone by hand
   // Ready too: a person may have finished the form and pressed the employer's Submit in the tab themselves
   const canMark = ready || s.stuck || s.unconfirmed || (s.approved && !s.stuck) || a.status === 'Failed' || a.status === 'Error';
-  const hint = s.stuck ? stuckReason(a) : s.unconfirmed ? 'Submit was clicked but no confirmation was seen. Check the employer\'s site or the candidate\'s inbox.'
+  const sendingHint = s.waitingOnChrome ? stuckReason(a)
+    : s.approved && !s.stuck ? (a.claimedMs ? 'Being submitted since ' + ago(a.claimedMs) + '. If the tab that filled it was closed, the form is filled again first, which takes a few minutes.'
+      : 'Sent from the tab that filled it within about a minute, or filled again in a new tab first if that tab was closed (a few minutes).') : '';
+  const hint = s.stuck ? stuckReason(a) : sendingHint ? sendingHint : s.unconfirmed ? 'Submit was clicked but no confirmation was seen. Check the employer\'s site or the candidate\'s inbox.'
     : /^Check Before Submit/.test(a.status) ? 'Not submitted yet: the last screenshot check before Submit found problems. The open tab lists them (bottom right) - fix them and press "check again", or "submit" if they are fine.'
     : /^Form Incomplete/.test(a.status) ? 'Not submitted: required fields were still empty or invalid. Finish them in the open tab (marked red) and it submits by itself. If the tab is gone, use Retry.'
     : (a.status === 'Failed' || a.status === 'Error') && a.lastError ? a.lastError
