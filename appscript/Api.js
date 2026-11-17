@@ -389,7 +389,8 @@ function apiAnswerField_(req) {
     '\nTODAY: ' + today +
     contextInfo +
     '\n\nCANDIDATE STRUCTURED FIELDS:\n' + JSON.stringify({
-      fullName: cand.FullName, email: cand.Email, phone: cand.Phone, location: cand.Location, address: cand.Address, preferredLocations: cand.PreferredLocations,
+      // The address applications use: the dedicated application inbox (replies and verification emails go there)
+      fullName: cand.FullName, email: cand.ApplicationEmail || cand.Email, phone: cand.Phone, location: cand.Location, address: cand.Address, preferredLocations: cand.PreferredLocations,
       rightToWork: cand.RightToWork, visa: cand.VisaStatus, licence: cand.DrivingLicence,
       minSalary: cand.MinSalary, noticePeriod: cand.NoticePeriod, linkedin: cand.LinkedIn,
       github: cand.GitHub, portfolio: cand.Portfolio, relocate: cand.WillingToRelocate,
@@ -483,7 +484,8 @@ function apiVisualCheck_(req) {
     'These are screenshots of one online job application form, top to bottom, filled in by a bot for this candidate. ' +
     (req.stage === 'submit' ? 'A reviewer has approved it and Submit is about to be pressed.' : 'It is about to go to a human reviewer.') +
     '\n\nCANDIDATE: ' + JSON.stringify({
-      fullName: cand.FullName, email: cand.ApplicationEmail || cand.Email, phone: cand.Phone, location: cand.Location, address: cand.Address, preferredLocations: cand.PreferredLocations,
+      // Either address is theirs: forms get the application email, older applications may have the personal one
+      fullName: cand.FullName, email: cand.ApplicationEmail || cand.Email, alsoTheirEmail: cand.Email, phone: cand.Phone, location: cand.Location, address: cand.Address, preferredLocations: cand.PreferredLocations,
       nationality: cand.Nationality, rightToWork: cand.RightToWork, noticePeriod: cand.NoticePeriod
     }) +
     '\n\nCANDIDATE PROFILE (summary): ' + String(cand.AIProfileJSON || '').slice(0, 3000) +
