@@ -395,6 +395,8 @@ function scoreHtml(v){
   if(isNaN(n)) return '';
   return `<span class="score ${n < 60 ? 'lo' : n >= 80 ? 'hi' : ''}" title="${esc(SCORE_HELP)}">ATS match ${esc(Math.round(n))}/100</span>`;
 }
+/** A raw Adzuna link (not the employer's page): Adzuna turns away visitors from some countries. */
+function isAdzunaLink(url){ return /^https?:\/\/([^\/]+\.)?adzuna\.[a-z.]+(\/|$)/i.test(String(url || '')); }
 function startOfToday(){ const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); }
 function todayIso(){ const n = new Date(), p = x => String(x).padStart(2, '0'); return `${n.getFullYear()}-${p(n.getMonth() + 1)}-${p(n.getDate())}`; }
 /** Whole days from today to a yyyy-MM-dd date (negative = overdue). */
@@ -920,7 +922,8 @@ PAGES.prospects = () => {
   const dir = (F.prosSort || 'newest') === 'oldest' ? 1 : -1;
   rows = rows.slice().sort((a, b) => (!a.found !== !b.found) ? (a.found ? -1 : 1) : (a.found - b.found) * dir); // undated last
   const pg = paginate(rows, 'prosPage', F.prosSize || 25);
-  const ready = F.pCand ? D.prospects.filter(p => p.cand === F.pCand && FOUND_STATUSES.includes(p.status)).length : 0;
+  const ready = F.pCand ? D.prospects.filter(p => p.cand === F.pCand && FOUND_STATUSES.includes(p.status) && !isAdzunaLink(p.url)).length : 0;
+  const adzunaOld = F.pCand ? D.prospects.filter(p => p.cand === F.pCand && FOUND_STATUSES.includes(p.status) && isAdzunaLink(p.url)).length : 0;
   const one = !!F.pCand;
   return header('Find jobs', 'Pick a candidate, find jobs, then press <b>Apply</b> on the ones they should go for. The extension fills them in by itself and asks you before anything is sent.') +
     `<div class="card">
@@ -934,6 +937,7 @@ PAGES.prospects = () => {
         <button class="btn ghost tiny qbtn" onclick="queueAll(0)" ${one && ready ? '' : 'disabled'}>All ${one ? ready : ''}</button>
         <span class="mut" id="pMsg"></span>
       </div>
+      ${adzunaOld ? `<div class="mut small" style="margin-top:8px">${adzunaOld} older Adzuna link${adzunaOld > 1 ? 's are' : ' is'} left out of these buttons: Adzuna hides its jobs from some countries, so the extension skips them unless the computer is on a VPN. New searches only keep Adzuna jobs whose employer page was found.</div>` : ''}
     </div>
     ${F.prosToday ? `<div class="note">Showing the jobs <b>you queued today</b>, for every candidate, with what happened to each. <button class="linkbtn" onclick="setFilter('prosToday','')">Show all jobs</button></div>` : ''}
     <div class="toolbar">
@@ -948,7 +952,7 @@ PAGES.prospects = () => {
       <td class="mut nowrap" title="${esc(p.found ? new Date(p.found).toLocaleString('en-GB') : 'No date recorded')}">${esc(foundDay(p.found))}</td>
       ${one ? '' : `<td class="mut">${esc(candName(p.cand))}</td>`}
       <td><b>${esc(p.company)}</b>${p.url ? ` <a href="${esc(p.url)}" class="small">open</a>` : ''}<br><span class="mut">${esc(p.title)}</span></td>
-      <td class="mut">${esc(p.source || '')}</td><td>${prospectChip(p.status)}${p.notes && !FOUND_STATUSES.includes(p.status) && p.status !== 'Queued' && !prospectRunning(p) ? `<div class="mut small" style="margin-top:3px;max-width:320px">${esc(p.notes)}</div>` : ''}${p.queuedBy && (p.status === 'Queued' || prospectRunning(p)) ? `<div class="mut small" style="margin-top:3px">Queued by ${esc(personName(p.queuedBy))}</div>` : ''}</td>
+      <td class="mut">${esc(p.source || '')}</td><td>${prospectChip(p.status)}${isAdzunaLink(p.url) && FOUND_STATUSES.includes(p.status) ? '<div class="mut small" style="margin-top:3px">Adzuna link - needs a VPN from Nigeria</div>' : ''}${p.notes && !FOUND_STATUSES.includes(p.status) && p.status !== 'Queued' && !prospectRunning(p) ? `<div class="mut small" style="margin-top:3px;max-width:320px">${esc(p.notes)}</div>` : ''}${p.queuedBy && (p.status === 'Queued' || prospectRunning(p)) ? `<div class="mut small" style="margin-top:3px">Queued by ${esc(personName(p.queuedBy))}</div>` : ''}</td>
       <td><div class="acts" style="justify-content:flex-end">${p.status === 'Queued' ? `<span class="mut">${p.queuedBy && !isMine(p.queuedBy) ? 'on ' + esc(whoseChrome(p.queuedBy)) : 'in line'}</span>` : prospectRunning(p) ? '<span class="mut">running</span>' :
         `<button class="btn ghost tiny" onclick="prospectAction('${p.id}','Queued')">Apply</button>
          ${/^Skipped/.test(p.status) ? '' : `<button class="btn ghost tiny" onclick="prospectAction('${p.id}','Skipped')">Skip</button>`}`}</div></td>
@@ -1546,7 +1550,7 @@ function findJobs(){
 function queueAll(limit){
   const cand = F.pCand;
   if(!cand) { toast('Pick a candidate first'); return; }
-  const foundCount = D.prospects.filter(p => p.cand === cand && FOUND_STATUSES.includes(p.status)).length;
+  const foundCount = D.prospects.filter(p => p.cand === cand && FOUND_STATUSES.includes(p.status) && !isAdzunaLink(p.url)).length;
   if(!foundCount) { toast('No found jobs left to queue for this candidate.'); return; }
   const n = limit > 0 ? Math.min(limit, foundCount) : foundCount;
   document.getElementById('pMsg').textContent = `Queuing ${n} of ${foundCount}…`;
@@ -1742,7 +1746,8 @@ const HELP_HTML = `
 
 <div class="card">
 <h2>Working as a team</h2>
-<p class="mut">Everyone opens the console with the same <b>?key=</b> link and can find, queue, approve and send back. Each person who runs applications also needs the extension in their Chrome, connected with the web app URL and API token. Two Chromes never work on the same queued job, and only one Chrome submits each approved application.</p>
+<p class="mut">Everyone has their own <b>sign-in link</b>, which an Admin creates on <b>Team &amp; access</b>; the link signs them in, so keep it private. What they can do depends on their role: <b>Admin</b> (everything, including people and site passwords), <b>Staff</b> (finding, queuing, approving and sending back) or <b>Viewer</b> (read only). Everything they do is logged under their name.</p>
+<p class="mut"><b>Your queue is yours.</b> Jobs you press Apply on are run by <b>your</b> Chrome only, and the applications it fills are submitted by your Chrome once approved, so teammates' queues never mix with yours. For that, paste your sign-in link into the extension's <b>Connection settings</b>. Use <b>Only mine</b> on Applications and Find jobs to see just your own work.</p>
 <p class="mut">The page refreshes by itself every 30 seconds while you're looking at it. Changes made by others appear within about half a minute; your own appear straight away.</p>
 </div>
 
@@ -1759,8 +1764,8 @@ const HELP_HTML = `
 <h2>The Chrome extension</h2>
 <p class="mut">The extension does all the form filling and submitting. It finds its own way from a job ad to the application form, creates or signs in to site accounts when a site needs one, uploads the CV and cover letter, answers each question from the candidate's data, and follows Next through multi-step forms. It never presses Submit until the final application is approved.</p>
 <p class="mut"><b>Auto-run the queue:</b> tick this in the extension popup on the computer that should do the work, and keep Chrome open there. Every few minutes it takes the next queued job for any active candidate (skipping anyone inactive, at their target or at today's limit) and fills it in a background tab. Jobs that only need your approval have their tab closed; after you approve, the extension reopens the job and submits it. Jobs that need a person (a CAPTCHA, a verification email that never arrived, a question it couldn't answer) keep their tab open. Two computers can both run it - each job is only ever taken by one of them.</p>
-<p class="mut"><b>One job right now:</b> open the extension on the job posting, pick the candidate, and click <b>Apply to this job</b>. <b>Run queued prospects</b> works through one candidate's queue straight away.</p>
-<p class="mut"><b>Sharing it with your team:</b> send them the chrome-extension folder; they open <b>chrome://extensions</b>, turn on <b>Developer mode</b>, click <b>Load unpacked</b> and pick the folder, then paste the web app URL and API token (Config tab of the sheet) into the extension's <b>Connection settings</b>. It's not on the Chrome Web Store on purpose - this is a private internal tool.</p>
+<p class="mut"><b>One job right now:</b> open the extension on the job posting, pick the candidate, and click <b>Apply to this job</b>. <b>Run my jobs in line</b> works through your queued jobs for one candidate straight away.</p>
+<p class="mut"><b>Sharing it with your team:</b> send them the chrome-extension folder; they open <b>chrome://extensions</b>, turn on <b>Developer mode</b>, click <b>Load unpacked</b> and pick the folder, then paste their own console sign-in link and the API token (Config tab of the sheet) into the extension's <b>Connection settings</b>. To update it later, pull the new version and press the reload arrow on Jobverse in <b>chrome://extensions</b>; the top of the console says when someone's copy is out of date. It's not on the Chrome Web Store on purpose - this is a private internal tool.</p>
 </div>
 
 <div class="card">

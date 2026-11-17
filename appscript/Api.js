@@ -357,7 +357,10 @@ function apiAnswerField_(req) {
     prompt + ' Return JSON with this exact structure: {"action": "fill|select|check|uncheck|skip|human", "value": "string", "reason": "string", "confidence": 0.0-1.0}. ' +
     'Action types: "fill" for text fields, "select" for dropdowns (use option value), "check"/"uncheck" for checkboxes, "skip" to ignore, "human" as a last resort. ' +
     'Answer from the candidate data and profile whenever they support an answer, including open questions, which get a short honest reply built from the profile. ' +
-    'Questions about the application itself have safe answers: "how did you hear about us" is a job board or "Other", and expected salary comes from minSalary. ' +
+    'Questions about the application itself have safe answers: "how did you hear about us" is a job board or "Other". ' +
+    'Expected salary comes from minSalary, always with its currency (e.g. "GBP 55,000"). minSalary is often in the candidate\'s home ' +
+    'currency or has no currency at all ("1.5m"): when its currency is missing, or differs from the currency of the job\'s country, ' +
+    'do not put that number on the form - answer "Negotiable" in a text box, or the closest "open/negotiable" option; never convert it yourself. ' +
     'Never invent a fact. If the field is optional and the data has no answer, use "skip". ' +
     'Address fields (street, address line, city, state, county, zip/postcode) take only the candidate\'s own home address: ' +
     'use "address" (and the city or country in "location" when it names one place). "preferredLocations" and any list of ' +
@@ -1818,8 +1821,13 @@ function dashQueueAllFound(key, candidateId, limit) {
   var lock = LockService.getScriptLock(); // a double click must not queue the next batch as well
   lock.waitLock(20000);
   try {
-    var found = readRows_('Prospects', ['ProspectID', 'CandidateID', 'Status', 'FoundAt']).filter(function (p) {
-      return p.CandidateID === candidateId && (p.Status === 'Found' || p.Status === 'Found - Manual Review');
+    // Raw Adzuna links (from before the finder kept only employer links) are refused from some countries:
+    // the extension skips each one at once as region-locked, so the bulk buttons pass over them
+    var blocked = 0;
+    var found = readRows_('Prospects', ['ProspectID', 'CandidateID', 'Status', 'FoundAt', 'JobURL']).filter(function (p) {
+      if (p.CandidateID !== candidateId || (p.Status !== 'Found' && p.Status !== 'Found - Manual Review')) return false;
+      if (isAdzunaLink_(p.JobURL)) { blocked++; return false; }
+      return true;
     });
     found.sort(function (a, b) { return (toEpochMs_(b.FoundAt) - toEpochMs_(a.FoundAt)) || (b._row - a._row); });
     var n = parseInt(limit, 10);
@@ -1834,7 +1842,7 @@ function dashQueueAllFound(key, candidateId, limit) {
     logActivity_(dashActor_(), 'prospects_bulk_queued', 'candidate', candidateId,
       pick.length + ' queued' + (n > 0 ? ' (newest ' + n + ')' : '') + ', ' + (found.length - pick.length) + ' still found');
     return {
-      queued: pick.length, remaining: found.length - pick.length,
+      queued: pick.length, remaining: found.length - pick.length, adzunaSkipped: blocked,
       ids: pick.map(function (p) { return String(p.ProspectID); })
     };
   } finally {
