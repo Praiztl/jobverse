@@ -220,6 +220,7 @@
     <button data-v="generate" class="minor">Write a CV by hand</button>
     <button data-v="accounts" class="minor">Site accounts</button>
     <button data-v="report" class="minor">Reports</button>
+    <button data-v="staff" class="minor" id="navStaff" hidden>Staff activity</button>
     <button data-v="log" class="minor">Activity</button>
     <button data-v="users" class="minor" id="navUsers" hidden>Team &amp; access</button>
     <button data-v="help" class="minor">Help &amp; guide</button>
@@ -257,6 +258,10 @@ const ACTIONS_BY_PERM = {
   const css = (hide.length ? hide.join(',') + '{display:none!important}' : '') + (lock.length ? lock.join(',') + '{pointer-events:none;opacity:.5}' : '');
   if(css){ const s = document.createElement('style'); s.textContent = css; document.head.appendChild(s); }
   document.getElementById('navUsers').hidden = !can('admin');
+  // Admins see everyone's work; Staff see (and add to) their own
+  const navStaff = document.getElementById('navStaff');
+  navStaff.hidden = !can('work');
+  if(!can('admin')) navStaff.textContent = 'My work';
   document.getElementById('whoami').innerHTML = `Signed in as<b>${esc(ME.name || ME.email)}</b><span class="role">${esc(ME.role)}</span>`;
 })();
 
@@ -297,6 +302,7 @@ function load(background, shared){
       if(shared && seq !== writeSeq) return; // something changed while this was on its way - it would undo that on screen
       D = d; dataVersion = d.version || '';
       REPORT.at = 0; // the sheet changed (a submission, say): the Reports page works its numbers out again
+      STAFF.at = 0;  // and so does Staff activity
       updateBadges();
       // Not redrawn under someone typing, a dialog or an open CV preview: say there's news, and show it once they're done
       if(background && userIsEditing()) { pendingRedraw = true; showNewPill(); return; }
@@ -1107,6 +1113,109 @@ PAGES.report = () => {
     <p class="mut">Interviews, offers and rejections come from what you record on Follow-ups, dated the day they were recorded.</p>`;
 };
 
+/* ---------------------------- staff activity ---------------------------- */
+
+// Worked out on the server from the ActivityLog for the period picked; Admins get everyone, Staff themselves
+const STAFF = { key: '', data: null, error: '', at: 0 };
+const STAFF_ACTION = {
+  review_approve: 'Approved', review_revise: 'Sent back', review_reject: 'Sent back',
+  document_update_requested: 'Asked for a new version', application_marked_submitted: 'Marked submitted',
+  application_started: 'Started an application', application_submitted: 'Application submitted',
+  prospect_Queued: 'Queued a job', prospects_bulk_queued: 'Queued jobs', work_note: 'Work note'
+};
+
+function staffRange(){
+  const span = F.staffSpan || '7';
+  if(span === 'custom') return { from: F.staffFrom || isoDaysAgo(6), to: F.staffTo || todayIso() };
+  return { from: isoDaysAgo(Number(span) - 1), to: todayIso() };
+}
+function fetchStaff(range, key){
+  STAFF.key = key; STAFF.error = ''; STAFF.at = Date.now();
+  rpc('dashStaffActivity', range.from, range.to)
+    .then(r => { if(STAFF.key === key){ STAFF.data = r; if(view === 'staff') render(); } })
+    .catch(e => { if(STAFF.key === key){ STAFF.data = null; STAFF.error = e && e.message || String(e); if(view === 'staff') render(); } });
+}
+function refreshStaff(){ STAFF.key = ''; STAFF.data = null; render(); }
+
+function staffEntryHtml(e){
+  const t = new Date(e.ms), what = STAFF_ACTION[e.action] || String(e.action).replace(/^review_/, 'Review: ').replace(/_/g, ' ');
+  return `<tr><td class="mut nowrap">${esc(shortDate(e.ms) + ' ' + t.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }))}</td>
+    <td><b>${esc(what)}</b>${e.via === 'extension' ? ' <span class="mut">(extension)</span>' : ''}</td>
+    <td class="mut">${esc(e.detail || e.ref || '')}</td></tr>`;
+}
+
+PAGES.staff = () => {
+  if(!can('work')) return header('Staff activity') + `<div class="note bad">Your role can't see this page.</div>`;
+  const admin = can('admin'), range = staffRange(), key = range.from + '|' + range.to;
+  if(STAFF.key !== key){ STAFF.data = null; fetchStaff(range, key); }
+  else if(Date.now() - STAFF.at > 5 * MIN) fetchStaff(range, key);
+  const r = STAFF.data, span = F.staffSpan || '7';
+  const picker = `<div class="toolbar"><div><label>Period</label><select onchange="setFilter('staffSpan',this.value)">
+      ${[['1', 'Today'], ['7', 'Last 7 days'], ['30', 'Last 30 days'], ['90', 'Last 90 days'], ['custom', 'Choose dates']].map(([v, l]) => `<option value="${v}" ${span === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+    ${span === 'custom' ? `<div><label>From</label><input type="date" value="${esc(range.from)}" max="${todayIso()}" onchange="setFilter('staffFrom',this.value)"></div>
+      <div><label>To</label><input type="date" value="${esc(range.to)}" max="${todayIso()}" onchange="setFilter('staffTo',this.value)"></div>` : ''}
+    <div style="flex:0"><button class="btn ghost" onclick="refreshStaff()">Recalculate</button></div></div>`;
+  const noteForm = `<div class="card"><h2>Record work done outside the console</h2>
+    <p class="mut" style="margin-bottom:8px">A call or email to a recruiter, an application sent by hand, anything the console didn't see. ${admin ? 'It shows under your name here.' : 'Admins see it here and in the report email.'}</p>
+    <div class="toolbar" style="margin-bottom:0"><div class="grow"><label for="workNote">What you did</label>
+      <input id="workNote" maxlength="1000" autocomplete="off" placeholder="e.g. Called Acme's recruiter about Ada's application - interview likely next week"
+        onkeydown="if(event.key==='Enter')logWork()"></div>
+      <div style="min-width:0"><button class="btn primary" id="workNoteBtn" onclick="logWork()">Record</button></div></div></div>`;
+  const top = header(admin ? 'Staff activity' : 'My work',
+    (r ? `${esc(r.from)} to ${esc(r.to)} · worked out ${esc(ago(r.generated))}. ` : '') +
+    (admin ? 'What each person did in the console and with their Chrome extension. The daily report email has the same summary.' : 'What you did in the console and with your Chrome extension. Admins can see this.'));
+  if(STAFF.error) return top + picker + `<div class="note bad"><b>Could not work this out.</b> ${esc(STAFF.error)}</div>` + noteForm;
+  if(!r) return top + picker + `<div class="card">${emptyState('Working it out…', 'This reads the activity log.')}</div>` + noteForm;
+
+  const cats = r.categories, people = r.people;
+  const warn = (r.truncated ? `<div class="note warn">The log is very long, so only its newest entries were read. Pick a shorter period for exact numbers.</div>` : '') +
+    `<p class="mut" style="margin:-4px 0 10px">Older entries, and work done before someone had their own sign-in link, may not be counted. Clearing the activity log clears this history too.</p>`;
+
+  if(!admin){
+    const p = people[0];
+    if(!p) return top + picker + noteForm + `<div class="card">${emptyState('Nothing recorded in this period', '')}</div>`;
+    return top + picker + noteForm +
+      `<div class="grid">${cats.filter(c => c.key !== 'other' || p.counts.other).map(c => `<div class="stat"><b>${esc(p.counts[c.key])}</b><span>${esc(c.label)}</span></div>`).join('')}</div>` + warn +
+      `<h2>Recent</h2><div class="card flush"><div class="tablewrap"><table><tr><th>When</th><th>What</th><th>Detail</th></tr>` +
+      (p.recent.length ? p.recent.map(staffEntryHtml).join('') : `<tr><td colspan="3">${emptyState('Nothing recorded in this period', '')}</td></tr>`) +
+      '</table></div></div>';
+  }
+
+  const shown = cats.filter(c => c.key !== 'other');
+  const totals = {}; cats.forEach(c => totals[c.key] = people.reduce((s, p) => s + p.counts[c.key], 0));
+  const active = people.filter(p => p.total).length;
+  const open = people.find(p => p.id === F.staffOpen);
+  return top + picker +
+    `<div class="grid">
+      <div class="stat"><b>${esc(active)} of ${esc(people.length)}</b><span>People active</span></div>
+      <div class="stat"><b>${esc(totals.approved + totals.sentBack)}</b><span>Applications decided</span></div>
+      <div class="stat"><b>${esc(totals.submitted)}</b><span>Applications submitted</span></div>
+      <div class="stat"><b>${esc(totals.queued)}</b><span>Jobs queued</span></div>
+      <div class="stat"><b>${esc(totals.followups)}</b><span>Follow-ups handled</span></div>
+    </div>` + warn +
+    `<div class="card flush"><div class="tablewrap"><table><tr><th>Person</th>${shown.map(c => `<th>${esc(c.label)}</th>`).join('')}<th>Total</th><th>Last active</th><th></th></tr>` +
+    (people.length ? people.map(p => `<tr${p.total ? '' : ' style="opacity:.6"'}>
+        <td><b>${esc(p.name)}</b>${p.id === r.me ? ' <span class="mut">(you)</span>' : ''}<div class="mut">${esc(p.role)}${p.status === 'Disabled' ? ' · disabled' : ''}</div></td>
+        ${shown.map(c => `<td>${p.counts[c.key] || '<span class="mut">0</span>'}</td>`).join('')}
+        <td><b>${esc(p.total)}</b></td>
+        <td class="mut nowrap">${p.lastMs ? esc(ago(p.lastMs)) : 'Nothing in period'}${p.lastSeenMs ? `<div class="small">Opened console ${esc(ago(p.lastSeenMs))}</div>` : ''}</td>
+        <td>${p.total ? `<button class="btn ghost tiny" onclick="setFilter('staffOpen', F.staffOpen === '${esc(p.id)}' ? '' : '${esc(p.id)}')">${F.staffOpen === p.id ? 'Hide' : 'Details'}</button>` : ''}</td>
+      </tr>`).join('') : `<tr><td colspan="${shown.length + 4}">${emptyState('No staff yet', 'Add people under Team &amp; access - their work shows here.')}</td></tr>`) +
+    '</table></div></div>' +
+    (open ? `<h2>${esc(open.name)} - recent work</h2>
+      <div class="card flush"><div class="tablewrap"><table><tr><th>When</th><th>What</th><th>Detail</th></tr>${open.recent.map(staffEntryHtml).join('')}</table></div></div>
+      ${open.recent.length < open.total ? `<p class="mut">Showing the newest ${open.recent.length}. The full list is in the ActivityLog sheet (UserID ${esc(open.id)}).</p>` : ''}` : '') +
+    noteForm;
+};
+
+async function logWork(){
+  const input = document.getElementById('workNote'), text = input.value.trim();
+  if(!text){ toast('Write what you did', true); return; }
+  const btn = document.getElementById('workNoteBtn'); btn.disabled = true;
+  try { await rpc('dashLogWork', text); input.value = ''; toast('Recorded'); refreshStaff(); }
+  catch(e){ fail(e); btn.disabled = false; }
+}
+
 PAGES.log = () => {
   const actors = uniq(D.log.map(l => l.actor)), actions = uniq(D.log.map(l => l.action));
   let rows = D.log;
@@ -1664,7 +1773,7 @@ async function delCandidate(id){
 
 async function clearLog(){
   const ok = await dialog({ title: 'Clear the activity log?', danger: true, ok: 'Clear log',
-    body: 'Every entry in the ActivityLog sheet is removed. Candidates, applications and everything else stay as they are.' });
+    body: 'Every entry in the ActivityLog sheet is removed, and with it the history on Staff activity (who did what). Candidates, applications and everything else stay as they are.' });
   if(!ok) return;
   rpc('dashClearActivityLog').then(() => { toast('Log cleared'); load(); }).catch(fail);
 }

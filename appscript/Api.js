@@ -1494,8 +1494,12 @@ function recentActivity_(n) {
   var last = sh ? sh.getLastRow() : 0;
   if (last < 2) return [];
   var from = Math.max(2, last - n + 1);
-  return sh.getRange(from, 1, last - from + 1, 6).getValues().reverse().map(function (l) {
-    return { t: String(l[0]), actor: l[1], action: l[2], detail: l[5] };
+  var uCol = getHeaderMap_(sh).UserID || 0, names = peopleNames_();
+  return sh.getRange(from, 1, last - from + 1, Math.max(6, uCol)).getValues().reverse().map(function (l) {
+    // Shown by the person's name when known; "Name (extension)" for their Chrome's steps
+    var name = uCol ? names[String(l[uCol - 1] || '')] : '', actor = String(l[1] || '');
+    if (name && !/^(ai|system|form)$/.test(actor)) actor = actor === 'extension' ? name + ' (extension)' : name;
+    return { t: String(l[0]), actor: actor, action: l[2], detail: l[5] };
   });
 }
 

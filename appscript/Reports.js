@@ -233,6 +233,12 @@ function reportMetrics_(fromMs, toMs) {
   };
 }
 
+/** What each person on the team did (StaffActivity.gs). A problem there must never stop the report going out. */
+function teamLines_(fromMs, toMs) {
+  try { return staffActivityLines_(fromMs, toMs); }
+  catch (e) { return ['', 'Team activity: could not be worked out (' + e.message + ')']; }
+}
+
 /** Whole days up to last midnight, so reports never overlap or miss anything whenever the trigger fires. */
 function buildReport_(period, days) {
   var end = new Date(); end.setHours(0, 0, 0, 0);
@@ -259,7 +265,7 @@ function buildReport_(period, days) {
         (s.too_early ? ' (' + s.too_early + ' sent under ' + s.too_early_days + ' days ago)' : ''),
       '', 'By candidate:'].concat(m.candidates.map(function (c) {
         return '- ' + c.name + ': ' + c.submitted + ' submitted, ' + c.interviews + ' interviews, ' + c.offers + ' offers';
-      })).concat(['', 'Any other period: the Reports page in the dashboard.', 'Full data: ' + SpreadsheetApp.getActiveSpreadsheet().getUrl()]).join('\n');
+      })).concat(teamLines_(start.getTime(), end.getTime())).concat(['', 'Any other period: the Reports and Staff activity pages in the dashboard.', 'Full data: ' + SpreadsheetApp.getActiveSpreadsheet().getUrl()]).join('\n');
     sendMailToList_(emails, '[Jobverse] ' + period + ' report', body);
   }
   logActivity_('system', 'report_generated', 'report', period, summary);

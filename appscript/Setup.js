@@ -56,7 +56,8 @@ var JV = {
     ],
     ToneProfiles: ['ProfileName', 'Description', 'StyleInstructions'],
     AIOutputs: ['OutputID', 'CreatedAt', 'Agent', 'CandidateID', 'JobID', 'Model', 'OutputJSON'],
-    ActivityLog: ['Timestamp', 'Actor', 'Action', 'RefType', 'RefID', 'Detail'],
+    // UserID: the console person behind the entry, when there was one (StaffActivity.gs)
+    ActivityLog: ['Timestamp', 'Actor', 'Action', 'RefType', 'RefID', 'Detail', 'UserID'],
     Reports: ['GeneratedAt', 'Period', 'MetricsJSON', 'Summary'],
     // Console users and roles (Users.gs). KeyHash is a SHA-256 of the person's sign-in link key, never the key.
     Users: ['UserID', 'CreatedAt', 'Name', 'Email', 'Role', 'Status', 'KeyHash', 'LinkSentAt', 'LastSeenAt', 'CreatedBy'],
@@ -304,7 +305,19 @@ function newId_(prefix) {
 }
 
 function logActivity_(actor, action, refType, refId, detail) {
-  sheet_('ActivityLog').appendRow([new Date(), actor, action, refType, refId, detail || '']);
+  var sh = sheet_('ActivityLog');
+  var row = [new Date(), actor, action, refType, refId, detail || ''];
+  // The person behind this call - a console user, or the one whose extension sent it -
+  // so each person's work can be reported back to the Admins (StaffActivity.gs)
+  var who = (typeof DASH_USER_ !== 'undefined' && DASH_USER_) ? DASH_USER_.id :
+            (typeof CALLER_ !== 'undefined' && CALLER_) ? CALLER_.id : '';
+  if (who) {
+    var col = getHeaderMap_(sh).UserID;
+    if (!col) { ensureColumns_('ActivityLog', ['UserID']); col = getHeaderMap_(sh).UserID; }
+    while (row.length < col - 1) row.push('');
+    row[col - 1] = who;
+  }
+  sh.appendRow(row);
   // Everything a person or the extension does is logged, so this one line keeps
   // the shared dashboard snapshot honest (see Cache.js). AI steps change nothing
   // anyone is looking at until the step that follows them.
