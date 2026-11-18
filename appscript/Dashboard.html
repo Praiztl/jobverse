@@ -243,7 +243,7 @@ function can(perm){ return (ME.perms || []).includes(perm); }
 
 /* What each role sees: buttons for actions it can't take are hidden (inputs greyed out). */
 const ACTIONS_BY_PERM = {
-  work: ['approveApp', 'approveGroup', 'retrySubmit', 'decide', 'rejectApp', 'dropApp', 'findJobs', 'gen', 'markAccountCreated', 'markSubmitted',
+  work: ['approveApp', 'approveGroup', 'dismissDocs', 'dismissOldDocs', 'retrySubmit', 'decide', 'rejectApp', 'dropApp', 'findJobs', 'gen', 'markAccountCreated', 'markSubmitted',
          'prospectAction', 'queueAll', 'resolveFollowUp', 'retryApp', 'retryRevision', 'snoozeFollowUp', 'updateDoc'],
   admin: ['clearLog', 'delCandidate', 'revealPassword']
 };
@@ -742,6 +742,7 @@ PAGES.reviews = () => {
     `<div class="toolbar">
       <div><label>Candidate</label><select onchange="setFilter('revCand',this.value)"><option value="">All candidates</option>${cands.map(c => `<option value="${esc(c)}" ${c===F.revCand?'selected':''}>${esc(candName(c))}</option>`).join('')}</select></div>
       <div class="grow"><label>Search</label><input type="search" placeholder="Company or role" value="${esc(F.revQ || '')}" oninput="setSearch('revQ',this)"></div>
+      ${oldDocGroups().length ? `<div style="flex:0;min-width:max-content"><button class="btn ghost" onclick="dismissOldDocs()">Dismiss ${oldDocGroups().length} older than 30 days</button></div>` : ''}
     </div>` +
     (pg.total ? pg.rows.map(reviewGroupHtml).join('') + `<div class="card flush">${pagerHtml(pg, 'revPage', 'revSize', [10, 25, 50])}</div>`
       : `<div class="card">${emptyState(docGroups().length ? 'No documents match' : 'Nothing to check', docGroups().length ? 'Try clearing the filters.' : 'Documents written with "Write a CV by hand" appear here.')}</div>`);
@@ -753,6 +754,61 @@ function groupFiles(g){
   return { cvUrl: pick('cvUrl', 'CV'), letterUrl: pick('letterUrl', 'CoverLetter') };
 }
 
+/** Document checks (no final application among them) first added over 30 days ago. */
+function oldDocGroups(){ return docGroups().filter(g => !g.hasSubmission && g.oldest !== Infinity && Date.now() - g.oldest > 30 * DAY); }
+
+/** Takes document checks off the list without approving them (the job is no longer being applied to). */
+async function dismissDocGroups(groups, title, body){
+  const ids = groups.flatMap(g => g.items.filter(t => t.type !== 'Submission').map(t => t.id));
+  if(!ids.length) return;
+  if(!await dialog({ title, body, ok: 'Dismiss' })) return;
+  D.reviews = D.reviews.filter(t => !ids.includes(t.id));
+  render();
+  rpc('dashDismissReviews', ids).then(r => { toast(r.dismissed + ' dismissed'); load(true); }).catch(e => { fail(e); load(); });
+}
+/* ----------------------------- candidate details ----------------------------- */
+
+// What forms are filled from. Labels say what each one is for, since several were misread before
+const CAND_FIELDS = [
+  ['FullName', 'Full name', ''],
+  ['ApplicationEmail', 'Application email', 'Used on every application; replies and site emails go here, and it forwards to the Jobverse Gmail'],
+  ['Phone', 'Phone', 'With the country code, e.g. +234 803 000 0000'],
+  ['Address', 'Home address', 'Street, town/city, state, country - and the postcode if there is one. Forms ask for these parts separately'],
+  ['Location', 'Where to search for jobs', 'Used by Find jobs. Never put on a form as an address'],
+  ['PreferredRoles', 'Preferred roles', 'Comma separated. The first one is what Find jobs searches for'],
+  ['PreferredLocations', 'Preferred work locations', 'Comma separated places they would work'],
+  ['LinkedIn', 'LinkedIn profile', 'Many forms require it'],
+  ['MinSalary', 'Minimum salary', 'With its currency, e.g. "GBP 45,000" or "NGN 1,500,000". Without one, forms get "Negotiable"'],
+  ['NoticePeriod', 'Notice period', 'e.g. 1 month'],
+  ['RightToWork', 'Right to work / sponsorship', 'e.g. "Needs sponsorship for the UK"']
+];
+
+async function editCandidate(id){
+  let c;
+  try { c = await rpc('dashCandidateDetails', id); } catch(e){ fail(e); return; }
+  const canEdit = can('work');
+  const body = `<div style="max-height:60vh;overflow:auto;padding-right:4px">` + CAND_FIELDS.map(([k, label, hint]) =>
+    `<label for="cf_${k}">${label}</label>` +
+    (k === 'Address' ? `<textarea id="cf_${k}" style="min-height:60px" ${canEdit ? '' : 'readonly'}>${esc(c[k] || '')}</textarea>`
+      : `<input id="cf_${k}" value="${esc(c[k] || '')}" ${canEdit ? '' : 'readonly'}>`) +
+    (hint ? `<div class="mut small">${esc(hint)}</div>` : '')).join('') + `</div>`;
+  const r = await dialog({ title: (c.FullName || id) + ' - details', body, ok: canEdit ? 'Save' : 'Close',
+    read: () => Object.fromEntries(CAND_FIELDS.map(([k]) => [k, document.getElementById('cf_' + k).value.trim()])) });
+  if(!r || !canEdit) return;
+  const changed = Object.fromEntries(Object.entries(r).filter(([k, v]) => v !== String(c[k] || '')));
+  if(!Object.keys(changed).length){ toast('Nothing changed'); return; }
+  rpc('dashSaveCandidateDetails', id, changed).then(() => { toast('Saved'); load(); }).catch(fail);
+}
+
+function dismissDocs(encodedKey){
+  const g = docGroups().find(x => x.key === decodeURIComponent(encodedKey));
+  if(g) dismissDocGroups([g], 'Dismiss ' + g.summary + '?', 'Its CV and cover letter checks leave this list without being approved. The documents stay in Drive.');
+}
+function dismissOldDocs(){
+  const old = oldDocGroups();
+  dismissDocGroups(old, 'Dismiss ' + old.length + ' old document checks?', 'Every CV and cover letter check first added over 30 days ago leaves this list without being approved. The documents stay in Drive.');
+}
+
 function reviewGroupHtml(g){
   const docs = g.items.filter(t => t.type !== 'Submission');
   const sub = g.items.find(t => t.type === 'Submission');
@@ -762,7 +818,8 @@ function reviewGroupHtml(g){
     <div class="rhead"><div><h3>${esc(g.summary)}</h3>
       <div class="mut">${esc(candName(g.cand))} · ${g.items.length} item${g.items.length > 1 ? 's' : ''} to check${g.oldest !== Infinity ? ' · first added ' + esc(ago(g.oldest)) : ''}</div>
       ${docButtonsHtml(owner, files, app && app.url) || '<div class="mut small" style="margin-top:6px">No CV or cover letter on file for this job</div>'}</div>
-      ${g.items.length > 1 ? `<button class="btn approve" onclick="approveGroup('${encodeURIComponent(g.key).replace(/'/g, '%27')}')">Approve all ${g.items.length}${g.hasSubmission ? ' &amp; submit' : ''}</button>` : ''}
+      <div class="acts">${g.items.length > 1 ? `<button class="btn approve" onclick="approveGroup('${encodeURIComponent(g.key).replace(/'/g, '%27')}')">Approve all ${g.items.length}${g.hasSubmission ? ' &amp; submit' : ''}</button>` : ''}
+        ${g.hasSubmission ? '' : `<button class="btn ghost" title="Not needed any more: takes it off this list without approving it" onclick="dismissDocs('${encodeURIComponent(g.key).replace(/'/g, '%27')}')">Dismiss</button>`}</div>
     </div>
     ${docFramesHtml(owner, files)}
     ${g.items.map(t => reviewItemHtml(t, docs.length)).join('')}
@@ -910,7 +967,7 @@ PAGES.followups = () => {
             </select>`;
       return `<tr>
         <td class="nowrap">${when}<div class="mut">${esc(f.due)}</div></td>
-        <td><b>${esc(f.company)}</b><br><span class="mut">${esc(f.title)}</span></td>
+        <td><b>${esc(f.company)}</b>${(() => { const a = f.app && D.applications.find(x => x.id === f.app); return a && a.url ? ` <a href="${esc(a.url)}" class="small">posting</a>` : ''; })()}<br><span class="mut">${esc(f.title)}</span></td>
         <td class="mut">${esc(candName(f.cand))}</td>
         <td><span class="small"><b>${esc(isTrac ? 'Claim / verify on NHS Trac' : interviewed ? 'Interview recorded - check how it went' : 'Check for a reply')}</b></span><div class="mut" style="max-width:340px">${esc(lastNote)}</div></td>
         <td>${f.status === 'Pending' ? `<div class="acts" style="justify-content:flex-end">
@@ -979,7 +1036,7 @@ PAGES.prospects = () => {
 PAGES.generate = () => header('Write a CV by hand', 'A tailored CV and cover letter for one job, without applying - both appear under Documents to check. To apply, use Find jobs instead.') +
   `<div class="card">
     <label for="gCand">Candidate</label><select id="gCand">${candOpts(F.pCand || loadFindJobsCandidate())}</select>
-    <label for="gUrl">Job URL (optional)</label><input id="gUrl" placeholder="https://...">
+    <label for="gUrl">Job URL (optional)</label><input id="gUrl" placeholder="Paste the link to the job advert">
     <label for="gJD">Job description</label><textarea id="gJD" placeholder="Paste the full job advert"></textarea>
     <label for="gTone">Tone</label>
     <select id="gTone"><option>Jobverse Standard</option><option>NHS</option><option>Corporate</option><option>Technical</option><option>Executive</option><option>Graduate</option></select>
@@ -1007,6 +1064,7 @@ PAGES.candidates = () => {
         <td><input type="number" min="0" value="${c.target}" style="width:76px;padding:5px" aria-label="Target applications for ${esc(c.name)}" title="0 = no limit" onchange="setTarget('${c.id}', this.value)"></td>
         <td><label class="tog"><input type="checkbox" ${c.active?'checked':''} onchange="setActive('${c.id}', this.checked)"> <span>${c.active?'Active':'Inactive'}</span></label></td>
         <td style="text-align:right"><div class="acts" style="justify-content:flex-end">
+          <button class="btn ghost tiny" onclick="editCandidate('${c.id}')">Details</button>
           <button class="btn ghost tiny" onclick="setFindJobsCandidate('${c.id}');go('prospects')">Find jobs</button>
           <button class="btn ghost tiny" onclick="go('applications',{appCand:'${c.id}',appTab:'all'})">Applications</button>
           <button class="linkbtn" style="color:var(--red);margin-left:4px" onclick="delCandidate('${c.id}')">Delete</button></div></td>
@@ -1846,8 +1904,8 @@ const HELP_HTML = `
 
 <div class="card">
 <h2>An application says "Approved - not submitted yet"</h2>
-<p class="mut">Approved applications are submitted by the <b>Chrome extension</b>: the tab that filled the form if it's still open, otherwise any open Chrome with the extension reopens the job, fills it again and submits it within a few minutes. The Overview page shows whether an extension is running. If none is, the application waits, and after 20 minutes it moves to <b>Applications &rsaquo; Needs attention</b> with the reason.</p>
-<p class="mut">Open Chrome with the extension connected and it carries on by itself. If you can see the application on the employer's site, or you submitted it by hand, click <b>Mark submitted</b>. <b>Retry</b> runs it again from the start - only use it once you're sure it didn't go through.</p>
+<p class="mut">Approved applications are submitted by the <b>Chrome extension</b>: the tab that filled the form if it's still open (within about a minute), otherwise the Chrome of the person who queued the job reopens it, fills it again and submits it within a few minutes. Only that person's Chrome submits it, so on Applications it says whose Chrome it is waiting for and when that Chrome last checked in. If it isn't running, the application waits, and after 20 minutes it moves to <b>Applications &rsaquo; Needs attention</b> with the reason.</p>
+<p class="mut">Open that person's Chrome with the extension signed in with their link and it carries on by itself. If you can see the application on the employer's site, or you submitted it by hand, click <b>Mark submitted</b>. <b>Retry</b> runs it again from the start - only use it once you're sure it didn't go through.</p>
 <p class="mut"><b>"Submitted? Check the employer site"</b> means Submit was clicked but no confirmation message was seen. It may well have gone through - check before doing anything else.</p>
 </div>
 

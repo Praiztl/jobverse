@@ -2123,3 +2123,56 @@ function notifyReviewers_(subject, body) {
 
 
 
+
+/**
+ * "Dismiss" on Documents to check: CV / cover letter / statement checks for jobs nobody is applying to any
+ * more leave the list without being approved. Never a final application (those are approved or sent back).
+ */
+function dashDismissReviews(key, taskIds) {
+  requireDashAccess_(key, 'work');
+  var want = {};
+  (taskIds || []).forEach(function (id) { want[String(id)] = true; });
+  var rows = readRows_('ReviewQueue', ['TaskID', 'Type', 'Status']).filter(function (t) {
+    return want[t.TaskID] && t.Status === 'Awaiting Human' && t.Type !== 'Submission';
+  });
+  var nums = rows.map(function (t) { return t._row; });
+  setColumnForRows_('ReviewQueue', 'Status', nums, 'Decided');
+  setColumnForRows_('ReviewQueue', 'Decision', nums, 'dismissed');
+  setColumnForRows_('ReviewQueue', 'Reviewer', nums, dashActor_());
+  setColumnForRows_('ReviewQueue', 'DecidedAt', nums, new Date());
+  if (rows.length) logActivity_(dashActor_(), 'documents_dismissed', 'review', '-', rows.length + ' document check(s) dismissed');
+  return { dismissed: rows.length };
+}
+
+/** Fields the console shows and edits on a candidate (Candidates > Details). Passwords are never among them. */
+var CANDIDATE_EDITABLE_ = ['FullName', 'ApplicationEmail', 'Phone', 'Address', 'Location', 'PreferredRoles', 'PreferredLocations',
+  'LinkedIn', 'MinSalary', 'NoticePeriod', 'RightToWork'];
+
+function dashCandidateDetails(key, candidateId) {
+  requireDashAccess_(key);
+  var c = findRow_('Candidates', 'CandidateID', candidateId, CANDIDATE_EDITABLE_);
+  if (!c) throw new Error('Candidate not found');
+  var out = {};
+  CANDIDATE_EDITABLE_.forEach(function (k) { out[k] = String(c[k] == null ? '' : c[k]); });
+  return out;
+}
+
+/** Saves edited candidate details; only the fields above, and each change is logged with who made it. */
+function dashSaveCandidateDetails(key, candidateId, fields) {
+  requireDashAccess_(key, 'work');
+  var c = findRow_('Candidates', 'CandidateID', candidateId, CANDIDATE_EDITABLE_);
+  if (!c) throw new Error('Candidate not found');
+  var patch = {}, changes = [];
+  Object.keys(fields || {}).forEach(function (k) {
+    if (CANDIDATE_EDITABLE_.indexOf(k) < 0) return;
+    var v = String(fields[k] == null ? '' : fields[k]).trim().slice(0, 2000);
+    if (v === String(c[k] == null ? '' : c[k])) return;
+    if (k === 'ApplicationEmail' && v && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)) throw new Error('That application email does not look right');
+    patch[k] = v;
+    changes.push(k);
+  });
+  if (!changes.length) return { saved: 0 };
+  updateRow_('Candidates', c._row, patch);
+  logActivity_(dashActor_(), 'candidate_details_updated', 'candidate', candidateId, changes.join(', '));
+  return { saved: changes.length };
+}
