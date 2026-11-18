@@ -120,13 +120,15 @@ function apiGetCandidatePayload_(req) {
   if (!c) throw new Error('Candidate not found');
   var profile = {};
   try { profile = JSON.parse(c.AIProfileJSON || '{}'); } catch (ignored) {}
+  // Profiles often say "nil" / "N/A" for a link the candidate doesn't have: that is no link, not text to type
+  var link = function (v) { return isPlaceholderValue_(v) ? '' : v; };
   return {
     id: c.CandidateID,
     fields: {
-      fullName: c.FullName, email: c.Email, phone: c.Phone, location: c.Location, address: c.Address, preferredLocations: c.PreferredLocations,
+      fullName: c.FullName, email: c.Email, phone: c.Phone, location: c.Location, address: link(c.Address), preferredLocations: c.PreferredLocations,
       rightToWork: c.RightToWork, visa: c.VisaStatus, licence: c.DrivingLicence,
-      minSalary: c.MinSalary, noticePeriod: c.NoticePeriod, linkedin: c.LinkedIn,
-      github: c.GitHub, portfolio: c.Portfolio, relocate: c.WillingToRelocate,
+      minSalary: c.MinSalary, noticePeriod: c.NoticePeriod, linkedin: link(c.LinkedIn),
+      github: link(c.GitHub), portfolio: link(c.Portfolio), relocate: c.WillingToRelocate,
       workModel: c.WorkModel, employmentType: c.EmploymentType,
       registrations: c.Registrations, nationality: c.Nationality,
       NHSUnspentConvictions: c.NHSUnspentConvictions, NHSFitnessToPractice: c.NHSFitnessToPractice,
@@ -403,10 +405,10 @@ function apiAnswerField_(req) {
     contextInfo +
     '\n\nCANDIDATE STRUCTURED FIELDS:\n' + JSON.stringify({
       // The address applications use: the dedicated application inbox (replies and verification emails go there)
-      fullName: cand.FullName, email: cand.ApplicationEmail || cand.Email, phone: cand.Phone, location: cand.Location, address: cand.Address, preferredLocations: cand.PreferredLocations,
+      fullName: cand.FullName, email: cand.ApplicationEmail || cand.Email, phone: cand.Phone, location: cand.Location, address: isPlaceholderValue_(cand.Address) ? "" : cand.Address, preferredLocations: cand.PreferredLocations,
       rightToWork: cand.RightToWork, visa: cand.VisaStatus, licence: cand.DrivingLicence,
-      minSalary: cand.MinSalary, noticePeriod: cand.NoticePeriod, linkedin: cand.LinkedIn,
-      github: cand.GitHub, portfolio: cand.Portfolio, relocate: cand.WillingToRelocate,
+      minSalary: cand.MinSalary, noticePeriod: cand.NoticePeriod, linkedin: isPlaceholderValue_(cand.LinkedIn) ? "" : cand.LinkedIn,
+      github: isPlaceholderValue_(cand.GitHub) ? "" : cand.GitHub, portfolio: isPlaceholderValue_(cand.Portfolio) ? "" : cand.Portfolio, relocate: cand.WillingToRelocate,
       workModel: cand.WorkModel, employmentType: cand.EmploymentType,
       registrations: cand.Registrations, nationality: cand.Nationality,
       NHSUnspentConvictions: cand.NHSUnspentConvictions, NHSFitnessToPractice: cand.NHSFitnessToPractice,
@@ -832,6 +834,9 @@ function apiNextQueuedProspect_(req) {
       (p.Status === CLAIMED_STATUS_ && p.ClaimedAt && Date.now() - toEpochMs_(p.ClaimedAt) > CLAIM_STALE_MS_);
   });
   if (!anything) return { prospect: null, remaining: 0 };
+  // Jobs started now would only fill the mechanical boxes and leave everything else for a person: wait for the AI
+  var outage = aiOutage_();
+  if (outage) return { prospect: null, remaining: 0, paused: outage.reason };
   var lock = LockService.getScriptLock();
   lock.waitLock(20000);
   try {
@@ -1343,6 +1348,7 @@ function buildDashData_() {
     },
     agentsByUser: agentsByUser_(props),
     extensionVersion: CURRENT_EXTENSION_VERSION_,
+    aiOutage: aiOutage_(),
     people: peopleNames_(),
     reviews: awaitingReviews_(docs, reviewRows),
     revisions: documentRevisions_(reviewRows),
@@ -2183,4 +2189,9 @@ function dashSaveCandidateDetails(key, candidateId, fields) {
   updateRow_('Candidates', c._row, patch);
   logActivity_(dashActor_(), 'candidate_details_updated', 'candidate', candidateId, changes.join(', '));
   return { saved: changes.length };
+}
+
+/** "nil", "N/A", "none", "-" and the like: what a profile says when it has no value. */
+function isPlaceholderValue_(v) {
+  return /^\s*(nil|none|null|n\/?a|-+|\.|nothing|not applicable)\s*$/i.test(String(v == null ? '' : v));
 }

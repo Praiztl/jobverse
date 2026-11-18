@@ -45,7 +45,17 @@ function claudeRequest_(systemPrompt, userPrompt, maxTokens) {
     });
     code = res.getResponseCode();
   }
-  if (code !== 200) throw new Error('Anthropic API ' + code + ': ' + res.getContentText().slice(0, 500));
+  if (code !== 200) {
+    var body = res.getContentText();
+    var outage = aiOutageReason_(code, body);
+    if (outage) {
+      // Every AI step will fail the same way until someone fixes the account: say so plainly, once, everywhere
+      try { CacheService.getScriptCache().put('ai:down', JSON.stringify({ reason: outage, at: Date.now() }), 900); } catch (ignored) {}
+      throw new Error('AI_UNAVAILABLE: ' + outage);
+    }
+    throw new Error('Anthropic API ' + code + ': ' + body.slice(0, 500));
+  }
+  try { if (CacheService.getScriptCache().get('ai:down')) CacheService.getScriptCache().remove('ai:down'); } catch (ignored) {}
 
   var data = JSON.parse(res.getContentText());
   return {
@@ -114,4 +124,18 @@ function getTone_(name) {
     if (rows[i].ProfileName === wanted) return rows[i].StyleInstructions;
   }
   return rows.length ? rows[0].StyleInstructions : 'British English, plain and professional.';
+}
+
+/** A failure no retry will fix (no credit, bad key, disabled account): a plain-English reason, else ''. */
+function aiOutageReason_(code, body) {
+  var t = String(body || '');
+  if (/credit balance is too low|billing|purchase credits/i.test(t)) return 'The Anthropic account behind Jobverse has run out of credit. An admin needs to top it up (console.anthropic.com > Billing) before the AI can answer again.';
+  if (code === 401 || /authentication_error|invalid x-api-key/i.test(t)) return 'The Anthropic API key in Jobverse settings is not valid. An admin needs to update ANTHROPIC_API_KEY.';
+  if (code === 403 || /permission_error/i.test(t)) return 'The Anthropic account behind Jobverse refused the request (permission). An admin needs to check the account.';
+  return '';
+}
+
+/** The current AI outage, if one was seen in the last 15 minutes: { reason, at } or null. */
+function aiOutage_() {
+  try { var v = CacheService.getScriptCache().get('ai:down'); return v ? JSON.parse(v) : null; } catch (e) { return null; }
 }

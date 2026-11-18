@@ -632,7 +632,7 @@ function extOutdated(userId){ const v = extVersionOf(userId); return !!v && !!D.
 
 /** Staff and admins: their own queue, run by their own Chrome. Teammates' jobs are counted separately. */
 function myRunBar(){
-  return (extOutdated(ME.id) ? `<div class="runbar off"><span class="dot bad"></span><b>Your Chrome extension is out of date</b><span>· you have v${esc(extVersionOf(ME.id))}, the current one is v${esc(D.extensionVersion)}. Pull the latest from the repo, then press the reload arrow on Jobverse in chrome://extensions.</span></div>` : '') + myRunBarInner();
+  return (D.aiOutage ? `<div class="runbar off"><span class="dot bad"></span><b>The AI is unavailable</b><span>· ${esc(D.aiOutage.reason)} Queued jobs wait until it works again.</span></div>` : '') + (extOutdated(ME.id) ? `<div class="runbar off"><span class="dot bad"></span><b>Your Chrome extension is out of date</b><span>· you have v${esc(extVersionOf(ME.id))}, the current one is v${esc(D.extensionVersion)}. Pull the latest from the repo, then press the reload arrow on Jobverse in chrome://extensions.</span></div>` : '') + myRunBarInner();
 }
 function myRunBarInner(){
   const run = agentState('autorun', ME.id), x = agentState('extension', ME.id);
