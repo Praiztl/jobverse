@@ -369,6 +369,9 @@ function apiAnswerField_(req) {
     'currency or has no currency at all ("1.5m"): when its currency is missing, or differs from the currency of the job\'s country, ' +
     'do not put that number on the form - answer "Negotiable" in a text box, or the closest "open/negotiable" option; never convert it yourself. ' +
     'Never invent a fact. If the field is optional and the data has no answer, use "skip". ' +
+    'A text box asking about notice period or availability is answered in words from noticePeriod (e.g. "1 month"); when it also ' +
+    'asks for a start date, add the date that notice period gives from today (' + today + '), e.g. "1 month - available from 18 December 2026". ' +
+    'A bare date is only right for a DATE field. ' +
     'Education questions are about the degree in the candidate profile: "school"/"university" is the institution\'s name alone ' +
     '(e.g. "Obafemi Awolowo University", no city or abbreviation), "degree" is its level (e.g. "Bachelor\'s Degree"), and ' +
     '"discipline", "field of study" or "major" is the subject studied (e.g. "Engineering Physics") - never the candidate\'s job. ' +
