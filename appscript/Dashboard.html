@@ -1212,7 +1212,7 @@ async function logWork(){
   const input = document.getElementById('workNote'), text = input.value.trim();
   if(!text){ toast('Write what you did', true); return; }
   const btn = document.getElementById('workNoteBtn'); btn.disabled = true;
-  try { await rpc('dashLogWork', text); input.value = ''; toast('Recorded'); refreshStaff(); }
+  try { await rpc('dashLogWork', text); input.value = ''; toast('Recorded'); refreshStaff(); load(true); } // load: so Activity shows it too
   catch(e){ fail(e); btn.disabled = false; }
 }
 
