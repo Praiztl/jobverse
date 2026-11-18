@@ -253,11 +253,16 @@ function apiPrecheckApplication_(req) {
  */
 function alreadyApplied_(apps, req) {
   var link = req.jobUrl ? normaliseJobKey_(req.jobUrl) : '';
+  var host = req.jobUrl ? normaliseDomain_(req.jobUrl) : '';
   var job = prospectJobKey_(req.company, req.jobTitle);
   return apps.some(function (a) {
     if (a.CandidateID !== req.candidateId || !countsAsApplication_(a.Status)) return false;
-    return (link && a.JobURL && normaliseJobKey_(a.JobURL) === link) ||
-      (job && prospectJobKey_(a.Company, a.JobTitle) === job);
+    if (link && a.JobURL && normaliseJobKey_(a.JobURL) === link) return true;
+    if (!job || prospectJobKey_(a.Company, a.JobTitle) !== job) return false;
+    // Same company and title, but two different links on the same site are two vacancies: an ATS gives
+    // each its own link, and the job analysis drops the location from titles ("Senior Java Developer"
+    // in London and in Montreal). Different sites are the same job found twice (a board and the employer).
+    return !(host && a.JobURL && normaliseDomain_(a.JobURL) === host);
   });
 }
 
