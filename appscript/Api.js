@@ -765,6 +765,13 @@ function apiReportError_(req) {
  * this had nothing to give the worker until now.
  */
 function apiListProspects_(req) {
+  // Extensions before 1.2 send no version and no sign-in key, so every job queued from the console
+  // (which records who queued it) is hidden from them and they report an empty queue
+  if (req.status === 'Queued' && !CALLER_EXT_ && !CALLER_) {
+    throw new Error('This Chrome runs an old copy of the Jobverse extension that cannot see jobs queued from the console. ' +
+      'Remove it from chrome://extensions, load the current one (version ' + CURRENT_EXTENSION_VERSION_ + '), ' +
+      'then paste your console sign-in link into its Connection settings.');
+  }
   return readRows_('Prospects', ['ProspectID', 'CandidateID', 'Status', 'JobURL', 'Company', 'JobTitle', 'QueuedBy'])
     .filter(function (p) {
       return p.CandidateID === req.candidateId && (!req.status || p.Status === req.status) &&
