@@ -1326,7 +1326,7 @@ PAGES.users = () => {
     const t = TEAM.data, users = t.users.slice().sort((a, b) => (a.status > b.status ? 1 : a.status < b.status ? -1 : 0) || a.name.localeCompare(b.name));
     list = `<div class="card flush"><div class="tablewrap"><table><tr><th>Person</th><th>Role</th><th>Status</th><th>Last opened · extension</th><th></th></tr>
       <tr><td><b>Owner</b><div class="mut">${esc(t.owner)}</div></td><td><span class="chip c-sub">Admin</span></td><td>${chip('Active')}</td>
-        <td class="mut">-</td><td class="mut small">The account that runs Jobverse. Always an Admin.</td></tr>` +
+        <td class="mut">-</td><td class="mut small">The account that runs Jobverse. Always an Admin.${t.me === 'owner' ? `<div style="margin-top:6px"><button class="btn ghost tiny" onclick="showOwnerLink()">Copy my sign-in link</button></div>` : ''}</td></tr>` +
       users.map(u => {
         const self = u.id === t.me, off = u.status === 'Disabled';
         return `<tr>
@@ -1374,6 +1374,14 @@ function showUserLink(name, r, send){
     : 'Copy the link and send it to them privately.';
   return dialog({ title: 'Sign-in link for ' + name, ok: 'Close', readonly: true, value: r.link, input: 'Their personal link (selected - copy it)',
     body: how + ' Anyone with this link can act as them, so treat it like a password. It won\'t be shown again - make a new one if it\'s lost.' });
+}
+
+async function showOwnerLink(){
+  try {
+    const r = await rpc('dashOwnerLink');
+    await dialog({ title: 'Your sign-in link (Owner)', ok: 'Close', readonly: true, value: r.link, input: 'Your link (selected - copy it)',
+      body: "Paste it into the Chrome extension's <b>Connection settings</b> so it runs the jobs you queue. Anyone with this link can act as the Owner, so treat it like a password. To revoke it, change <b>DASHBOARD_KEY</b> in the sheet's Config tab." });
+  } catch(e){ fail(e); }
 }
 
 async function newUserLink(id){

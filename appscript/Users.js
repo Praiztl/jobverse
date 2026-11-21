@@ -327,6 +327,18 @@ function dashNewUserLink(key, userId, send) {
   return deliverLink_(userId, row.Name, row.Email, row.Role, userKey, send);
 }
 
+/**
+ * The Owner's own sign-in link (the shared DASHBOARD_KEY), for their Chrome extension's Connection
+ * settings. Shown only to the Owner: anyone holding it acts as the Owner.
+ */
+function dashOwnerLink(key) {
+  var me = requireDashAccess_(key, 'admin');
+  if (me.id !== 'owner') throw new Error("Only the Owner can see the Owner's sign-in link.");
+  var shared = getConfig_('DASHBOARD_KEY');
+  if (!shared) throw new Error('No DASHBOARD_KEY in the Config tab - run setup again to make one.');
+  return { link: userLink_(shared) };
+}
+
 /** Permanently removes a person's access (their row is deleted). */
 function dashRemoveUser(key, userId) {
   var me = requireDashAccess_(key, 'admin');
