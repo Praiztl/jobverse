@@ -997,6 +997,7 @@ PAGES.prospects = () => {
   const ready = F.pCand ? D.prospects.filter(p => p.cand === F.pCand && FOUND_STATUSES.includes(p.status) && !isAdzunaLink(p.url)).length : 0;
   const adzunaOld = F.pCand ? D.prospects.filter(p => p.cand === F.pCand && FOUND_STATUSES.includes(p.status) && isAdzunaLink(p.url)).length : 0;
   const one = !!F.pCand;
+  const inLine = one ? D.prospects.filter(p => p.cand === F.pCand && p.status === 'Queued').length : 0;
   return header('Find jobs', 'Pick a candidate, find jobs, then press <b>Apply</b> on the ones they should go for. The extension fills them in by itself and asks you before anything is sent.') +
     `<div class="card">
       <div class="toolbar" style="margin-bottom:0">
@@ -1007,6 +1008,7 @@ PAGES.prospects = () => {
         <span class="mut">${one ? `<b style="color:var(--ink)">${ready}</b> found. Apply to the newest:` : 'Pick a candidate to choose jobs.'}</span>
         ${[5, 10, 20].map(n => `<button class="btn ghost tiny qbtn" onclick="queueAll(${n})" ${one && ready ? '' : 'disabled'}>${n}</button>`).join('')}
         <button class="btn ghost tiny qbtn" onclick="queueAll(0)" ${one && ready ? '' : 'disabled'}>All ${one ? ready : ''}</button>
+        ${one && inLine ? `<button class="btn ghost tiny qbtn" onclick="cancelQueue()" title="Take every job still waiting for this candidate out of line">Cancel queue (${inLine})</button>` : ''}
         <span class="mut" id="pMsg"></span>
       </div>
       ${adzunaOld ? `<div class="mut small" style="margin-top:8px">${adzunaOld} older Adzuna link${adzunaOld > 1 ? 's are' : ' is'} left out of these buttons: Adzuna hides its jobs from some countries, so the extension skips them unless the computer is on a VPN. New searches only keep Adzuna jobs whose employer page was found.</div>` : ''}
@@ -1025,7 +1027,8 @@ PAGES.prospects = () => {
       ${one ? '' : `<td class="mut">${esc(candName(p.cand))}</td>`}
       <td><b>${esc(p.company)}</b>${p.url ? ` <a href="${esc(p.url)}" class="small">open</a>` : ''}<br><span class="mut">${esc(p.title)}</span></td>
       <td class="mut">${esc(p.source || '')}</td><td>${prospectChip(p.status)}${isAdzunaLink(p.url) && FOUND_STATUSES.includes(p.status) ? '<div class="mut small" style="margin-top:3px">Adzuna link - needs a VPN from Nigeria</div>' : ''}${p.notes && !FOUND_STATUSES.includes(p.status) && p.status !== 'Queued' && !prospectRunning(p) ? `<div class="mut small" style="margin-top:3px;max-width:320px">${esc(p.notes)}</div>` : ''}${p.queuedBy && (p.status === 'Queued' || prospectRunning(p)) ? `<div class="mut small" style="margin-top:3px">Queued by ${esc(personName(p.queuedBy))}</div>` : ''}</td>
-      <td><div class="acts" style="justify-content:flex-end">${p.status === 'Queued' ? `<span class="mut">${p.queuedBy && !isMine(p.queuedBy) ? 'on ' + esc(whoseChrome(p.queuedBy)) : 'in line'}</span>` : prospectRunning(p) ? '<span class="mut">running</span>' :
+      <td><div class="acts" style="justify-content:flex-end">${p.status === 'Queued' ? `<span class="mut">${p.queuedBy && !isMine(p.queuedBy) ? 'on ' + esc(whoseChrome(p.queuedBy)) : 'in line'}</span>
+         <button class="btn ghost tiny" onclick="prospectAction('${p.id}','Found')" title="Take this job out of line">Remove</button>` : prospectRunning(p) ? '<span class="mut">running</span>' :
         `<button class="btn ghost tiny" onclick="prospectAction('${p.id}','Queued')">Apply</button>
          ${/^Skipped/.test(p.status) ? '' : `<button class="btn ghost tiny" onclick="prospectAction('${p.id}','Skipped')">Skip</button>`}`}</div></td>
       </tr>`).join('') :
@@ -1751,15 +1754,40 @@ function queueAll(limit){
     .catch(e => { render(); fail(e); });
 }
 
+/** Take every job still waiting in line for the selected candidate back out (jobs already started finish). */
+async function cancelQueue(){
+  const cand = F.pCand;
+  if(!cand) return;
+  const waiting = D.prospects.filter(p => p.cand === cand && p.status === 'Queued');
+  if(!waiting.length) { toast('Nothing in line for this candidate.'); return; }
+  const by = {};
+  waiting.forEach(p => { const n = p.queuedBy ? personName(p.queuedBy) : 'nobody in particular'; by[n] = (by[n] || 0) + 1; });
+  const ok = await dialog({ title: `Cancel ${waiting.length} job${waiting.length > 1 ? 's' : ''} in line for ${candName(cand)}?`, ok: 'Take them out of line', danger: true,
+    body: `Queued by ${esc(Object.keys(by).map(n => by[n] + ' by ' + n).join(', '))}. They go back to found jobs, so you can apply to them again later. A job a Chrome has already started finishes there.` });
+  if(!ok) return;
+  document.querySelectorAll('.qbtn').forEach(b => b.disabled = true);
+  rpc('dashCancelQueue', cand)
+    .then(r => {
+      const ids = new Set(r.ids || []);
+      D.prospects.forEach(p => { if(ids.has(String(p.id))) { p.status = 'Found'; p.queuedBy = ''; } });
+      render();
+      toast(r.cancelled ? `${r.cancelled} job${r.cancelled > 1 ? 's' : ''} taken out of line` : 'Nothing was left in line.');
+      load(true);
+    })
+    .catch(e => { render(); fail(e); });
+}
+
 function prospectAction(id, status){
   const p = D.prospects.find(x => x.id === id);
   if(!p) return;
   const before = p.status;
   p.status = status; // show it straight away; the sheet is updated in the background
   render();
-  toast(status === 'Queued' ? 'In line to apply - the extension picks it up within a few minutes' : 'Skipped');
+  toast(status === 'Queued' ? 'In line to apply - the extension picks it up within a few minutes' : status === 'Found' ? 'Taken out of line' : 'Skipped');
   rpc('dashSetProspectStatus', id, status).then(r => {
     if(r && r.already){ p.status = r.status; render(); toast('Another computer already has this job'); }
+    if(r && r.notQueued){ p.status = r.status; render(); toast('A Chrome has already started this job - it finishes there'); }
+    if(status === 'Found' && r === true) p.queuedBy = '';
   }).catch(e => { p.status = before; render(); fail(e); });
 }
 

@@ -1771,10 +1771,15 @@ function dashSetProspectStatus(key, prospectId, status) {
   var running = /^In Review - /.test(p.Status) ||
     (p.Status === CLAIMED_STATUS_ && p.ClaimedAt && Date.now() - toEpochMs_(p.ClaimedAt) <= CLAIM_STALE_MS_);
   if (status === 'Queued' && running) return { already: true, status: p.Status };
+  // Taking a job out of line: one a Chrome is already applying to finishes there
+  if (status === 'Found' && p.Status !== 'Queued') return { notQueued: true, status: p.Status };
   var patch = { Status: status };
   if (status === 'Queued') {
     ensureColumns_('Prospects', ['QueuedBy', 'QueuedAt']);
     patch.QueuedBy = DASH_USER_.id; patch.QueuedAt = new Date();
+  } else if (status === 'Found') {
+    ensureColumns_('Prospects', ['QueuedBy', 'QueuedAt']);
+    patch.QueuedBy = ''; patch.QueuedAt = '';
   }
   updateRow_('Prospects', p._row, patch);
   logActivity_(dashActor_(), 'prospect_' + status, 'prospect', prospectId, '');
@@ -1878,6 +1883,31 @@ function dashQueueAllFound(key, candidateId, limit) {
       queued: pick.length, remaining: found.length - pick.length, adzunaSkipped: blocked,
       ids: pick.map(function (p) { return String(p.ProspectID); })
     };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * "Cancel queue": every job still waiting in line for a candidate goes back to Found, so no Chrome
+ * picks it up. Jobs a Chrome has already started are left to finish. Returns the IDs taken out.
+ */
+function dashCancelQueue(key, candidateId) {
+  requireDashAccess_(key, 'work');
+  var lock = LockService.getScriptLock(); // the same lock Chromes claim jobs under, so none is taken mid-cancel
+  lock.waitLock(20000);
+  try {
+    ensureColumns_('Prospects', ['QueuedBy', 'QueuedAt']);
+    var rows = readRows_('Prospects', ['ProspectID', 'CandidateID', 'Status']).filter(function (p) {
+      return p.CandidateID === candidateId && p.Status === 'Queued';
+    });
+    var rowNums = rows.map(function (p) { return p._row; });
+    setColumnForRows_('Prospects', 'Status', rowNums, 'Found');
+    setColumnForRows_('Prospects', 'QueuedBy', rowNums, '');
+    setColumnForRows_('Prospects', 'QueuedAt', rowNums, '');
+    SpreadsheetApp.flush();
+    if (rows.length) logActivity_(dashActor_(), 'queue_cancelled', 'candidate', candidateId, rows.length + ' job(s) taken out of line');
+    return { cancelled: rows.length, ids: rows.map(function (p) { return String(p.ProspectID); }) };
   } finally {
     lock.releaseLock();
   }
